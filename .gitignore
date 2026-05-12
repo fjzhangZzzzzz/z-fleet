@@ -9,3 +9,15 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 _deps
+
+# Build outputs
+build/
+out/
+
+# Local toolchain and caches
+.tools/
+.cache/
+vcpkg_installed/
+
+# Local CMake overrides
+CMakeUserPresets.json

@@ -1,0 +1,137 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    }
+  ]
+}
