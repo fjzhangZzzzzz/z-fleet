@@ -3,5 +3,17 @@
   "name": "z-fleet",
   "version-string": "0.1.0",
   "description": "Lightweight endpoint probe and management framework.",
-  "dependencies": []
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-uuid",
+    "catch2",
+    "cli11",
+    "nlohmann-json",
+    "openssl",
+    "spdlog",
+    "sqlite3",
+    "sqlitecpp",
+    "tomlplusplus"
+  ]
 }
