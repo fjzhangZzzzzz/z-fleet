@@ -10,7 +10,6 @@
 
 #include <filesystem>
 #include <optional>
-#include <sstream>
 
 int main(int argc, char** argv) {
   CLI::App app{"z-fleet agent"};
@@ -46,21 +45,20 @@ int main(int argc, char** argv) {
          {"server_url", config.server_url},
          {"data_dir", config.data_dir.string()}});
 
-    std::ostringstream message;
-    message << zfleet::core::project_name() << " agent "
-            << zfleet::core::version() << " protocol "
-            << zfleet::protocol::protocol_version() << " on "
-            << zfleet::platform::os_name() << " hostname="
-            << zfleet::platform::hostname() << " arch="
-            << zfleet::platform::architecture_name();
-    zfleet::core::log::Write(
-        zfleet::core::log::Level::kInfo, logger, message.str());
+    ZFLOG_INFO(logger,
+               "{} agent {} protocol {} on {} hostname={} arch={}",
+               zfleet::core::project_name(),
+               zfleet::core::version(),
+               zfleet::protocol::protocol_version(),
+               zfleet::platform::os_name(),
+               zfleet::platform::hostname(),
+               zfleet::platform::architecture_name());
     zfleet::core::log::Shutdown();
     return 0;
   } catch (const std::exception& ex) {
-    zfleet::core::log::Write(zfleet::core::log::Level::kError,
-                             zfleet::core::log::Component("agent"),
-                             std::string("agent startup failed: ") + ex.what());
+    ZFLOG_ERROR(zfleet::core::log::Component("agent"),
+                "agent startup failed: {}",
+                ex.what());
     zfleet::core::log::Shutdown();
     return 1;
   }

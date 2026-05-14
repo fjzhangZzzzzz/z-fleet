@@ -1,26 +1,40 @@
-add_executable(zfleet_server
+add_library(zfleet_server_app
   src/config.cpp
   src/database.cpp
-  src/main.cpp
+  src/http_handler.cpp
+  src/http_server.cpp
 )
 
 find_package(CLI11 CONFIG REQUIRED)
 find_package(SQLiteCpp CONFIG REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus CONFIG REQUIRED)
 
-target_link_libraries(zfleet_server
-  PRIVATE
-    CLI11::CLI11
+target_link_libraries(zfleet_server_app
+  PUBLIC
+    Boost::system
     SQLiteCpp
     tomlplusplus::tomlplusplus
     zfleet::core
     zfleet::protocol
-    zfleet::platform
 )
 
-target_include_directories(zfleet_server
-  PRIVATE
+target_include_directories(zfleet_server_app
+  PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_features(zfleet_server_app PUBLIC cxx_std_20)
+
+add_executable(zfleet_server
+  src/main.cpp
+)
+
+target_link_libraries(zfleet_server
+  PRIVATE
+    CLI11::CLI11
+    zfleet::platform
+    zfleet_server_app
 )
 
 target_compile_features(zfleet_server PRIVATE cxx_std_20)
@@ -31,16 +45,12 @@ if(BUILD_TESTING)
 
   add_executable(zfleet_server_tests
     tests/server_test.cpp
-    src/config.cpp
-    src/database.cpp
   )
 
   target_link_libraries(zfleet_server_tests
     PRIVATE
       Catch2::Catch2WithMain
-      SQLiteCpp
-      tomlplusplus::tomlplusplus
-      zfleet::core
+      zfleet_server_app
   )
 
   target_include_directories(zfleet_server_tests

@@ -86,4 +86,69 @@ const std::filesystem::path& ServerDatabase::database_path() const noexcept {
   return database_path_;
 }
 
+bool ServerDatabase::AgentExists(const std::string& agent_id) const {
+  SQLite::Database db(database_path_.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(db, "select 1 from agents where agent_id = ?");
+  query.bind(1, agent_id);
+  return query.executeStep();
+}
+
+void ServerDatabase::UpsertAgent(
+    const zfleet::protocol::RegistrationRequest& request) {
+  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  SQLite::Statement statement(
+      db,
+      R"sql(
+        insert into agents (agent_id, first_seen_at, last_seen_at, platform, status)
+        values (?, ?, ?, ?, ?)
+        on conflict(agent_id) do update set
+          last_seen_at = excluded.last_seen_at,
+          platform = excluded.platform,
+          status = excluded.status
+      )sql");
+  statement.bind(1, request.agent_id);
+  statement.bind(2, request.occurred_at);
+  statement.bind(3, request.occurred_at);
+  statement.bind(4, request.os);
+  statement.bind(5, "online");
+  statement.exec();
+}
+
+void ServerDatabase::RecordHeartbeat(
+    const zfleet::protocol::HeartbeatRequest& request,
+    const std::string& payload_json) {
+  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  SQLite::Transaction transaction(db);
+
+  SQLite::Statement insert_statement(
+      db,
+      "insert into heartbeats (agent_id, occurred_at, payload_json) values (?, ?, ?)");
+  insert_statement.bind(1, request.agent_id);
+  insert_statement.bind(2, request.occurred_at);
+  insert_statement.bind(3, payload_json);
+  insert_statement.exec();
+
+  SQLite::Statement update_statement(
+      db, "update agents set last_seen_at = ?, status = ? where agent_id = ?");
+  update_statement.bind(1, request.occurred_at);
+  update_statement.bind(2, "online");
+  update_statement.bind(3, request.agent_id);
+  update_statement.exec();
+
+  transaction.commit();
+}
+
+void ServerDatabase::RecordAssetSnapshot(
+    const zfleet::protocol::AssetSnapshotRequest& request,
+    const std::string& payload_json) {
+  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  SQLite::Statement statement(
+      db,
+      "insert into asset_snapshots (agent_id, occurred_at, payload_json) values (?, ?, ?)");
+  statement.bind(1, request.agent_id);
+  statement.bind(2, request.occurred_at);
+  statement.bind(3, payload_json);
+  statement.exec();
+}
+
 } // namespace zfleet::server

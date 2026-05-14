@@ -1,5 +1,7 @@
 #include "config.h"
 #include "database.h"
+#include "http_handler.h"
+#include "http_server.h"
 
 #include "zfleet/core/log.h"
 #include "zfleet/core/version.h"
@@ -10,7 +12,6 @@
 
 #include <filesystem>
 #include <optional>
-#include <sstream>
 
 int main(int argc, char** argv) {
   CLI::App app{"z-fleet server"};
@@ -50,21 +51,23 @@ int main(int argc, char** argv) {
 
     zfleet::server::ServerDatabase database(config.database_path);
     database.Initialize();
+    const zfleet::server::HttpHandler handler(&database);
+    zfleet::server::HttpServer server(config.listen, &handler);
 
-    std::ostringstream message;
-    message << zfleet::core::project_name() << " server "
-            << zfleet::core::version() << " protocol "
-            << zfleet::protocol::protocol_version() << " on "
-            << zfleet::platform::os_name() << " schema_version="
-            << database.schema_version();
-    zfleet::core::log::Write(
-        zfleet::core::log::Level::kInfo, logger, message.str());
+    ZFLOG_INFO(logger,
+               "{} server {} protocol {} on {} schema_version={}",
+               zfleet::core::project_name(),
+               zfleet::core::version(),
+               zfleet::protocol::protocol_version(),
+               zfleet::platform::os_name(),
+               database.schema_version());
+    server.Run();
     zfleet::core::log::Shutdown();
     return 0;
   } catch (const std::exception& ex) {
-    zfleet::core::log::Write(zfleet::core::log::Level::kError,
-                             zfleet::core::log::Component("server"),
-                             std::string("server startup failed: ") + ex.what());
+    ZFLOG_ERROR(zfleet::core::log::Component("server"),
+                "server startup failed: {}",
+                ex.what());
     zfleet::core::log::Shutdown();
     return 1;
   }
