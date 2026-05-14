@@ -42,12 +42,20 @@ TEST_CASE("server config loads listen and database path from toml") {
     config_stream << "listen = \"127.0.0.1:18080\"\n";
     config_stream << "database_path = \"" << (test_root / "server.db").string()
                   << "\"\n";
+    config_stream << "\n[log]\n";
+    config_stream << "level = \"debug\"\n";
+    config_stream << "file = \"" << (test_root / "server.log").string()
+                  << "\"\n";
+    config_stream << "enable_console = false\n";
   }
 
   const auto config = zfleet::server::LoadConfig(config_path);
 
   REQUIRE(config.listen == "127.0.0.1:18080");
   REQUIRE(config.database_path == test_root / "server.db");
+  REQUIRE(config.log.level == zfleet::core::log::Level::kDebug);
+  REQUIRE(config.log.file_path == test_root / "server.log");
+  REQUIRE_FALSE(config.log.enable_console);
 
   fs::remove_all(test_root);
 }

@@ -53,6 +53,11 @@ Server 当前最小本地运行方式：
 [server]
 listen = "127.0.0.1:8080"
 database_path = "data/zfleet.db"
+
+[log]
+level = "info"
+file = "logs/zfleet-server.log"
+enable_console = true
 ```
 
 说明：
@@ -60,6 +65,7 @@ database_path = "data/zfleet.db"
 - `--config` 用于指定配置文件路径。
 - `--database-path` 可覆盖配置中的 `database_path`。
 - `--listen` 可覆盖配置中的 `listen`。
+- `--log-level` 可覆盖配置中的 `log.level`。
 - Server 启动时会自动初始化 SQLite 数据库和 v0.1 最小 schema。
 
 Agent 当前最小本地运行方式：
@@ -75,12 +81,18 @@ Agent 当前最小本地运行方式：
 server_url = "http://127.0.0.1:8080"
 data_dir = "data/agent"
 state_file = "state.toml"
+
+[log]
+level = "info"
+file = "logs/zfleet-agent.log"
+enable_console = true
 ```
 
 说明：
 
 - `--config` 用于指定配置文件路径。
 - `--data-dir` 可覆盖配置中的 `data_dir`。
+- `--log-level` 可覆盖配置中的 `log.level`。
 - Agent 首次启动会在 `data_dir/state.toml` 生成本地状态文件。
 - 当前 `state.toml` 只保存 `agent_id`，属于程序持久化状态，不应与运维配置混写。
 - 重复启动同一 `data_dir` 时，Agent 必须复用同一个 `agent_id`。

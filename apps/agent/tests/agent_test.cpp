@@ -31,12 +31,20 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
     config_stream << "server_url = \"http://127.0.0.1:18080\"\n";
     config_stream << "data_dir = \"" << (test_root / "data").string() << "\"\n";
     config_stream << "state_file = \"agent-state.toml\"\n";
+    config_stream << "\n[log]\n";
+    config_stream << "level = \"error\"\n";
+    config_stream << "file = \"" << (test_root / "agent.log").string()
+                  << "\"\n";
+    config_stream << "enable_console = false\n";
   }
 
   const auto config = zfleet::agent::LoadConfig(config_path);
   const auto state_path = zfleet::agent::StatePathFor(config);
 
   REQUIRE(config.server_url == "http://127.0.0.1:18080");
+  REQUIRE(config.log.level == zfleet::core::log::Level::kError);
+  REQUIRE(config.log.file_path == test_root / "agent.log");
+  REQUIRE_FALSE(config.log.enable_console);
   REQUIRE(state_path == test_root / "data" / "agent-state.toml");
 
   fs::remove_all(test_root);

@@ -1,4 +1,5 @@
 add_library(zfleet_core
+  src/log.cpp
   src/uuid.cpp
   src/version.cpp
 )
@@ -6,6 +7,7 @@ add_library(zfleet_core
 add_library(zfleet::core ALIAS zfleet_core)
 
 find_package(Boost REQUIRED COMPONENTS uuid)
+find_package(spdlog CONFIG REQUIRED)
 
 target_include_directories(zfleet_core
   PUBLIC
@@ -15,6 +17,8 @@ target_include_directories(zfleet_core
 target_link_libraries(zfleet_core
   PUBLIC
     Boost::uuid
+  PRIVATE
+    spdlog::spdlog
 )
 
 target_compile_features(zfleet_core PUBLIC cxx_std_20)
@@ -24,6 +28,7 @@ if(BUILD_TESTING)
   include(Catch)
 
   add_executable(zfleet_core_tests
+    tests/log_test.cpp
     tests/version_test.cpp
   )
 
