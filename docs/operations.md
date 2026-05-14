@@ -41,6 +41,27 @@ ctest --preset linux-debug
 
 ## 本地运行
 
+Server 当前最小本地运行方式：
+
+```bash
+./build/linux-debug/apps/server/zfleet_server --database-path /tmp/zfleet-server/zfleet.db
+```
+
+配置文件示例：
+
+```toml
+[server]
+listen = "127.0.0.1:8080"
+database_path = "data/zfleet.db"
+```
+
+说明：
+
+- `--config` 用于指定配置文件路径。
+- `--database-path` 可覆盖配置中的 `database_path`。
+- `--listen` 可覆盖配置中的 `listen`。
+- Server 启动时会自动初始化 SQLite 数据库和 v0.1 最小 schema。
+
 Agent 当前最小本地运行方式：
 
 ```bash

@@ -12,5 +12,6 @@ TEST_CASE("integration scaffold links core platform and protocol modules") {
 }
 
 TEST_CASE("integration scaffold reserves space for future agent server flow") {
-  SUCCEED("Replace this placeholder with register/heartbeat/assets integration flow in v0.1.");
+  SUCCEED(
+      "Replace this placeholder with server startup plus register/heartbeat/assets integration flow in v0.1.");
 }
