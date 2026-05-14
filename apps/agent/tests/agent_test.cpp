@@ -1,25 +1,32 @@
 #include "config.h"
 #include "state.h"
 
+#include <catch2/catch_test_macros.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
 
-int main() {
+namespace {
+
+std::filesystem::path MakeTestRoot() {
+  return std::filesystem::temp_directory_path() / "zfleet-agent-tests" /
+         "identity-config";
+}
+
+} // namespace
+
+TEST_CASE("agent config loads values from toml and resolves state path") {
   namespace fs = std::filesystem;
 
-  const auto test_root =
-      fs::temp_directory_path() / "zfleet-agent-tests" / "identity-config";
+  const auto test_root = MakeTestRoot();
   fs::remove_all(test_root);
   fs::create_directories(test_root);
 
   const auto config_path = test_root / "agent.toml";
   {
     std::ofstream config_stream(config_path);
-    if (!config_stream) {
-      return 1;
-    }
-
+    REQUIRE(config_stream);
     config_stream << "[agent]\n";
     config_stream << "server_url = \"http://127.0.0.1:18080\"\n";
     config_stream << "data_dir = \"" << (test_root / "data").string() << "\"\n";
@@ -27,27 +34,33 @@ int main() {
   }
 
   const auto config = zfleet::agent::LoadConfig(config_path);
-  if (config.server_url != "http://127.0.0.1:18080") {
-    return 1;
-  }
-
   const auto state_path = zfleet::agent::StatePathFor(config);
-  if (state_path != test_root / "data" / "agent-state.toml") {
-    return 1;
-  }
 
-  const auto first_state =
-      zfleet::agent::LoadOrCreateState(state_path);
-  if (first_state.agent_id.empty()) {
-    return 1;
-  }
-
-  const auto second_state =
-      zfleet::agent::LoadOrCreateState(state_path);
-  if (second_state.agent_id != first_state.agent_id) {
-    return 1;
-  }
+  REQUIRE(config.server_url == "http://127.0.0.1:18080");
+  REQUIRE(state_path == test_root / "data" / "agent-state.toml");
 
   fs::remove_all(test_root);
-  return 0;
+}
+
+TEST_CASE("agent state is persisted and reused across restarts") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const zfleet::agent::AgentConfig config{
+      .server_url = "http://127.0.0.1:8080",
+      .data_dir = test_root / "data",
+      .state_file = "agent-state.toml",
+  };
+  const auto state_path = zfleet::agent::StatePathFor(config);
+
+  const auto first_state = zfleet::agent::LoadOrCreateState(state_path);
+  const auto second_state = zfleet::agent::LoadOrCreateState(state_path);
+
+  REQUIRE_FALSE(first_state.agent_id.empty());
+  REQUIRE(second_state.agent_id == first_state.agent_id);
+
+  fs::remove_all(test_root);
 }

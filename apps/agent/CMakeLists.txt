@@ -24,6 +24,9 @@ target_include_directories(zfleet_agent
 target_compile_features(zfleet_agent PRIVATE cxx_std_20)
 
 if(BUILD_TESTING)
+  find_package(Catch2 CONFIG REQUIRED)
+  include(Catch)
+
   add_executable(zfleet_agent_tests
     tests/agent_test.cpp
     src/config.cpp
@@ -32,6 +35,7 @@ if(BUILD_TESTING)
 
   target_link_libraries(zfleet_agent_tests
     PRIVATE
+      Catch2::Catch2WithMain
       tomlplusplus::tomlplusplus
       zfleet::core
   )
@@ -43,5 +47,5 @@ if(BUILD_TESTING)
 
   target_compile_features(zfleet_agent_tests PRIVATE cxx_std_20)
 
-  add_test(NAME zfleet_agent_tests COMMAND zfleet_agent_tests)
+  catch_discover_tests(zfleet_agent_tests)
 endif()

@@ -20,14 +20,18 @@ target_link_libraries(zfleet_protocol
 target_compile_features(zfleet_protocol PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
+  find_package(Catch2 CONFIG REQUIRED)
+  include(Catch)
+
   add_executable(zfleet_protocol_tests
     tests/message_test.cpp
   )
 
   target_link_libraries(zfleet_protocol_tests
     PRIVATE
+      Catch2::Catch2WithMain
       zfleet::protocol
   )
 
-  add_test(NAME zfleet_protocol_tests COMMAND zfleet_protocol_tests)
+  catch_discover_tests(zfleet_protocol_tests)
 endif()

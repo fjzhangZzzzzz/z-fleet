@@ -1,5 +1,8 @@
 #include "zfleet/core/version.h"
 
-int main() {
-  return zfleet::core::project_name().empty() || zfleet::core::version().empty();
+#include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("core version metadata is available") {
+  REQUIRE_FALSE(zfleet::core::project_name().empty());
+  REQUIRE_FALSE(zfleet::core::version().empty());
 }

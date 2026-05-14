@@ -9,6 +9,6 @@ if [[ -z "$preset" ]]; then
   exit 2
 fi
 
-source "$script_dir/bootstrap-vcpkg.sh"
+# source "$script_dir/bootstrap-vcpkg.sh"
 
 ctest --preset "$preset"

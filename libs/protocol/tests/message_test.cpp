@@ -1,48 +1,38 @@
-#include "zfleet/protocol/message.h"
 #include "zfleet/protocol/json_codec.h"
+#include "zfleet/protocol/message.h"
 
+#include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
-int main() {
-  using nlohmann::json;
-  using zfleet::protocol::AssetSnapshotRequest;
-  using zfleet::protocol::AuditEvent;
-  using zfleet::protocol::AuditEventType;
-  using zfleet::protocol::ErrorCode;
-  using zfleet::protocol::ErrorResponse;
-  using zfleet::protocol::HeartbeatRequest;
-  using zfleet::protocol::MessageKind;
-  using zfleet::protocol::RegistrationRequest;
-  using zfleet::protocol::StatusResponse;
+namespace {
 
-  if (zfleet::protocol::protocol_version() != "v1") {
-    return 1;
-  }
+using nlohmann::json;
+using zfleet::protocol::AssetSnapshotRequest;
+using zfleet::protocol::AuditEvent;
+using zfleet::protocol::AuditEventType;
+using zfleet::protocol::ErrorCode;
+using zfleet::protocol::ErrorResponse;
+using zfleet::protocol::HeartbeatRequest;
+using zfleet::protocol::MessageKind;
+using zfleet::protocol::RegistrationRequest;
+using zfleet::protocol::StatusResponse;
 
-  if (zfleet::protocol::ToString(MessageKind::heartbeat) != "heartbeat") {
-    return 1;
-  }
+} // namespace
 
-  if (zfleet::protocol::ToString(ErrorCode::agent_id_mismatch) !=
-      "agent_id_mismatch") {
-    return 1;
-  }
+TEST_CASE("protocol metadata and enum conversions are available") {
+  REQUIRE(zfleet::protocol::protocol_version() == "v1");
+  REQUIRE(zfleet::protocol::ToString(MessageKind::heartbeat) == "heartbeat");
+  REQUIRE(zfleet::protocol::ToString(ErrorCode::agent_id_mismatch) ==
+          "agent_id_mismatch");
+  REQUIRE(zfleet::protocol::ToString(AuditEventType::agent_asset_snapshot) ==
+          "agent.asset_snapshot");
+  REQUIRE(zfleet::protocol::ErrorCodeFromString("internal_error") ==
+          ErrorCode::internal_error);
+  REQUIRE(zfleet::protocol::AuditEventTypeFromString("agent.register") ==
+          AuditEventType::agent_register);
+}
 
-  if (zfleet::protocol::ToString(AuditEventType::agent_asset_snapshot) !=
-      "agent.asset_snapshot") {
-    return 1;
-  }
-
-  if (zfleet::protocol::ErrorCodeFromString("internal_error") !=
-      ErrorCode::internal_error) {
-    return 1;
-  }
-
-  if (zfleet::protocol::AuditEventTypeFromString("agent.register") !=
-      AuditEventType::agent_register) {
-    return 1;
-  }
-
+TEST_CASE("registration request supports json round trip") {
   RegistrationRequest registration{
       .protocol_version = "v1",
       .request_id = "req-1",
@@ -53,14 +43,15 @@ int main() {
       .os = "linux",
       .arch = "x86_64",
   };
-  const auto registration_json = json(registration);
-  const auto parsed_registration =
-      registration_json.get<RegistrationRequest>();
-  if (parsed_registration.agent_id != registration.agent_id ||
-      parsed_registration.hostname != registration.hostname) {
-    return 1;
-  }
 
+  const auto registration_json = json(registration);
+  const auto parsed_registration = registration_json.get<RegistrationRequest>();
+
+  REQUIRE(parsed_registration.agent_id == registration.agent_id);
+  REQUIRE(parsed_registration.hostname == registration.hostname);
+}
+
+TEST_CASE("heartbeat request supports json round trip") {
   HeartbeatRequest heartbeat{
       .protocol_version = "v1",
       .request_id = "req-2",
@@ -68,13 +59,15 @@ int main() {
       .occurred_at = "2026-05-13T10:16:00Z",
       .agent_version = "0.1.0",
   };
+
   const auto heartbeat_json = json(heartbeat);
   const auto parsed_heartbeat = heartbeat_json.get<HeartbeatRequest>();
-  if (parsed_heartbeat.request_id != heartbeat.request_id ||
-      parsed_heartbeat.agent_version != heartbeat.agent_version) {
-    return 1;
-  }
 
+  REQUIRE(parsed_heartbeat.request_id == heartbeat.request_id);
+  REQUIRE(parsed_heartbeat.agent_version == heartbeat.agent_version);
+}
+
+TEST_CASE("asset snapshot omits missing optional fields during json round trip") {
   AssetSnapshotRequest asset{
       .protocol_version = "v1",
       .request_id = "req-3",
@@ -86,16 +79,16 @@ int main() {
       .arch = "x86_64",
       .agent_version = "0.1.0",
   };
-  const auto asset_json = json(asset);
-  if (asset_json.contains("os_version")) {
-    return 1;
-  }
-  const auto parsed_asset = asset_json.get<AssetSnapshotRequest>();
-  if (parsed_asset.os_version.has_value() ||
-      parsed_asset.arch != asset.arch) {
-    return 1;
-  }
 
+  const auto asset_json = json(asset);
+  const auto parsed_asset = asset_json.get<AssetSnapshotRequest>();
+
+  REQUIRE_FALSE(asset_json.contains("os_version"));
+  REQUIRE_FALSE(parsed_asset.os_version.has_value());
+  REQUIRE(parsed_asset.arch == asset.arch);
+}
+
+TEST_CASE("status response supports json round trip") {
   StatusResponse status{
       .protocol_version = "v1",
       .request_id = "req-4",
@@ -104,11 +97,12 @@ int main() {
       .status = "accepted",
       .server_time = "2026-05-13T10:16:31Z",
   };
-  const auto parsed_status = json(status).get<StatusResponse>();
-  if (parsed_status.status != "accepted") {
-    return 1;
-  }
 
+  const auto parsed_status = json(status).get<StatusResponse>();
+  REQUIRE(parsed_status.status == "accepted");
+}
+
+TEST_CASE("error response omits missing optional fields during json round trip") {
   ErrorResponse error{
       .protocol_version = "v1",
       .request_id = "req-5",
@@ -118,16 +112,16 @@ int main() {
       .message = "missing field",
       .retryable = false,
   };
-  const auto error_json = json(error);
-  if (error_json.contains("agent_id")) {
-    return 1;
-  }
-  const auto parsed_error = error_json.get<ErrorResponse>();
-  if (parsed_error.error_code != ErrorCode::missing_required_field ||
-      parsed_error.retryable) {
-    return 1;
-  }
 
+  const auto error_json = json(error);
+  const auto parsed_error = error_json.get<ErrorResponse>();
+
+  REQUIRE_FALSE(error_json.contains("agent_id"));
+  REQUIRE(parsed_error.error_code == ErrorCode::missing_required_field);
+  REQUIRE_FALSE(parsed_error.retryable);
+}
+
+TEST_CASE("audit event supports json round trip") {
   AuditEvent event{
       .audit_id = "audit-1",
       .occurred_at = "2026-05-13T10:16:33Z",
@@ -137,12 +131,10 @@ int main() {
       .result = "success",
       .payload_json = R"({"status":"ok"})",
   };
-  const auto parsed_event = json(event).get<AuditEvent>();
-  if (parsed_event.event_type != AuditEventType::agent_heartbeat ||
-      !parsed_event.agent_id.has_value() ||
-      parsed_event.payload_json != R"({"status":"ok"})") {
-    return 1;
-  }
 
-  return 0;
+  const auto parsed_event = json(event).get<AuditEvent>();
+
+  REQUIRE(parsed_event.event_type == AuditEventType::agent_heartbeat);
+  REQUIRE(parsed_event.agent_id.has_value());
+  REQUIRE(parsed_event.payload_json == R"({"status":"ok"})");
 }

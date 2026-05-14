@@ -24,6 +24,21 @@
 - `windows-debug`
 - `windows-release`
 
+## 测试
+
+测试通过 CTest 运行，单元测试与小型组件测试统一使用 Catch2。
+
+```bash
+./scripts/test.sh linux-debug
+ctest --preset linux-debug
+```
+
+约定：
+
+- 新增测试默认使用 Catch2，而不是手写 `main()` 返回码式 smoke test。
+- 测试目标应接入 Catch2 测试发现机制，保证单个 `TEST_CASE` 可被 CTest 直接发现和执行。
+- 功能实现、协议调整、本地状态和错误路径变更应优先测试先行，或至少与测试在同一提交中同步落地。
+
 ## 本地运行
 
 Agent 当前最小本地运行方式：

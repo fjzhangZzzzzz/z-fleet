@@ -1,7 +1,9 @@
 #include "zfleet/platform/system.h"
 
-int main() {
-  return zfleet::platform::os_name().empty() ||
-         zfleet::platform::architecture_name().empty() ||
-         zfleet::platform::hostname().empty();
+#include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("platform system metadata is available") {
+  REQUIRE_FALSE(zfleet::platform::os_name().empty());
+  REQUIRE_FALSE(zfleet::platform::architecture_name().empty());
+  REQUIRE_FALSE(zfleet::platform::hostname().empty());
 }
