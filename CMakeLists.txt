@@ -14,3 +14,7 @@ add_subdirectory(libs/platform)
 
 add_subdirectory(apps/agent)
 add_subdirectory(apps/server)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests/integration)
+endif()
