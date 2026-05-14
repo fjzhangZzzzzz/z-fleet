@@ -152,6 +152,13 @@ file = "logs/zfleet.log"
 
 命令行参数只覆盖少量启动级配置，例如 `--config`、`--log-level` 和 `--data-dir`。
 
+Agent 本地持久化信息应区分“配置”和“状态”：
+
+- 配置文件用于运维显式输入，例如 `server_url`、`data_dir` 和后续心跳周期、日志级别。
+- 状态文件用于程序生成并维护的本地稳定状态，例如 `agent_id`。
+- `agent_id` 不应写回运维配置文件，避免因配置模板覆盖、同步或人工编辑导致身份漂移。
+- v0.1 推荐在 Agent `data_dir` 下使用 `state.toml` 保存本地状态；后续如果本地状态增多，可平滑迁移到 SQLite，而不改变“配置与状态分离”的边界。
+
 ## 相关 ADR
 
 - [0001：Agent 与 Server 使用 C++](adr/0001-use-cpp.md)

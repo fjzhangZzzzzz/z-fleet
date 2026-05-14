@@ -1,12 +1,20 @@
 add_library(zfleet_core
+  src/uuid.cpp
   src/version.cpp
 )
 
 add_library(zfleet::core ALIAS zfleet_core)
 
+find_package(Boost REQUIRED COMPONENTS uuid)
+
 target_include_directories(zfleet_core
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(zfleet_core
+  PUBLIC
+    Boost::uuid
 )
 
 target_compile_features(zfleet_core PUBLIC cxx_std_20)

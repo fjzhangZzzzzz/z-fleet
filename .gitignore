@@ -21,3 +21,7 @@ vcpkg_installed/
 
 # Local CMake overrides
 CMakeUserPresets.json
+
+.vscode/
+.codex/
+.agents/

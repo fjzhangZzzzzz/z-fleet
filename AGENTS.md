@@ -17,7 +17,7 @@ Windows builds use the matching `windows-debug` and `windows-release` presets fr
 
 ## Coding Style & Naming Conventions
 
-Follow the existing C++ style in the repo: 2-space indentation, braces on the same line, and small translation units. Use project namespaces such as `zfleet::core` and keep public headers under `include/zfleet/...`. Source and test files use lowercase snake_case, for example `version.cpp` and `version_test.cpp`. Keep document filenames stable: core docs use English names like `architecture.md`, and ADRs use `NNNN-short-name.md`.
+Use the Google C++ Style Guide as the default for all production code and C++ snippets in documentation. In this repository that means 2-space indentation, braces on the same line, and small translation units consistent with the current codebase. Use project namespaces such as `zfleet::core` and keep public headers under `include/zfleet/...`. Source and test files use lowercase snake_case, for example `version.cpp` and `version_test.cpp`. Keep document filenames stable: core docs use English names like `architecture.md`, and ADRs use `NNNN-short-name.md`.
 
 ## Testing Guidelines
 

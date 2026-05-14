@@ -26,13 +26,28 @@
 
 ## 本地运行
 
-待补充：
+Agent 当前最小本地运行方式：
 
-- Server 本地启动命令；
-- Agent 本地启动命令；
-- 本地配置文件示例；
-- 数据目录和日志目录；
-- SQLite 数据库位置。
+```bash
+./build/linux-debug/apps/agent/zfleet_agent --data-dir /tmp/zfleet-agent
+```
+
+配置文件示例：
+
+```toml
+[agent]
+server_url = "http://127.0.0.1:8080"
+data_dir = "data/agent"
+state_file = "state.toml"
+```
+
+说明：
+
+- `--config` 用于指定配置文件路径。
+- `--data-dir` 可覆盖配置中的 `data_dir`。
+- Agent 首次启动会在 `data_dir/state.toml` 生成本地状态文件。
+- 当前 `state.toml` 只保存 `agent_id`，属于程序持久化状态，不应与运维配置混写。
+- 重复启动同一 `data_dir` 时，Agent 必须复用同一个 `agent_id`。
 
 ## 排障
 
