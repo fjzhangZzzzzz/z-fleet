@@ -1,10 +1,13 @@
 #pragma once
 
+#include <fmt/format.h>
+
 #include <filesystem>
 #include <initializer_list>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace zfleet::core::log {
 
@@ -65,7 +68,62 @@ void Write(
     std::string_view message,
     std::source_location location = std::source_location::current());
 
+template <typename... Args>
+void LogAt(
+    Level level,
+    const Context& context,
+    std::source_location location,
+    fmt::format_string<Args...> format,
+    Args&&... args) {
+  if (!ShouldLog(level)) {
+    return;
+  }
+
+  Write(level, context, fmt::format(format, std::forward<Args>(args)...),
+        location);
+}
+
+template <typename... Args>
+void Log(
+    Level level,
+    const Context& context,
+    fmt::format_string<Args...> format,
+    Args&&... args) {
+  LogAt(level, context, std::source_location::current(), format,
+        std::forward<Args>(args)...);
+}
+
 Level ParseLevel(std::string_view text);
 std::string_view ToString(Level level) noexcept;
 
 } // namespace zfleet::core::log
+
+#define ZFLOG_TRACE(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kTrace, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
+
+#define ZFLOG_DEBUG(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kDebug, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
+
+#define ZFLOG_INFO(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kInfo, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
+
+#define ZFLOG_WARN(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kWarn, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
+
+#define ZFLOG_ERROR(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kError, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
+
+#define ZFLOG_CRITICAL(ctx, fmt, ...) \
+  ::zfleet::core::log::LogAt(::zfleet::core::log::Level::kCritical, (ctx), \
+                             std::source_location::current(), (fmt), \
+                             ##__VA_ARGS__)
