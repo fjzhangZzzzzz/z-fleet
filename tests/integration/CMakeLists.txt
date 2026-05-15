@@ -8,6 +8,7 @@ add_executable(zfleet_integration_tests
 target_link_libraries(zfleet_integration_tests
   PRIVATE
     Catch2::Catch2WithMain
+    zfleet_agent_app
     zfleet_server_app
     zfleet::platform
 )

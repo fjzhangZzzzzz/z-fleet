@@ -1,10 +1,7 @@
+#include "app.h"
 #include "config.h"
-#include "state.h"
 
 #include "zfleet/core/log.h"
-#include "zfleet/core/version.h"
-#include "zfleet/platform/system.h"
-#include "zfleet/protocol/message.h"
 
 #include <CLI/CLI.hpp>
 
@@ -37,22 +34,7 @@ int main(int argc, char** argv) {
     }
 
     zfleet::core::log::Init(config.log);
-
-    const auto state_path = zfleet::agent::StatePathFor(config);
-    const auto state = zfleet::agent::LoadOrCreateState(state_path);
-    const auto logger = zfleet::core::log::Component("agent").With(
-        {{"agent_id", state.agent_id},
-         {"server_url", config.server_url},
-         {"data_dir", config.data_dir.string()}});
-
-    ZFLOG_INFO(logger,
-               "{} agent {} protocol {} on {} hostname={} arch={}",
-               zfleet::core::project_name(),
-               zfleet::core::version(),
-               zfleet::protocol::protocol_version(),
-               zfleet::platform::os_name(),
-               zfleet::platform::hostname(),
-               zfleet::platform::architecture_name());
+    zfleet::agent::RunOnce(config);
     zfleet::core::log::Shutdown();
     return 0;
   } catch (const std::exception& ex) {
