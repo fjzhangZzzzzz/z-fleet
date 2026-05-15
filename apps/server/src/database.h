@@ -21,6 +21,7 @@ class ServerDatabase {
   void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshotRequest& request,
       const std::string& payload_json);
+  void RecordAuditEvent(const zfleet::protocol::AuditEvent& event);
 
  private:
   std::filesystem::path database_path_;

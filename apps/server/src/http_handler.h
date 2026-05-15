@@ -32,6 +32,7 @@ class HttpHandler {
       const zfleet::protocol::StatusResponse& response) const;
   http::response<http::string_body> MakeErrorResponse(
       http::status status_code,
+      std::optional<zfleet::protocol::AuditEventType> event_type,
       zfleet::protocol::ErrorCode error_code,
       std::string_view message,
       bool retryable,

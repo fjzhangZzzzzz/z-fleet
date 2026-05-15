@@ -50,6 +50,20 @@ std::string ReadAgentLastSeen(const std::filesystem::path& database_path,
   return query.getColumn(0).getString();
 }
 
+std::string ReadAuditField(const std::filesystem::path& database_path,
+                           const std::string& request_id,
+                           const std::string& column_name) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db, "select " + column_name +
+              " from audit_events where request_id = ? order by rowid desc limit 1");
+  query.bind(1, request_id);
+  if (!query.executeStep()) {
+    return {};
+  }
+  return query.getColumn(0).getString();
+}
+
 } // namespace
 
 TEST_CASE("server config loads listen and database path from toml") {
@@ -138,6 +152,11 @@ TEST_CASE("register request is accepted and persists agent") {
   REQUIRE(response.result() == http::status::ok);
   REQUIRE(body.at("status").get<std::string>() == "accepted");
   REQUIRE(database.AgentExists("agent-1"));
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
+  REQUIRE(ReadAuditField(database_path, "req-register", "event_type") ==
+          "agent.register");
+  REQUIRE(ReadAuditField(database_path, "req-register", "payload_json")
+              .find("\"status\":\"accepted\"") != std::string::npos);
 
   fs::remove_all(test_root);
 }
@@ -164,6 +183,7 @@ TEST_CASE("invalid json returns structured invalid_json error") {
 
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.at("error_code").get<std::string>() == "invalid_json");
+  REQUIRE(CountRows(database_path, "audit_events") == 0);
 
   fs::remove_all(test_root);
 }
@@ -206,6 +226,12 @@ TEST_CASE("heartbeat path and body agent mismatch returns structured error") {
 
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.at("error_code").get<std::string>() == "agent_id_mismatch");
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
+  REQUIRE(ReadAuditField(database_path, "req-heartbeat", "event_type") ==
+          "agent.heartbeat");
+  REQUIRE(ReadAuditField(database_path, "req-heartbeat", "payload_json")
+              .find("\"error_code\":\"agent_id_mismatch\"") !=
+          std::string::npos);
 
   fs::remove_all(test_root);
 }
@@ -238,6 +264,10 @@ TEST_CASE("heartbeat for unregistered agent returns not found error") {
 
   REQUIRE(response.result() == http::status::not_found);
   REQUIRE(body.at("error_code").get<std::string>() == "agent_not_registered");
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
+  REQUIRE(ReadAuditField(database_path, "req-heartbeat", "payload_json")
+              .find("\"error_code\":\"agent_not_registered\"") !=
+          std::string::npos);
 
   fs::remove_all(test_root);
 }
@@ -295,8 +325,13 @@ TEST_CASE("heartbeat and asset requests persist rows for registered agent") {
   REQUIRE(assets_response.result() == http::status::ok);
   REQUIRE(CountRows(database_path, "heartbeats") == 1);
   REQUIRE(CountRows(database_path, "asset_snapshots") == 1);
+  REQUIRE(CountRows(database_path, "audit_events") == 2);
   REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
           "2026-05-14T10:00:01Z");
+  REQUIRE(ReadAuditField(database_path, "req-heartbeat", "event_type") ==
+          "agent.heartbeat");
+  REQUIRE(ReadAuditField(database_path, "req-assets", "event_type") ==
+          "agent.asset_snapshot");
 
   fs::remove_all(test_root);
 }

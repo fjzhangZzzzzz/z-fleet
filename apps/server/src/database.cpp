@@ -151,4 +151,31 @@ void ServerDatabase::RecordAssetSnapshot(
   statement.exec();
 }
 
+void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event) {
+  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  SQLite::Statement statement(
+      db,
+      R"sql(
+        insert into audit_events (
+          audit_id,
+          occurred_at,
+          agent_id,
+          event_type,
+          request_id,
+          payload_json
+        ) values (?, ?, ?, ?, ?, ?)
+      )sql");
+  statement.bind(1, event.audit_id);
+  statement.bind(2, event.occurred_at);
+  if (event.agent_id.has_value()) {
+    statement.bind(3, *event.agent_id);
+  } else {
+    statement.bind(3);
+  }
+  statement.bind(4, std::string(zfleet::protocol::ToString(event.event_type)));
+  statement.bind(5, event.request_id);
+  statement.bind(6, event.payload_json);
+  statement.exec();
+}
+
 } // namespace zfleet::server

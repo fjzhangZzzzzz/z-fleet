@@ -18,6 +18,23 @@ constexpr std::string_view kRegisterRoute = "/v1/agents/register";
 constexpr std::string_view kHeartbeatSuffix = "/heartbeat";
 constexpr std::string_view kAssetsSuffix = "/assets";
 
+void RecordAuditEvent(ServerDatabase* database,
+                      zfleet::protocol::AuditEventType event_type,
+                      std::string request_id,
+                      std::optional<std::string> agent_id,
+                      std::string result,
+                      const json& payload) {
+  database->RecordAuditEvent(zfleet::protocol::AuditEvent{
+      .audit_id = zfleet::core::GenerateUuid(),
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .agent_id = std::move(agent_id),
+      .request_id = std::move(request_id),
+      .event_type = event_type,
+      .result = std::move(result),
+      .payload_json = payload.dump(),
+  });
+}
+
 std::optional<std::string_view> MatchAgentRoute(std::string_view target,
                                                 std::string_view suffix) {
   constexpr std::string_view kPrefix = "/v1/agents/";
@@ -64,6 +81,7 @@ http::response<http::string_body> HttpHandler::Handle(
     const http::request<http::string_body>& request) const {
   if (request.method() != http::verb::post) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_json,
                              "unsupported method", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -84,6 +102,7 @@ http::response<http::string_body> HttpHandler::Handle(
   }
 
   return MakeErrorResponse(http::status::bad_request,
+                           std::nullopt,
                            zfleet::protocol::ErrorCode::invalid_json,
                            "unsupported route", false,
                            zfleet::core::GenerateUuid(), std::nullopt);
@@ -96,6 +115,7 @@ http::response<http::string_body> HttpHandler::HandleRegister(
         ParseBody<zfleet::protocol::RegistrationRequest>(request.body());
     if (parsed.protocol_version != zfleet::protocol::protocol_version()) {
       return MakeErrorResponse(http::status::bad_request,
+                               zfleet::protocol::AuditEventType::agent_register,
                                zfleet::protocol::ErrorCode::
                                    unsupported_protocol_version,
                                "unsupported protocol version", false,
@@ -103,6 +123,14 @@ http::response<http::string_body> HttpHandler::HandleRegister(
     }
 
     database_->UpsertAgent(parsed);
+    RecordAuditEvent(database_, zfleet::protocol::AuditEventType::agent_register,
+                     parsed.request_id, parsed.agent_id, "success",
+                     json{{"http_status", 200},
+                          {"status", "accepted"},
+                          {"agent_version", parsed.agent_version},
+                          {"hostname", parsed.hostname},
+                          {"os", parsed.os},
+                          {"arch", parsed.arch}});
     zfleet::core::log::Write(
         zfleet::core::log::Level::kInfo,
         RequestLogger("register", parsed.request_id, parsed.agent_id),
@@ -121,16 +149,19 @@ http::response<http::string_body> HttpHandler::HandleRegister(
         });
   } catch (const json::parse_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_json,
                              "invalid json", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::out_of_range&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::missing_required_field,
                              "missing required field", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::type_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_field_type,
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -140,6 +171,7 @@ http::response<http::string_body> HttpHandler::HandleRegister(
                                  .With({"route", "register"}),
                              std::string("register failed: ") + ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,
                              "internal error", true,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -154,6 +186,7 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
         request.body());
     if (parsed.protocol_version != zfleet::protocol::protocol_version()) {
       return MakeErrorResponse(http::status::bad_request,
+                               zfleet::protocol::AuditEventType::agent_heartbeat,
                                zfleet::protocol::ErrorCode::
                                    unsupported_protocol_version,
                                "unsupported protocol version", false,
@@ -161,18 +194,28 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
     }
     if (parsed.agent_id != agent_id) {
       return MakeErrorResponse(http::status::bad_request,
+                               zfleet::protocol::AuditEventType::agent_heartbeat,
                                zfleet::protocol::ErrorCode::agent_id_mismatch,
                                "path agent_id does not match body agent_id",
                                false, parsed.request_id, parsed.agent_id);
     }
     if (!database_->AgentExists(parsed.agent_id)) {
       return MakeErrorResponse(http::status::not_found,
+                               zfleet::protocol::AuditEventType::agent_heartbeat,
                                zfleet::protocol::ErrorCode::agent_not_registered,
                                "agent not registered", true, parsed.request_id,
                                parsed.agent_id);
     }
 
     database_->RecordHeartbeat(parsed, json(parsed).dump());
+    RecordAuditEvent(database_,
+                     zfleet::protocol::AuditEventType::agent_heartbeat,
+                     parsed.request_id,
+                     parsed.agent_id,
+                     "success",
+                     json{{"http_status", 200},
+                          {"status", "ok"},
+                          {"agent_version", parsed.agent_version}});
     zfleet::core::log::Write(
         zfleet::core::log::Level::kInfo,
         RequestLogger("heartbeat", parsed.request_id, parsed.agent_id),
@@ -191,16 +234,19 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
         });
   } catch (const json::parse_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_json,
                              "invalid json", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::out_of_range&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::missing_required_field,
                              "missing required field", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::type_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_field_type,
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -210,6 +256,7 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
                                  .With({"route", "heartbeat"}),
                              std::string("heartbeat failed: ") + ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,
                              "internal error", true,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -224,6 +271,7 @@ http::response<http::string_body> HttpHandler::HandleAssets(
         ParseBody<zfleet::protocol::AssetSnapshotRequest>(request.body());
     if (parsed.protocol_version != zfleet::protocol::protocol_version()) {
       return MakeErrorResponse(http::status::bad_request,
+                               zfleet::protocol::AuditEventType::agent_asset_snapshot,
                                zfleet::protocol::ErrorCode::
                                    unsupported_protocol_version,
                                "unsupported protocol version", false,
@@ -231,18 +279,30 @@ http::response<http::string_body> HttpHandler::HandleAssets(
     }
     if (parsed.agent_id != agent_id) {
       return MakeErrorResponse(http::status::bad_request,
+                               zfleet::protocol::AuditEventType::agent_asset_snapshot,
                                zfleet::protocol::ErrorCode::agent_id_mismatch,
                                "path agent_id does not match body agent_id",
                                false, parsed.request_id, parsed.agent_id);
     }
     if (!database_->AgentExists(parsed.agent_id)) {
       return MakeErrorResponse(http::status::not_found,
+                               zfleet::protocol::AuditEventType::agent_asset_snapshot,
                                zfleet::protocol::ErrorCode::agent_not_registered,
                                "agent not registered", true, parsed.request_id,
                                parsed.agent_id);
     }
 
     database_->RecordAssetSnapshot(parsed, json(parsed).dump());
+    RecordAuditEvent(database_,
+                     zfleet::protocol::AuditEventType::agent_asset_snapshot,
+                     parsed.request_id,
+                     parsed.agent_id,
+                     "success",
+                     json{{"http_status", 200},
+                          {"status", "stored"},
+                          {"hostname", parsed.hostname},
+                          {"os", parsed.os},
+                          {"arch", parsed.arch}});
     zfleet::core::log::Write(
         zfleet::core::log::Level::kInfo,
         RequestLogger("assets", parsed.request_id, parsed.agent_id),
@@ -261,16 +321,19 @@ http::response<http::string_body> HttpHandler::HandleAssets(
         });
   } catch (const json::parse_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_json,
                              "invalid json", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::out_of_range&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::missing_required_field,
                              "missing required field", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::type_error&) {
     return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_field_type,
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -280,6 +343,7 @@ http::response<http::string_body> HttpHandler::HandleAssets(
                                  .With({"route", "assets"}),
                              std::string("asset snapshot failed: ") + ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
+                             std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,
                              "internal error", true,
                              zfleet::core::GenerateUuid(), std::nullopt);
@@ -294,6 +358,7 @@ http::response<http::string_body> HttpHandler::MakeStatusResponse(
 
 http::response<http::string_body> HttpHandler::MakeErrorResponse(
     http::status status_code,
+    std::optional<zfleet::protocol::AuditEventType> event_type,
     zfleet::protocol::ErrorCode error_code,
     std::string_view message,
     bool retryable,
@@ -308,6 +373,17 @@ http::response<http::string_body> HttpHandler::MakeErrorResponse(
       .message = std::string(message),
       .retryable = retryable,
   };
+  if (event_type.has_value()) {
+    RecordAuditEvent(database_,
+                     *event_type,
+                     response.request_id,
+                     response.agent_id,
+                     "failure",
+                     json{{"http_status", static_cast<int>(status_code)},
+                          {"error_code", zfleet::protocol::ToString(error_code)},
+                          {"message", response.message},
+                          {"retryable", response.retryable}});
+  }
   return MakeJsonResponse(status_code, json(response));
 }
 
