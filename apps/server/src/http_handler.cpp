@@ -131,10 +131,8 @@ http::response<http::string_body> HttpHandler::HandleRegister(
                           {"hostname", parsed.hostname},
                           {"os", parsed.os},
                           {"arch", parsed.arch}});
-    zfleet::core::log::Write(
-        zfleet::core::log::Level::kInfo,
-        RequestLogger("register", parsed.request_id, parsed.agent_id),
-        "registration accepted");
+    ZFLOG_INFO(RequestLogger("register", parsed.request_id, parsed.agent_id),
+               "registration accepted");
 
     const auto now = zfleet::core::NowUtcRfc3339();
     return MakeStatusResponse(
@@ -166,10 +164,9 @@ http::response<http::string_body> HttpHandler::HandleRegister(
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const std::exception& ex) {
-    zfleet::core::log::Write(zfleet::core::log::Level::kError,
-                             zfleet::core::log::Component("server")
-                                 .With({"route", "register"}),
-                             std::string("register failed: ") + ex.what());
+    ZFLOG_ERROR(zfleet::core::log::Component("server").With({"route", "register"}),
+                "register failed: {}",
+                ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
                              std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,
@@ -216,10 +213,8 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
                      json{{"http_status", 200},
                           {"status", "ok"},
                           {"agent_version", parsed.agent_version}});
-    zfleet::core::log::Write(
-        zfleet::core::log::Level::kInfo,
-        RequestLogger("heartbeat", parsed.request_id, parsed.agent_id),
-        "heartbeat stored");
+    ZFLOG_INFO(RequestLogger("heartbeat", parsed.request_id, parsed.agent_id),
+               "heartbeat stored");
 
     const auto now = zfleet::core::NowUtcRfc3339();
     return MakeStatusResponse(
@@ -251,10 +246,10 @@ http::response<http::string_body> HttpHandler::HandleHeartbeat(
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const std::exception& ex) {
-    zfleet::core::log::Write(zfleet::core::log::Level::kError,
-                             zfleet::core::log::Component("server")
-                                 .With({"route", "heartbeat"}),
-                             std::string("heartbeat failed: ") + ex.what());
+    ZFLOG_ERROR(
+        zfleet::core::log::Component("server").With({"route", "heartbeat"}),
+        "heartbeat failed: {}",
+        ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
                              std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,
@@ -303,10 +298,8 @@ http::response<http::string_body> HttpHandler::HandleAssets(
                           {"hostname", parsed.hostname},
                           {"os", parsed.os},
                           {"arch", parsed.arch}});
-    zfleet::core::log::Write(
-        zfleet::core::log::Level::kInfo,
-        RequestLogger("assets", parsed.request_id, parsed.agent_id),
-        "asset snapshot stored");
+    ZFLOG_INFO(RequestLogger("assets", parsed.request_id, parsed.agent_id),
+               "asset snapshot stored");
 
     const auto now = zfleet::core::NowUtcRfc3339();
     return MakeStatusResponse(
@@ -338,10 +331,9 @@ http::response<http::string_body> HttpHandler::HandleAssets(
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const std::exception& ex) {
-    zfleet::core::log::Write(zfleet::core::log::Level::kError,
-                             zfleet::core::log::Component("server")
-                                 .With({"route", "assets"}),
-                             std::string("asset snapshot failed: ") + ex.what());
+    ZFLOG_ERROR(zfleet::core::log::Component("server").With({"route", "assets"}),
+                "asset snapshot failed: {}",
+                ex.what());
     return MakeErrorResponse(http::status::internal_server_error,
                              std::nullopt,
                              zfleet::protocol::ErrorCode::internal_error,

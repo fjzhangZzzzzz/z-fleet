@@ -56,11 +56,9 @@ void HttpServer::Run() {
   acceptor_.listen();
   endpoint_ = acceptor_.local_endpoint();
 
-  zfleet::core::log::Write(zfleet::core::log::Level::kInfo,
-                           zfleet::core::log::Component("server").With(
-                               {{"listen_port",
-                                 std::to_string(endpoint_.port())}}),
-                           "http server started");
+  ZFLOG_INFO(zfleet::core::log::Component("server").With(
+                 {{"listen_port", std::to_string(endpoint_.port())}}),
+             "http server started");
 
   StartAccept();
   io_context_.run();
