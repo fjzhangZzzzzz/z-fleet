@@ -99,11 +99,15 @@ enable_console = true
 
 ## 排障
 
-待补充：
-
-- 构建失败；
-- vcpkg 依赖安装失败；
-- Server 监听失败；
-- Agent 注册失败；
-- 心跳或资产上报失败；
-- 数据库迁移失败。
+- 构建失败：
+  先执行 `./scripts/build.sh linux-debug`，如果失败，优先检查 `VCPKG_ROOT`、CMake preset 和本地编译器是否可用。
+- Server 监听失败：
+  检查 `--listen` 或配置文件中的 `server.listen` 是否被占用，确认绑定地址和端口格式为 `host:port`。
+- Agent 注册、心跳或资产上报失败：
+  先检查 `server_url` 是否可达，再查看 Agent 与 Server 日志中带 `request_id`、`agent_id`、`route` 的错误记录。
+- `state.toml` 未生成或 `agent_id` 异常变化：
+  检查 `data_dir` 是否可写，并确认重复启动时仍使用同一 `data_dir`。
+- 数据库文件或表未生成：
+  检查 Server 启动参数中的 `database_path` 是否可写，并确认 `agents`、`heartbeats`、`asset_snapshots`、`audit_events` 表已初始化。
+- 非法 JSON 或未归类请求：
+  `v0.1` 不会将这类请求写入 `audit_events`；应通过 Server 运行日志排查，后续版本再纳入独立安全异常事件模型。
