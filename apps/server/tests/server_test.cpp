@@ -2,6 +2,8 @@
 #include "database.h"
 #include "http_handler.h"
 
+#include "zfleet/core/uuid.h"
+
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/beast/http.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -10,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unistd.h>
 
 namespace {
 
@@ -27,7 +30,7 @@ bool TableExists(const std::filesystem::path& database_path,
 
 std::filesystem::path MakeTestRoot() {
   return std::filesystem::temp_directory_path() / "zfleet-server-tests" /
-         "config-and-schema";
+         (std::to_string(getpid()) + "-" + zfleet::core::GenerateUuid());
 }
 
 int CountRows(const std::filesystem::path& database_path,
@@ -387,6 +390,31 @@ TEST_CASE("task poll returns idle when no queued task exists") {
   fs::remove_all(test_root);
 }
 
+TEST_CASE("task poll for unregistered agent returns not found error") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::get,
+                                           "/v1/agents/agent-missing/tasks/poll", 11};
+  request.set("X-Request-Id", "poll-missing-agent");
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::not_found);
+  REQUIRE(body.at("error_code").get<std::string>() == "agent_not_registered");
+
+  fs::remove_all(test_root);
+}
+
 TEST_CASE("task create request queues task and records audit") {
   namespace fs = std::filesystem;
 
@@ -426,6 +454,232 @@ TEST_CASE("task create request queues task and records audit") {
   REQUIRE(ReadTaskField(database_path, "task-1", "state") == "queued");
   REQUIRE(ReadAuditField(database_path, "task-create-1", "event_type") ==
           "task.queued");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task create request rejects empty task_id and records failure audit") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post, "/v1/tasks", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-create-empty-id",
+    "occurred_at": "2026-05-17T10:00:00Z",
+    "task": {
+      "protocol_version": "v1",
+      "task_id": "",
+      "agent_id": "agent-1",
+      "task_type": "collect_basic_inventory",
+      "capability_level": "readonly",
+      "created_at": "2026-05-17T10:00:00Z",
+      "expires_at": "2099-05-17T10:05:00Z",
+      "input": {}
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "missing_required_field");
+  REQUIRE(CountRows(database_path, "tasks") == 0);
+  REQUIRE(ReadAuditField(database_path, "task-create-empty-id", "event_type") ==
+          "task.queued");
+  REQUIRE(ReadAuditField(database_path, "task-create-empty-id", "payload_json")
+              .find("\"error_code\":\"missing_required_field\"") !=
+          std::string::npos);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task create request rejects non-readonly capability and records failure audit") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post, "/v1/tasks", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-create-shell",
+    "occurred_at": "2026-05-17T10:00:00Z",
+    "task": {
+      "protocol_version": "v1",
+      "task_id": "task-shell-1",
+      "agent_id": "agent-1",
+      "task_type": "collect_basic_inventory",
+      "capability_level": "shell",
+      "created_at": "2026-05-17T10:00:00Z",
+      "expires_at": "2099-05-17T10:05:00Z",
+      "input": {}
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::forbidden);
+  REQUIRE(body.at("error_code").get<std::string>() == "capability_not_allowed");
+  REQUIRE(CountRows(database_path, "tasks") == 0);
+  REQUIRE(ReadAuditField(database_path, "task-create-shell", "event_type") ==
+          "task.queued");
+  REQUIRE(ReadAuditField(database_path, "task-create-shell", "payload_json")
+              .find("\"error_code\":\"capability_not_allowed\"") !=
+          std::string::npos);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task create request rejects unsupported task type and records failure audit") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post, "/v1/tasks", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-create-unknown-type",
+    "occurred_at": "2026-05-17T10:00:00Z",
+    "task": {
+      "protocol_version": "v1",
+      "task_id": "task-unknown-1",
+      "agent_id": "agent-1",
+      "task_type": "collect_everything",
+      "capability_level": "readonly",
+      "created_at": "2026-05-17T10:00:00Z",
+      "expires_at": "2099-05-17T10:05:00Z",
+      "input": {}
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "unsupported_task_type");
+  REQUIRE(CountRows(database_path, "tasks") == 0);
+  REQUIRE(ReadAuditField(database_path, "task-create-unknown-type", "event_type") ==
+          "task.queued");
+  REQUIRE(ReadAuditField(database_path, "task-create-unknown-type", "payload_json")
+              .find("\"error_code\":\"unsupported_task_type\"") !=
+          std::string::npos);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task create request rejects invalid capability field and records failure audit") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post, "/v1/tasks", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-create-invalid-capability",
+    "occurred_at": "2026-05-17T10:00:00Z",
+    "task": {
+      "protocol_version": "v1",
+      "task_id": "task-invalid-capability-1",
+      "agent_id": "agent-1",
+      "task_type": "collect_basic_inventory",
+      "capability_level": "readwrite",
+      "created_at": "2026-05-17T10:00:00Z",
+      "expires_at": "2099-05-17T10:05:00Z",
+      "input": {}
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(CountRows(database_path, "tasks") == 0);
+  REQUIRE(
+      ReadAuditField(database_path, "task-create-invalid-capability", "event_type") ==
+      "task.queued");
+  REQUIRE(
+      ReadAuditField(database_path, "task-create-invalid-capability", "payload_json")
+          .find("\"error_code\":\"invalid_field_type\"") != std::string::npos);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task create request rejects invalid task input and records failure audit") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post, "/v1/tasks", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-create-invalid-input",
+    "occurred_at": "2026-05-17T10:00:00Z",
+    "task": {
+      "protocol_version": "v1",
+      "task_id": "task-invalid-input-1",
+      "agent_id": "agent-1",
+      "task_type": "collect_basic_inventory",
+      "capability_level": "readonly",
+      "created_at": "2026-05-17T10:00:00Z",
+      "expires_at": "2099-05-17T10:05:00Z",
+      "input": []
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(CountRows(database_path, "tasks") == 0);
+  REQUIRE(ReadAuditField(database_path, "task-create-invalid-input", "event_type") ==
+          "task.queued");
+  REQUIRE(ReadAuditField(database_path, "task-create-invalid-input", "payload_json")
+              .find("\"error_code\":\"invalid_field_type\"") !=
+          std::string::npos);
 
   fs::remove_all(test_root);
 }
@@ -537,6 +791,221 @@ TEST_CASE("task running request updates state and records audit") {
   fs::remove_all(test_root);
 }
 
+TEST_CASE("task running request returns not found for missing task") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-missing/running", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-running-missing",
+    "task_id": "task-missing",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-17T10:00:20Z"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::not_found);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_not_found");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task running request rejects agent mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-17T10:00:01Z",
+      .expires_at = "2099-05-17T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/running", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-running-agent-mismatch",
+    "task_id": "task-1",
+    "agent_id": "agent-2",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-17T10:00:20Z"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_agent_mismatch");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task running request rejects path and body task_id mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/running", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-running-id-mismatch",
+    "task_id": "task-2",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-17T10:00:20Z"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task running request rejects task type mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-17T10:00:01Z",
+      .expires_at = "2099-05-17T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/running", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-running-type-mismatch",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "unknown_task_type_for_test",
+    "occurred_at": "2026-05-17T10:00:20Z"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task running request rejects already finished task") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-17T10:00:01Z",
+      .expires_at = "2099-05-17T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResultRequest{
+          .protocol_version = "v1",
+          .request_id = "seed-terminal",
+          .task_id = "task-1",
+          .agent_id = "agent-1",
+          .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+          .occurred_at = "2026-05-17T10:00:30Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::TaskResultData{
+              zfleet::protocol::CollectBasicInventoryResult{
+                  .hostname = "devbox-01",
+                  .os = "linux",
+                  .arch = "x86_64",
+                  .agent_version = "0.1.0",
+              }},
+          .error = std::nullopt,
+      },
+      std::optional<std::string>{R"json({"hostname":"devbox-01","os":"linux","arch":"x86_64","agent_version":"0.1.0"})json"},
+      std::nullopt);
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/running", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-running-finished",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-17T10:00:40Z"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::conflict);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_already_finished");
+
+  fs::remove_all(test_root);
+}
+
 TEST_CASE("task result persists terminal state and result row") {
   namespace fs = std::filesystem;
 
@@ -599,6 +1068,497 @@ TEST_CASE("task result persists terminal state and result row") {
   REQUIRE(CountRows(database_path, "task_results") == 1);
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
           "task.succeeded");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects succeeded status without result") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-missing-result",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(CountRows(database_path, "task_results") == 0);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects path and body task_id mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-id-mismatch",
+    "task_id": "task-2",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects task type mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-type-mismatch",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "unknown_task_type_for_test",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects failed status without error") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-missing-error",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "failed"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(CountRows(database_path, "task_results") == 0);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects expired status without error") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-expired-missing-error",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "expired"
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(CountRows(database_path, "task_results") == 0);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects succeeded status with error") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-succeeded-with-error",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    },
+    "error": {
+      "error_code": "task_execution_failed",
+      "message": "should not be present",
+      "retryable": false
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(CountRows(database_path, "task_results") == 0);
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result returns not found for missing task") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-missing/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-missing",
+    "task_id": "task-missing",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::not_found);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_not_found");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects agent mismatch") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-agent-mismatch",
+    "task_id": "task-1",
+    "agent_id": "agent-2",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::bad_request);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_agent_mismatch");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects already finished task") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2099-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResultRequest{
+          .protocol_version = "v1",
+          .request_id = "seed-terminal",
+          .task_id = "task-1",
+          .agent_id = "agent-1",
+          .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+          .occurred_at = "2026-05-16T10:00:30Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::TaskResultData{
+              zfleet::protocol::CollectBasicInventoryResult{
+                  .hostname = "devbox-01",
+                  .os = "linux",
+                  .arch = "x86_64",
+                  .agent_version = "0.1.0",
+              }},
+          .error = std::nullopt,
+      },
+      std::optional<std::string>{R"json({"hostname":"devbox-01","os":"linux","arch":"x86_64","agent_version":"0.1.0"})json"},
+      std::nullopt);
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-finished",
+    "task_id": "task-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:40Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::conflict);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_already_finished");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("task result rejects non-expired terminal update for expired task") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-expired-1",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-16T10:00:01Z",
+      .expires_at = "2000-05-16T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+  const zfleet::server::HttpHandler handler(&database);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           "/v1/tasks/task-expired-1/result", 11};
+  request.body() = R"json({
+    "protocol_version": "v1",
+    "request_id": "task-result-expired",
+    "task_id": "task-expired-1",
+    "agent_id": "agent-1",
+    "task_type": "collect_basic_inventory",
+    "occurred_at": "2026-05-16T10:00:30Z",
+    "status": "succeeded",
+    "result": {
+      "hostname": "devbox-01",
+      "os": "linux",
+      "arch": "x86_64",
+      "agent_version": "0.1.0"
+    }
+  })json";
+  request.prepare_payload();
+
+  const auto response = handler.Handle(request);
+  const auto body = nlohmann::json::parse(response.body());
+
+  REQUIRE(response.result() == http::status::conflict);
+  REQUIRE(body.at("error_code").get<std::string>() == "task_expired");
 
   fs::remove_all(test_root);
 }

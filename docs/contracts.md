@@ -298,6 +298,10 @@ v0.2 任务契约沿用安全文档中的能力分级，初始只开放 `readonl
 
 任何非 `readonly` 任务进入协议前，都必须先补齐威胁模型、策略开关、审计字段和测试。
 
+当前 `v0.2` 的 Server 只接受 `readonly` 能力等级的任务创建请求。
+任何 `low_risk_write`、`high_risk_write` 或 `shell` 任务都必须返回
+`403 capability_not_allowed`，且不得入队。
+
 ### 任务类型
 
 v0.2 先固定一个最小只读任务类型：
@@ -484,6 +488,8 @@ Agent 完成或失败后，通过结果接口回传统一结构。
 - `result` 和 `error` 不能同时为空；至少一方应与 `status` 对应。
 - `status = succeeded` 时必须省略 `error`。
 - `status = failed` 或 `expired` 时必须提供 `error`。
+- 当前实现已对上述形状约束做服务端校验，并返回
+  `400 task_result_invalid`。
 
 成功示例：
 

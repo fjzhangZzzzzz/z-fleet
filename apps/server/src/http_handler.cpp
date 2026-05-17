@@ -130,6 +130,116 @@ std::string SerializeTaskResultData(
   return std::visit([](const auto& value) { return json(value).dump(); }, result);
 }
 
+struct TaskCreateValidationError {
+  http::status status_code;
+  zfleet::protocol::ErrorCode error_code;
+  std::string_view message;
+};
+
+std::optional<std::string> ExtractTaskCreateAgentId(const json& body) {
+  if (!body.is_object() || !body.contains("task") || !body.at("task").is_object()) {
+    return std::nullopt;
+  }
+  const auto& task = body.at("task");
+  if (!task.contains("agent_id") || !task.at("agent_id").is_string()) {
+    return std::nullopt;
+  }
+  return task.at("agent_id").get<std::string>();
+}
+
+std::string ExtractTaskCreateRequestId(const json& body) {
+  if (body.is_object() && body.contains("request_id") &&
+      body.at("request_id").is_string()) {
+    return body.at("request_id").get<std::string>();
+  }
+  return zfleet::core::GenerateUuid();
+}
+
+std::optional<TaskCreateValidationError> ValidateTaskCreateRequest(
+    const zfleet::protocol::TaskCreateRequest& request) {
+  if (request.request_id.empty()) {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::missing_required_field,
+        .message = "request_id must not be empty",
+    };
+  }
+  if (request.task.task_id.empty()) {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::missing_required_field,
+        .message = "task_id must not be empty",
+    };
+  }
+  if (request.task.agent_id.empty()) {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::missing_required_field,
+        .message = "agent_id must not be empty",
+    };
+  }
+  if (request.task.capability_level !=
+      zfleet::protocol::CapabilityLevel::readonly) {
+    return TaskCreateValidationError{
+        .status_code = http::status::forbidden,
+        .error_code = zfleet::protocol::ErrorCode::capability_not_allowed,
+        .message = "capability level is not allowed by current policy",
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<TaskCreateValidationError> ClassifyTaskCreateArgumentError(
+    std::string_view message) {
+  if (message.starts_with("unknown task_type:")) {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::unsupported_task_type,
+        .message = "unsupported task type",
+    };
+  }
+  if (message.starts_with("unknown capability_level:")) {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::invalid_field_type,
+        .message = "invalid capability level",
+    };
+  }
+  if (message == "collect_basic_inventory input must be object") {
+    return TaskCreateValidationError{
+        .status_code = http::status::bad_request,
+        .error_code = zfleet::protocol::ErrorCode::invalid_field_type,
+        .message = "invalid task input",
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string_view> ValidateTaskResultShape(
+    const zfleet::protocol::TaskResultRequest& request) {
+  switch (request.status) {
+    case zfleet::protocol::TaskExecutionStatus::succeeded:
+      if (!request.result.has_value()) {
+        return "succeeded result must include result";
+      }
+      if (request.error.has_value()) {
+        return "succeeded result must not include error";
+      }
+      return std::nullopt;
+    case zfleet::protocol::TaskExecutionStatus::failed:
+    case zfleet::protocol::TaskExecutionStatus::expired:
+      if (!request.error.has_value()) {
+        return "failed or expired result must include error";
+      }
+      if (!request.result.has_value() && !request.error.has_value()) {
+        return "result and error must not both be empty";
+      }
+      return std::nullopt;
+  }
+
+  return std::nullopt;
+}
+
 } // namespace
 
 HttpHandler::HttpHandler(ServerDatabase* database) : database_(database) {}
@@ -189,9 +299,10 @@ http::response<http::string_body> HttpHandler::Handle(
 
 http::response<http::string_body> HttpHandler::HandleTaskCreate(
     const http::request<http::string_body>& request) const {
+  json body_json;
   try {
-    const auto parsed =
-        ParseBody<zfleet::protocol::TaskCreateRequest>(request.body());
+    body_json = json::parse(request.body());
+    const auto parsed = body_json.get<zfleet::protocol::TaskCreateRequest>();
     if (parsed.protocol_version != zfleet::protocol::protocol_version() ||
         parsed.task.protocol_version != zfleet::protocol::protocol_version()) {
       return MakeErrorResponse(http::status::bad_request,
@@ -199,6 +310,14 @@ http::response<http::string_body> HttpHandler::HandleTaskCreate(
                                zfleet::protocol::ErrorCode::
                                    unsupported_protocol_version,
                                "unsupported protocol version", false,
+                               parsed.request_id, parsed.task.agent_id);
+    }
+    if (const auto validation_error = ValidateTaskCreateRequest(parsed);
+        validation_error.has_value()) {
+      return MakeErrorResponse(validation_error->status_code,
+                               zfleet::protocol::AuditEventType::task_queued,
+                               validation_error->error_code,
+                               validation_error->message, false,
                                parsed.request_id, parsed.task.agent_id);
     }
 
@@ -249,6 +368,18 @@ http::response<http::string_body> HttpHandler::HandleTaskCreate(
                              zfleet::protocol::ErrorCode::invalid_field_type,
                              "invalid field type", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
+  } catch (const std::invalid_argument& ex) {
+    if (const auto validation_error =
+            ClassifyTaskCreateArgumentError(ex.what());
+        validation_error.has_value()) {
+      return MakeErrorResponse(validation_error->status_code,
+                               zfleet::protocol::AuditEventType::task_queued,
+                               validation_error->error_code,
+                               validation_error->message, false,
+                               ExtractTaskCreateRequestId(body_json),
+                               ExtractTaskCreateAgentId(body_json));
+    }
+    throw;
   } catch (const std::exception& ex) {
     ZFLOG_ERROR(
         zfleet::core::log::Component("server").With({"route", "tasks.create"}),
@@ -423,6 +554,12 @@ http::response<http::string_body> HttpHandler::HandleTaskRunning(
                              "missing required field", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::type_error&) {
+    return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
+                             zfleet::protocol::ErrorCode::invalid_field_type,
+                             "invalid field type", false,
+                             zfleet::core::GenerateUuid(), std::nullopt);
+  } catch (const std::invalid_argument&) {
     return MakeErrorResponse(http::status::bad_request,
                              std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_field_type,
@@ -683,6 +820,14 @@ http::response<http::string_body> HttpHandler::HandleTaskResult(
                                "path task_id does not match body task_id",
                                false, parsed.request_id, parsed.agent_id);
     }
+    if (const auto shape_error = ValidateTaskResultShape(parsed);
+        shape_error.has_value()) {
+      return MakeErrorResponse(http::status::bad_request,
+                               std::nullopt,
+                               zfleet::protocol::ErrorCode::task_result_invalid,
+                               *shape_error, false, parsed.request_id,
+                               parsed.agent_id);
+    }
 
     const auto stored_task = database_->FindTaskById(parsed.task_id);
     if (!stored_task.has_value()) {
@@ -774,6 +919,12 @@ http::response<http::string_body> HttpHandler::HandleTaskResult(
                              "missing required field", false,
                              zfleet::core::GenerateUuid(), std::nullopt);
   } catch (const json::type_error&) {
+    return MakeErrorResponse(http::status::bad_request,
+                             std::nullopt,
+                             zfleet::protocol::ErrorCode::invalid_field_type,
+                             "invalid field type", false,
+                             zfleet::core::GenerateUuid(), std::nullopt);
+  } catch (const std::invalid_argument&) {
     return MakeErrorResponse(http::status::bad_request,
                              std::nullopt,
                              zfleet::protocol::ErrorCode::invalid_field_type,
