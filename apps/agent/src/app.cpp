@@ -13,13 +13,13 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
-#include <nlohmann/json.hpp>
 
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 namespace zfleet::agent {
@@ -78,6 +78,45 @@ std::string JoinTarget(const std::string& base_target, std::string_view suffix) 
   return base_target + std::string(suffix);
 }
 
+std::runtime_error MakeServerError(
+    int http_status,
+    const zfleet::protocol::ErrorResponse& error) {
+  return std::runtime_error(
+      "server returned " + std::to_string(http_status) + " " +
+      std::string(zfleet::protocol::ToString(error.error_code)) + ": " +
+      error.message);
+}
+
+zfleet::protocol::ErrorResponse ParseErrorOrThrow(std::string_view body) {
+  const auto parsed = zfleet::protocol::ParseErrorResponse(body);
+  if (const auto* error =
+          std::get_if<zfleet::protocol::ErrorResponse>(&parsed)) {
+    return *error;
+  }
+  throw std::runtime_error("server returned unexpected response");
+}
+
+template <typename Request>
+std::string SerializeRequest(const Request& payload) {
+  if constexpr (std::is_same_v<Request, zfleet::protocol::RegistrationRequest>) {
+    return zfleet::protocol::SerializeRegistrationRequest(payload);
+  } else if constexpr (std::is_same_v<Request,
+                                      zfleet::protocol::HeartbeatRequest>) {
+    return zfleet::protocol::SerializeHeartbeatRequest(payload);
+  } else if constexpr (std::is_same_v<Request,
+                                      zfleet::protocol::AssetSnapshotRequest>) {
+    return zfleet::protocol::SerializeAssetSnapshotRequest(payload);
+  } else if constexpr (std::is_same_v<Request,
+                                      zfleet::protocol::TaskRunningRequest>) {
+    return zfleet::protocol::SerializeTaskRunningRequest(payload);
+  } else if constexpr (std::is_same_v<Request,
+                                      zfleet::protocol::TaskResultRequest>) {
+    return zfleet::protocol::SerializeTaskResultRequest(payload);
+  } else {
+    static_assert(sizeof(Request) == 0, "unsupported request type");
+  }
+}
+
 template <typename Request>
 zfleet::protocol::StatusResponse PostJson(const ServerEndpoint& endpoint,
                                           std::string_view target,
@@ -92,7 +131,7 @@ zfleet::protocol::StatusResponse PostJson(const ServerEndpoint& endpoint,
                                            std::string(target), 11};
   request.set(http::field::host, endpoint.host);
   request.set(http::field::content_type, "application/json");
-  request.body() = nlohmann::json(payload).dump();
+  request.body() = SerializeRequest(payload);
   request.prepare_payload();
   http::write(socket, request);
 
@@ -100,20 +139,16 @@ zfleet::protocol::StatusResponse PostJson(const ServerEndpoint& endpoint,
   http::response<http::string_body> response;
   http::read(socket, buffer, response);
 
-  const auto response_json = nlohmann::json::parse(response.body());
+  const auto parsed_status = zfleet::protocol::ParseStatusResponse(response.body());
   if (response.result() == http::status::ok) {
-    return response_json.get<zfleet::protocol::StatusResponse>();
+    if (const auto* status =
+            std::get_if<zfleet::protocol::StatusResponse>(&parsed_status)) {
+      return *status;
+    }
+    throw std::runtime_error("server returned unexpected response");
   }
 
-  if (response_json.contains("error_code")) {
-    const auto error = response_json.get<zfleet::protocol::ErrorResponse>();
-    throw std::runtime_error(
-        "server returned " + std::to_string(response.result_int()) + " " +
-        std::string(zfleet::protocol::ToString(error.error_code)) + ": " +
-        error.message);
-  }
-
-  throw std::runtime_error("server returned unexpected response");
+  throw MakeServerError(response.result_int(), ParseErrorOrThrow(response.body()));
 }
 
 template <typename Response>
@@ -136,20 +171,16 @@ Response GetJson(const ServerEndpoint& endpoint,
   http::response<http::string_body> response;
   http::read(socket, buffer, response);
 
-  const auto response_json = nlohmann::json::parse(response.body());
+  const auto parsed_response =
+      zfleet::protocol::ParseTaskPollResponse(response.body());
   if (response.result() == http::status::ok) {
-    return response_json.get<Response>();
+    if (const auto* parsed = std::get_if<Response>(&parsed_response)) {
+      return *parsed;
+    }
+    throw std::runtime_error("server returned unexpected response");
   }
 
-  if (response_json.contains("error_code")) {
-    const auto error = response_json.get<zfleet::protocol::ErrorResponse>();
-    throw std::runtime_error(
-        "server returned " + std::to_string(response.result_int()) + " " +
-        std::string(zfleet::protocol::ToString(error.error_code)) + ": " +
-        error.message);
-  }
-
-  throw std::runtime_error("server returned unexpected response");
+  throw MakeServerError(response.result_int(), ParseErrorOrThrow(response.body()));
 }
 
 zfleet::protocol::RegistrationRequest MakeRegistrationRequest(

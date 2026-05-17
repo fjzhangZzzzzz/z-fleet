@@ -1,9 +1,42 @@
 #include "zfleet/protocol/json_codec.h"
 
+#include <nlohmann/json.hpp>
+
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace zfleet::protocol {
+
+void to_json(nlohmann::json& j, const RegistrationRequest& request);
+void from_json(const nlohmann::json& j, RegistrationRequest& request);
+void to_json(nlohmann::json& j, const HeartbeatRequest& request);
+void from_json(const nlohmann::json& j, HeartbeatRequest& request);
+void to_json(nlohmann::json& j, const AssetSnapshotRequest& request);
+void from_json(const nlohmann::json& j, AssetSnapshotRequest& request);
+void to_json(nlohmann::json& j, const StatusResponse& response);
+void from_json(const nlohmann::json& j, StatusResponse& response);
+void to_json(nlohmann::json& j, const ErrorResponse& response);
+void from_json(const nlohmann::json& j, ErrorResponse& response);
+void to_json(nlohmann::json& j, const AuditEvent& event);
+void from_json(const nlohmann::json& j, AuditEvent& event);
+void to_json(nlohmann::json& j, const CollectBasicInventoryInput& input);
+void from_json(const nlohmann::json& j, CollectBasicInventoryInput& input);
+void to_json(nlohmann::json& j, const CollectBasicInventoryResult& result);
+void from_json(const nlohmann::json& j, CollectBasicInventoryResult& result);
+void to_json(nlohmann::json& j, const Task& task);
+void from_json(const nlohmann::json& j, Task& task);
+void to_json(nlohmann::json& j, const TaskCreateRequest& request);
+void from_json(const nlohmann::json& j, TaskCreateRequest& request);
+void to_json(nlohmann::json& j, const TaskPollResponse& response);
+void from_json(const nlohmann::json& j, TaskPollResponse& response);
+void to_json(nlohmann::json& j, const TaskError& error);
+void from_json(const nlohmann::json& j, TaskError& error);
+void to_json(nlohmann::json& j, const TaskRunningRequest& request);
+void from_json(const nlohmann::json& j, TaskRunningRequest& request);
+void to_json(nlohmann::json& j, const TaskResultRequest& request);
+void from_json(const nlohmann::json& j, TaskResultRequest& request);
+
 namespace {
 
 using nlohmann::json;
@@ -40,14 +73,6 @@ AuditEventType parse_audit_event_type(const std::string& type) {
 
   return *parsed;
 }
-
-template <typename... Ts>
-struct overloaded : Ts... {
-  using Ts::operator()...;
-};
-
-template <typename... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
 
 TaskType parse_task_type(const std::string& type) {
   const auto parsed = TaskTypeFromString(type);
@@ -111,9 +136,101 @@ TaskResultData parse_task_result_data(TaskType type, const json& result) {
   throw std::invalid_argument("unknown task_type for result parsing");
 }
 
+JsonCodecError MakeCodecError(const nlohmann::json::parse_error& ex,
+                              JsonCodecContext context = {}) {
+  return JsonCodecError{
+      .code = JsonCodecErrorCode::invalid_json,
+      .message = ex.what(),
+      .context = std::move(context),
+  };
+}
+
+JsonCodecError MakeCodecError(const nlohmann::json::out_of_range& ex,
+                              JsonCodecContext context = {}) {
+  return JsonCodecError{
+      .code = JsonCodecErrorCode::missing_required_field,
+      .message = ex.what(),
+      .context = std::move(context),
+  };
+}
+
+JsonCodecError MakeCodecError(const nlohmann::json::type_error& ex,
+                              JsonCodecContext context = {}) {
+  return JsonCodecError{
+      .code = JsonCodecErrorCode::invalid_field_type,
+      .message = ex.what(),
+      .context = std::move(context),
+  };
+}
+
+JsonCodecError MakeCodecError(const std::invalid_argument& ex,
+                              JsonCodecContext context = {}) {
+  return JsonCodecError{
+      .code = JsonCodecErrorCode::invalid_field_value,
+      .message = ex.what(),
+      .context = std::move(context),
+  };
+}
+
+std::optional<std::string> ExtractStringField(const json& j,
+                                              std::string_view key) {
+  if (!j.is_object() || !j.contains(key) || !j.at(key).is_string()) {
+    return std::nullopt;
+  }
+  return j.at(key).get<std::string>();
+}
+
+JsonCodecContext ExtractRequestContext(const json& j) {
+  return JsonCodecContext{
+      .request_id = ExtractStringField(j, "request_id"),
+      .agent_id = ExtractStringField(j, "agent_id"),
+  };
+}
+
+JsonCodecContext ExtractTaskCreateContext(const json& j) {
+  JsonCodecContext context{.request_id = ExtractStringField(j, "request_id"),
+                           .agent_id = std::nullopt};
+  if (!j.is_object() || !j.contains("task") || !j.at("task").is_object()) {
+    return context;
+  }
+  context.agent_id = ExtractStringField(j.at("task"), "agent_id");
+  return context;
+}
+
+template <typename T, typename ParseFn, typename ContextFn>
+JsonDecodeResult<T> ParseJson(std::string_view json_text,
+                              ParseFn&& parse_fn,
+                              ContextFn&& context_fn) {
+  try {
+    const auto parsed_json = json::parse(json_text);
+    const auto context = context_fn(parsed_json);
+    try {
+      return parse_fn(parsed_json);
+    } catch (const json::out_of_range& ex) {
+      return MakeCodecError(ex, context);
+    } catch (const json::type_error& ex) {
+      return MakeCodecError(ex, context);
+    } catch (const std::invalid_argument& ex) {
+      return MakeCodecError(ex, context);
+    }
+  } catch (const json::parse_error& ex) {
+    return MakeCodecError(ex);
+  }
+}
+
+template <typename T, typename ParseFn>
+JsonDecodeResult<T> ParseJson(std::string_view json_text, ParseFn&& parse_fn) {
+  return ParseJson<T>(json_text, std::forward<ParseFn>(parse_fn),
+                      [](const json&) { return JsonCodecContext{}; });
+}
+
+std::string DumpJson(const json& value) {
+  return value.dump();
+}
+
 } // namespace
 
-void to_json(nlohmann::json& j, const RegistrationRequest& request) {
+void to_json(json& j, const RegistrationRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -126,7 +243,7 @@ void to_json(nlohmann::json& j, const RegistrationRequest& request) {
   };
 }
 
-void from_json(const nlohmann::json& j, RegistrationRequest& request) {
+void from_json(const json& j, RegistrationRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.agent_id = required<std::string>(j, "agent_id");
@@ -137,7 +254,7 @@ void from_json(const nlohmann::json& j, RegistrationRequest& request) {
   request.arch = required<std::string>(j, "arch");
 }
 
-void to_json(nlohmann::json& j, const HeartbeatRequest& request) {
+void to_json(json& j, const HeartbeatRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -147,7 +264,7 @@ void to_json(nlohmann::json& j, const HeartbeatRequest& request) {
   };
 }
 
-void from_json(const nlohmann::json& j, HeartbeatRequest& request) {
+void from_json(const json& j, HeartbeatRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.agent_id = required<std::string>(j, "agent_id");
@@ -155,7 +272,7 @@ void from_json(const nlohmann::json& j, HeartbeatRequest& request) {
   request.agent_version = required<std::string>(j, "agent_version");
 }
 
-void to_json(nlohmann::json& j, const AssetSnapshotRequest& request) {
+void to_json(json& j, const AssetSnapshotRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -172,7 +289,7 @@ void to_json(nlohmann::json& j, const AssetSnapshotRequest& request) {
   }
 }
 
-void from_json(const nlohmann::json& j, AssetSnapshotRequest& request) {
+void from_json(const json& j, AssetSnapshotRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.agent_id = required<std::string>(j, "agent_id");
@@ -184,7 +301,7 @@ void from_json(const nlohmann::json& j, AssetSnapshotRequest& request) {
   request.agent_version = required<std::string>(j, "agent_version");
 }
 
-void to_json(nlohmann::json& j, const StatusResponse& response) {
+void to_json(json& j, const StatusResponse& response) {
   j = {
       {"protocol_version", response.protocol_version},
       {"request_id", response.request_id},
@@ -195,7 +312,7 @@ void to_json(nlohmann::json& j, const StatusResponse& response) {
   };
 }
 
-void from_json(const nlohmann::json& j, StatusResponse& response) {
+void from_json(const json& j, StatusResponse& response) {
   response.protocol_version = required<std::string>(j, "protocol_version");
   response.request_id = required<std::string>(j, "request_id");
   response.agent_id = required<std::string>(j, "agent_id");
@@ -204,7 +321,7 @@ void from_json(const nlohmann::json& j, StatusResponse& response) {
   response.server_time = required<std::string>(j, "server_time");
 }
 
-void to_json(nlohmann::json& j, const ErrorResponse& response) {
+void to_json(json& j, const ErrorResponse& response) {
   j = {
       {"protocol_version", response.protocol_version},
       {"request_id", response.request_id},
@@ -219,7 +336,7 @@ void to_json(nlohmann::json& j, const ErrorResponse& response) {
   }
 }
 
-void from_json(const nlohmann::json& j, ErrorResponse& response) {
+void from_json(const json& j, ErrorResponse& response) {
   response.protocol_version = required<std::string>(j, "protocol_version");
   response.request_id = required<std::string>(j, "request_id");
   assign_optional(j, "agent_id", response.agent_id);
@@ -230,7 +347,7 @@ void from_json(const nlohmann::json& j, ErrorResponse& response) {
   response.retryable = required<bool>(j, "retryable");
 }
 
-void to_json(nlohmann::json& j, const AuditEvent& event) {
+void to_json(json& j, const AuditEvent& event) {
   j = {
       {"audit_id", event.audit_id},
       {"occurred_at", event.occurred_at},
@@ -245,7 +362,7 @@ void to_json(nlohmann::json& j, const AuditEvent& event) {
   }
 }
 
-void from_json(const nlohmann::json& j, AuditEvent& event) {
+void from_json(const json& j, AuditEvent& event) {
   event.audit_id = required<std::string>(j, "audit_id");
   event.occurred_at = required<std::string>(j, "occurred_at");
   assign_optional(j, "agent_id", event.agent_id);
@@ -256,18 +373,18 @@ void from_json(const nlohmann::json& j, AuditEvent& event) {
   event.payload_json = required<std::string>(j, "payload_json");
 }
 
-void to_json(nlohmann::json& j, const CollectBasicInventoryInput&) {
+void to_json(json& j, const CollectBasicInventoryInput&) {
   j = json::object();
 }
 
-void from_json(const nlohmann::json& j, CollectBasicInventoryInput& input) {
+void from_json(const json& j, CollectBasicInventoryInput& input) {
   if (!j.is_object()) {
     throw std::invalid_argument("collect_basic_inventory input must be object");
   }
   input = CollectBasicInventoryInput{};
 }
 
-void to_json(nlohmann::json& j, const CollectBasicInventoryResult& result) {
+void to_json(json& j, const CollectBasicInventoryResult& result) {
   j = {
       {"hostname", result.hostname},
       {"os", result.os},
@@ -276,14 +393,14 @@ void to_json(nlohmann::json& j, const CollectBasicInventoryResult& result) {
   };
 }
 
-void from_json(const nlohmann::json& j, CollectBasicInventoryResult& result) {
+void from_json(const json& j, CollectBasicInventoryResult& result) {
   result.hostname = required<std::string>(j, "hostname");
   result.os = required<std::string>(j, "os");
   result.arch = required<std::string>(j, "arch");
   result.agent_version = required<std::string>(j, "agent_version");
 }
 
-void to_json(nlohmann::json& j, const Task& task) {
+void to_json(json& j, const Task& task) {
   j = {
       {"protocol_version", task.protocol_version},
       {"task_id", task.task_id},
@@ -296,7 +413,7 @@ void to_json(nlohmann::json& j, const Task& task) {
   };
 }
 
-void from_json(const nlohmann::json& j, Task& task) {
+void from_json(const json& j, Task& task) {
   task.protocol_version = required<std::string>(j, "protocol_version");
   task.task_id = required<std::string>(j, "task_id");
   task.agent_id = required<std::string>(j, "agent_id");
@@ -308,7 +425,7 @@ void from_json(const nlohmann::json& j, Task& task) {
   task.input = parse_task_input(task.task_type, required<json>(j, "input"));
 }
 
-void to_json(nlohmann::json& j, const TaskCreateRequest& request) {
+void to_json(json& j, const TaskCreateRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -317,14 +434,14 @@ void to_json(nlohmann::json& j, const TaskCreateRequest& request) {
   };
 }
 
-void from_json(const nlohmann::json& j, TaskCreateRequest& request) {
+void from_json(const json& j, TaskCreateRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.occurred_at = required<std::string>(j, "occurred_at");
   request.task = required<Task>(j, "task");
 }
 
-void to_json(nlohmann::json& j, const TaskPollResponse& response) {
+void to_json(json& j, const TaskPollResponse& response) {
   j = {
       {"protocol_version", response.protocol_version},
       {"request_id", response.request_id},
@@ -339,7 +456,7 @@ void to_json(nlohmann::json& j, const TaskPollResponse& response) {
   }
 }
 
-void from_json(const nlohmann::json& j, TaskPollResponse& response) {
+void from_json(const json& j, TaskPollResponse& response) {
   response.protocol_version = required<std::string>(j, "protocol_version");
   response.request_id = required<std::string>(j, "request_id");
   response.agent_id = required<std::string>(j, "agent_id");
@@ -354,7 +471,7 @@ void from_json(const nlohmann::json& j, TaskPollResponse& response) {
   response.server_time = required<std::string>(j, "server_time");
 }
 
-void to_json(nlohmann::json& j, const TaskError& error) {
+void to_json(json& j, const TaskError& error) {
   j = {
       {"error_code", ToString(error.error_code)},
       {"message", error.message},
@@ -362,13 +479,13 @@ void to_json(nlohmann::json& j, const TaskError& error) {
   };
 }
 
-void from_json(const nlohmann::json& j, TaskError& error) {
+void from_json(const json& j, TaskError& error) {
   error.error_code = parse_error_code(required<std::string>(j, "error_code"));
   error.message = required<std::string>(j, "message");
   error.retryable = required<bool>(j, "retryable");
 }
 
-void to_json(nlohmann::json& j, const TaskRunningRequest& request) {
+void to_json(json& j, const TaskRunningRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -379,7 +496,7 @@ void to_json(nlohmann::json& j, const TaskRunningRequest& request) {
   };
 }
 
-void from_json(const nlohmann::json& j, TaskRunningRequest& request) {
+void from_json(const json& j, TaskRunningRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.task_id = required<std::string>(j, "task_id");
@@ -388,7 +505,7 @@ void from_json(const nlohmann::json& j, TaskRunningRequest& request) {
   request.occurred_at = required<std::string>(j, "occurred_at");
 }
 
-void to_json(nlohmann::json& j, const TaskResultRequest& request) {
+void to_json(json& j, const TaskResultRequest& request) {
   j = {
       {"protocol_version", request.protocol_version},
       {"request_id", request.request_id},
@@ -407,7 +524,7 @@ void to_json(nlohmann::json& j, const TaskResultRequest& request) {
   }
 }
 
-void from_json(const nlohmann::json& j, TaskResultRequest& request) {
+void from_json(const json& j, TaskResultRequest& request) {
   request.protocol_version = required<std::string>(j, "protocol_version");
   request.request_id = required<std::string>(j, "request_id");
   request.task_id = required<std::string>(j, "task_id");
@@ -426,6 +543,191 @@ void from_json(const nlohmann::json& j, TaskResultRequest& request) {
   } else {
     request.error.reset();
   }
+}
+
+std::string SerializeRegistrationRequest(const RegistrationRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<RegistrationRequest> ParseRegistrationRequest(
+    std::string_view json_text) {
+  return ParseJson<RegistrationRequest>(
+      json_text, [](const json& j) { return j.get<RegistrationRequest>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeHeartbeatRequest(const HeartbeatRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<HeartbeatRequest> ParseHeartbeatRequest(
+    std::string_view json_text) {
+  return ParseJson<HeartbeatRequest>(
+      json_text, [](const json& j) { return j.get<HeartbeatRequest>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeAssetSnapshotRequest(
+    const AssetSnapshotRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<AssetSnapshotRequest> ParseAssetSnapshotRequest(
+    std::string_view json_text) {
+  return ParseJson<AssetSnapshotRequest>(
+      json_text, [](const json& j) { return j.get<AssetSnapshotRequest>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeStatusResponse(const StatusResponse& response) {
+  return DumpJson(json(response));
+}
+
+JsonDecodeResult<StatusResponse> ParseStatusResponse(std::string_view json_text) {
+  return ParseJson<StatusResponse>(
+      json_text, [](const json& j) { return j.get<StatusResponse>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeErrorResponse(const ErrorResponse& response) {
+  return DumpJson(json(response));
+}
+
+JsonDecodeResult<ErrorResponse> ParseErrorResponse(std::string_view json_text) {
+  return ParseJson<ErrorResponse>(
+      json_text, [](const json& j) { return j.get<ErrorResponse>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeAuditEvent(const AuditEvent& event) {
+  return DumpJson(json(event));
+}
+
+JsonDecodeResult<AuditEvent> ParseAuditEvent(std::string_view json_text) {
+  return ParseJson<AuditEvent>(
+      json_text, [](const json& j) { return j.get<AuditEvent>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeCollectBasicInventoryInput(
+    const CollectBasicInventoryInput& input) {
+  return DumpJson(json(input));
+}
+
+JsonDecodeResult<CollectBasicInventoryInput> ParseCollectBasicInventoryInput(
+    std::string_view json_text) {
+  return ParseJson<CollectBasicInventoryInput>(
+      json_text,
+      [](const json& j) { return j.get<CollectBasicInventoryInput>(); });
+}
+
+std::string SerializeCollectBasicInventoryResult(
+    const CollectBasicInventoryResult& result) {
+  return DumpJson(json(result));
+}
+
+JsonDecodeResult<CollectBasicInventoryResult> ParseCollectBasicInventoryResult(
+    std::string_view json_text) {
+  return ParseJson<CollectBasicInventoryResult>(
+      json_text,
+      [](const json& j) { return j.get<CollectBasicInventoryResult>(); });
+}
+
+std::string SerializeTask(const Task& task) {
+  return DumpJson(json(task));
+}
+
+JsonDecodeResult<Task> ParseTask(std::string_view json_text) {
+  return ParseJson<Task>(
+      json_text, [](const json& j) { return j.get<Task>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeTaskCreateRequest(const TaskCreateRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<TaskCreateRequest> ParseTaskCreateRequest(
+    std::string_view json_text) {
+  return ParseJson<TaskCreateRequest>(
+      json_text, [](const json& j) { return j.get<TaskCreateRequest>(); },
+      ExtractTaskCreateContext);
+}
+
+std::string SerializeTaskPollResponse(const TaskPollResponse& response) {
+  return DumpJson(json(response));
+}
+
+JsonDecodeResult<TaskPollResponse> ParseTaskPollResponse(
+    std::string_view json_text) {
+  return ParseJson<TaskPollResponse>(
+      json_text, [](const json& j) { return j.get<TaskPollResponse>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeTaskError(const TaskError& error) {
+  return DumpJson(json(error));
+}
+
+JsonDecodeResult<TaskError> ParseTaskError(std::string_view json_text) {
+  return ParseJson<TaskError>(json_text,
+                              [](const json& j) { return j.get<TaskError>(); });
+}
+
+std::string SerializeTaskRunningRequest(const TaskRunningRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<TaskRunningRequest> ParseTaskRunningRequest(
+    std::string_view json_text) {
+  return ParseJson<TaskRunningRequest>(
+      json_text, [](const json& j) { return j.get<TaskRunningRequest>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeTaskResultRequest(const TaskResultRequest& request) {
+  return DumpJson(json(request));
+}
+
+JsonDecodeResult<TaskResultRequest> ParseTaskResultRequest(
+    std::string_view json_text) {
+  return ParseJson<TaskResultRequest>(
+      json_text, [](const json& j) { return j.get<TaskResultRequest>(); },
+      ExtractRequestContext);
+}
+
+std::string SerializeTaskInput(const TaskInput& input) {
+  return DumpJson(serialize_task_input(input));
+}
+
+JsonDecodeResult<TaskInput> ParseTaskInput(TaskType type,
+                                           std::string_view json_text) {
+  return ParseJson<TaskInput>(
+      json_text, [type](const json& j) { return parse_task_input(type, j); });
+}
+
+std::string SerializeTaskResultData(const TaskResultData& result) {
+  return DumpJson(serialize_task_result_data(result));
+}
+
+JsonDecodeResult<TaskResultData> ParseTaskResultData(TaskType type,
+                                                     std::string_view json_text) {
+  return ParseJson<TaskResultData>(
+      json_text,
+      [type](const json& j) { return parse_task_result_data(type, j); });
+}
+
+std::string SerializeAuditPayload(
+    std::initializer_list<AuditPayloadField> fields) {
+  json payload = json::object();
+  for (const auto& field : fields) {
+    std::visit(
+        [&](const auto& value) {
+          payload[std::string(field.key)] = value;
+        },
+        field.value);
+  }
+  return DumpJson(payload);
 }
 
 } // namespace zfleet::protocol

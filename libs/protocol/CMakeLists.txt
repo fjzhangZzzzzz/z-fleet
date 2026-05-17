@@ -13,7 +13,7 @@ target_include_directories(zfleet_protocol
 )
 
 target_link_libraries(zfleet_protocol
-  PUBLIC
+  PRIVATE
     nlohmann_json::nlohmann_json
 )
 

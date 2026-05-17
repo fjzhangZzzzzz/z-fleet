@@ -3,11 +3,11 @@
 #include "http_handler.h"
 
 #include "zfleet/core/uuid.h"
+#include "zfleet/protocol/json_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/beast/http.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -17,6 +17,27 @@
 namespace {
 
 namespace http = boost::beast::http;
+
+zfleet::protocol::StatusResponse ParseStatusResponse(
+    const http::response<http::string_body>& response) {
+  const auto parsed = zfleet::protocol::ParseStatusResponse(response.body());
+  REQUIRE(std::holds_alternative<zfleet::protocol::StatusResponse>(parsed));
+  return std::get<zfleet::protocol::StatusResponse>(parsed);
+}
+
+zfleet::protocol::ErrorResponse ParseErrorResponse(
+    const http::response<http::string_body>& response) {
+  const auto parsed = zfleet::protocol::ParseErrorResponse(response.body());
+  REQUIRE(std::holds_alternative<zfleet::protocol::ErrorResponse>(parsed));
+  return std::get<zfleet::protocol::ErrorResponse>(parsed);
+}
+
+zfleet::protocol::TaskPollResponse ParseTaskPollResponse(
+    const http::response<http::string_body>& response) {
+  const auto parsed = zfleet::protocol::ParseTaskPollResponse(response.body());
+  REQUIRE(std::holds_alternative<zfleet::protocol::TaskPollResponse>(parsed));
+  return std::get<zfleet::protocol::TaskPollResponse>(parsed);
+}
 
 bool TableExists(const std::filesystem::path& database_path,
                  const std::string& table_name) {
@@ -165,10 +186,10 @@ TEST_CASE("register request is accepted and persists agent") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseStatusResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "accepted");
+  REQUIRE(body.status == "accepted");
   REQUIRE(database.AgentExists("agent-1"));
   REQUIRE(CountRows(database_path, "audit_events") == 1);
   REQUIRE(ReadAuditField(database_path, "req-register", "event_type") ==
@@ -197,10 +218,10 @@ TEST_CASE("invalid json returns structured invalid_json error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "invalid_json");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_json);
   REQUIRE(CountRows(database_path, "audit_events") == 0);
 
   fs::remove_all(test_root);
@@ -240,10 +261,10 @@ TEST_CASE("heartbeat path and body agent mismatch returns structured error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "agent_id_mismatch");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::agent_id_mismatch);
   REQUIRE(CountRows(database_path, "audit_events") == 1);
   REQUIRE(ReadAuditField(database_path, "req-heartbeat", "event_type") ==
           "agent.heartbeat");
@@ -278,10 +299,10 @@ TEST_CASE("heartbeat for unregistered agent returns not found error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::not_found);
-  REQUIRE(body.at("error_code").get<std::string>() == "agent_not_registered");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::agent_not_registered);
   REQUIRE(CountRows(database_path, "audit_events") == 1);
   REQUIRE(ReadAuditField(database_path, "req-heartbeat", "payload_json")
               .find("\"error_code\":\"agent_not_registered\"") !=
@@ -381,11 +402,11 @@ TEST_CASE("task poll returns idle when no queued task exists") {
   request.set("X-Request-Id", "poll-idle");
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseTaskPollResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "idle");
-  REQUIRE_FALSE(body.contains("task"));
+  REQUIRE(body.status == zfleet::protocol::TaskPollStatus::idle);
+  REQUIRE_FALSE(body.task.has_value());
 
   fs::remove_all(test_root);
 }
@@ -407,10 +428,10 @@ TEST_CASE("task poll for unregistered agent returns not found error") {
   request.set("X-Request-Id", "poll-missing-agent");
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::not_found);
-  REQUIRE(body.at("error_code").get<std::string>() == "agent_not_registered");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::agent_not_registered);
 
   fs::remove_all(test_root);
 }
@@ -446,10 +467,10 @@ TEST_CASE("task create request queues task and records audit") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseStatusResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "accepted");
+  REQUIRE(body.status == "accepted");
   REQUIRE(CountRows(database_path, "tasks") == 1);
   REQUIRE(ReadTaskField(database_path, "task-1", "state") == "queued");
   REQUIRE(ReadAuditField(database_path, "task-create-1", "event_type") ==
@@ -489,10 +510,10 @@ TEST_CASE("task create request rejects empty task_id and records failure audit")
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "missing_required_field");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::missing_required_field);
   REQUIRE(CountRows(database_path, "tasks") == 0);
   REQUIRE(ReadAuditField(database_path, "task-create-empty-id", "event_type") ==
           "task.queued");
@@ -534,10 +555,10 @@ TEST_CASE("task create request rejects non-readonly capability and records failu
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::forbidden);
-  REQUIRE(body.at("error_code").get<std::string>() == "capability_not_allowed");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::capability_not_allowed);
   REQUIRE(CountRows(database_path, "tasks") == 0);
   REQUIRE(ReadAuditField(database_path, "task-create-shell", "event_type") ==
           "task.queued");
@@ -579,10 +600,10 @@ TEST_CASE("task create request rejects unsupported task type and records failure
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "unsupported_task_type");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::unsupported_task_type);
   REQUIRE(CountRows(database_path, "tasks") == 0);
   REQUIRE(ReadAuditField(database_path, "task-create-unknown-type", "event_type") ==
           "task.queued");
@@ -624,10 +645,10 @@ TEST_CASE("task create request rejects invalid capability field and records fail
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
   REQUIRE(CountRows(database_path, "tasks") == 0);
   REQUIRE(
       ReadAuditField(database_path, "task-create-invalid-capability", "event_type") ==
@@ -670,10 +691,10 @@ TEST_CASE("task create request rejects invalid task input and records failure au
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
   REQUIRE(CountRows(database_path, "tasks") == 0);
   REQUIRE(ReadAuditField(database_path, "task-create-invalid-input", "event_type") ==
           "task.queued");
@@ -721,11 +742,12 @@ TEST_CASE("task poll assigns queued task and records audit") {
   request.set("X-Request-Id", "poll-assigned");
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseTaskPollResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "assigned");
-  REQUIRE(body.at("task").at("task_id").get<std::string>() == "task-1");
+  REQUIRE(body.status == zfleet::protocol::TaskPollStatus::assigned);
+  REQUIRE(body.task.has_value());
+  REQUIRE(body.task->task_id == "task-1");
   REQUIRE(ReadTaskField(database_path, "task-1", "state") == "assigned");
   REQUIRE(ReadAuditField(database_path, "poll-assigned", "event_type") ==
           "task.assigned");
@@ -780,10 +802,10 @@ TEST_CASE("task running request updates state and records audit") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseStatusResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "accepted");
+  REQUIRE(body.status == "accepted");
   REQUIRE(ReadTaskField(database_path, "task-1", "state") == "running");
   REQUIRE(ReadAuditField(database_path, "task-running-1", "event_type") ==
           "task.running");
@@ -816,10 +838,10 @@ TEST_CASE("task running request returns not found for missing task") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::not_found);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_not_found");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_not_found);
 
   fs::remove_all(test_root);
 }
@@ -859,10 +881,10 @@ TEST_CASE("task running request rejects agent mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_agent_mismatch");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_agent_mismatch);
 
   fs::remove_all(test_root);
 }
@@ -892,10 +914,10 @@ TEST_CASE("task running request rejects path and body task_id mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
 
   fs::remove_all(test_root);
 }
@@ -935,10 +957,10 @@ TEST_CASE("task running request rejects task type mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
 
   fs::remove_all(test_root);
 }
@@ -998,10 +1020,10 @@ TEST_CASE("task running request rejects already finished task") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::conflict);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_already_finished");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_already_finished);
 
   fs::remove_all(test_root);
 }
@@ -1060,10 +1082,10 @@ TEST_CASE("task result persists terminal state and result row") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseStatusResponse(response);
 
   REQUIRE(response.result() == http::status::ok);
-  REQUIRE(body.at("status").get<std::string>() == "accepted");
+  REQUIRE(body.status == "accepted");
   REQUIRE(ReadTaskField(database_path, "task-1", "state") == "succeeded");
   REQUIRE(CountRows(database_path, "task_results") == 1);
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
@@ -1108,10 +1130,10 @@ TEST_CASE("task result rejects succeeded status without result") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
   fs::remove_all(test_root);
@@ -1149,10 +1171,10 @@ TEST_CASE("task result rejects path and body task_id mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
 
   fs::remove_all(test_root);
 }
@@ -1199,10 +1221,10 @@ TEST_CASE("task result rejects task type mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "invalid_field_type");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
 
   fs::remove_all(test_root);
 }
@@ -1243,10 +1265,10 @@ TEST_CASE("task result rejects failed status without error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
   fs::remove_all(test_root);
@@ -1288,10 +1310,10 @@ TEST_CASE("task result rejects expired status without error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
   fs::remove_all(test_root);
@@ -1344,10 +1366,10 @@ TEST_CASE("task result rejects succeeded status with error") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_result_invalid");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
   fs::remove_all(test_root);
@@ -1385,10 +1407,10 @@ TEST_CASE("task result returns not found for missing task") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::not_found);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_not_found");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_not_found);
 
   fs::remove_all(test_root);
 }
@@ -1435,10 +1457,10 @@ TEST_CASE("task result rejects agent mismatch") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::bad_request);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_agent_mismatch");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_agent_mismatch);
 
   fs::remove_all(test_root);
 }
@@ -1505,10 +1527,10 @@ TEST_CASE("task result rejects already finished task") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::conflict);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_already_finished");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_already_finished);
 
   fs::remove_all(test_root);
 }
@@ -1555,10 +1577,10 @@ TEST_CASE("task result rejects non-expired terminal update for expired task") {
   request.prepare_payload();
 
   const auto response = handler.Handle(request);
-  const auto body = nlohmann::json::parse(response.body());
+  const auto body = ParseErrorResponse(response);
 
   REQUIRE(response.result() == http::status::conflict);
-  REQUIRE(body.at("error_code").get<std::string>() == "task_expired");
+  REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_expired);
 
   fs::remove_all(test_root);
 }

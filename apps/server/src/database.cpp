@@ -3,7 +3,6 @@
 #include "zfleet/protocol/json_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
-#include <nlohmann/json.hpp>
 
 #include <stdexcept>
 
@@ -22,13 +21,12 @@ std::optional<std::string> NullableOptionalColumn(SQLite::Statement& query,
 
 zfleet::protocol::TaskInput ParseTaskInput(zfleet::protocol::TaskType task_type,
                                            const std::string& input_json) {
-  const auto parsed = nlohmann::json::parse(input_json);
-  switch (task_type) {
-    case zfleet::protocol::TaskType::collect_basic_inventory:
-      return parsed.get<zfleet::protocol::CollectBasicInventoryInput>();
+  const auto parsed = zfleet::protocol::ParseTaskInput(task_type, input_json);
+  if (const auto* value = std::get_if<zfleet::protocol::TaskInput>(&parsed)) {
+    return *value;
   }
 
-  throw std::invalid_argument("unsupported task type for stored task input");
+  throw std::runtime_error("failed to parse stored task input");
 }
 
 zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
@@ -273,7 +271,7 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
       5, std::string(zfleet::protocol::ToString(task.capability_level)));
   statement.bind(6, task.created_at);
   statement.bind(7, task.expires_at);
-  statement.bind(8, nlohmann::json(task).at("input").dump());
+  statement.bind(8, zfleet::protocol::SerializeTaskInput(task.input));
   statement.bind(9, std::string(zfleet::protocol::ToString(
                         zfleet::protocol::TaskState::queued)));
   statement.bind(10);

@@ -2,50 +2,106 @@
 
 #include "zfleet/protocol/message.h"
 
-#include <nlohmann/json.hpp>
+#include <cstdint>
+#include <initializer_list>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
 
 namespace zfleet::protocol {
 
-void to_json(nlohmann::json& j, const RegistrationRequest& request);
-void from_json(const nlohmann::json& j, RegistrationRequest& request);
+enum class JsonCodecErrorCode {
+  invalid_json,
+  missing_required_field,
+  invalid_field_type,
+  invalid_field_value,
+};
 
-void to_json(nlohmann::json& j, const HeartbeatRequest& request);
-void from_json(const nlohmann::json& j, HeartbeatRequest& request);
+struct JsonCodecContext {
+  std::optional<std::string> request_id;
+  std::optional<std::string> agent_id;
+};
 
-void to_json(nlohmann::json& j, const AssetSnapshotRequest& request);
-void from_json(const nlohmann::json& j, AssetSnapshotRequest& request);
+struct JsonCodecError {
+  JsonCodecErrorCode code;
+  std::string message;
+  JsonCodecContext context;
+};
 
-void to_json(nlohmann::json& j, const StatusResponse& response);
-void from_json(const nlohmann::json& j, StatusResponse& response);
+template <typename T>
+using JsonDecodeResult = std::variant<T, JsonCodecError>;
 
-void to_json(nlohmann::json& j, const ErrorResponse& response);
-void from_json(const nlohmann::json& j, ErrorResponse& response);
+using AuditPayloadValue = std::variant<std::string, bool, std::int64_t>;
 
-void to_json(nlohmann::json& j, const AuditEvent& event);
-void from_json(const nlohmann::json& j, AuditEvent& event);
+struct AuditPayloadField {
+  std::string_view key;
+  AuditPayloadValue value;
+};
 
-void to_json(nlohmann::json& j, const CollectBasicInventoryInput& input);
-void from_json(const nlohmann::json& j, CollectBasicInventoryInput& input);
+std::string SerializeRegistrationRequest(const RegistrationRequest& request);
+JsonDecodeResult<RegistrationRequest> ParseRegistrationRequest(
+    std::string_view json_text);
 
-void to_json(nlohmann::json& j, const CollectBasicInventoryResult& result);
-void from_json(const nlohmann::json& j, CollectBasicInventoryResult& result);
+std::string SerializeHeartbeatRequest(const HeartbeatRequest& request);
+JsonDecodeResult<HeartbeatRequest> ParseHeartbeatRequest(
+    std::string_view json_text);
 
-void to_json(nlohmann::json& j, const Task& task);
-void from_json(const nlohmann::json& j, Task& task);
+std::string SerializeAssetSnapshotRequest(
+    const AssetSnapshotRequest& request);
+JsonDecodeResult<AssetSnapshotRequest> ParseAssetSnapshotRequest(
+    std::string_view json_text);
 
-void to_json(nlohmann::json& j, const TaskCreateRequest& request);
-void from_json(const nlohmann::json& j, TaskCreateRequest& request);
+std::string SerializeStatusResponse(const StatusResponse& response);
+JsonDecodeResult<StatusResponse> ParseStatusResponse(std::string_view json_text);
 
-void to_json(nlohmann::json& j, const TaskPollResponse& response);
-void from_json(const nlohmann::json& j, TaskPollResponse& response);
+std::string SerializeErrorResponse(const ErrorResponse& response);
+JsonDecodeResult<ErrorResponse> ParseErrorResponse(std::string_view json_text);
 
-void to_json(nlohmann::json& j, const TaskError& error);
-void from_json(const nlohmann::json& j, TaskError& error);
+std::string SerializeAuditEvent(const AuditEvent& event);
+JsonDecodeResult<AuditEvent> ParseAuditEvent(std::string_view json_text);
 
-void to_json(nlohmann::json& j, const TaskRunningRequest& request);
-void from_json(const nlohmann::json& j, TaskRunningRequest& request);
+std::string SerializeCollectBasicInventoryInput(
+    const CollectBasicInventoryInput& input);
+JsonDecodeResult<CollectBasicInventoryInput> ParseCollectBasicInventoryInput(
+    std::string_view json_text);
 
-void to_json(nlohmann::json& j, const TaskResultRequest& request);
-void from_json(const nlohmann::json& j, TaskResultRequest& request);
+std::string SerializeCollectBasicInventoryResult(
+    const CollectBasicInventoryResult& result);
+JsonDecodeResult<CollectBasicInventoryResult> ParseCollectBasicInventoryResult(
+    std::string_view json_text);
+
+std::string SerializeTask(const Task& task);
+JsonDecodeResult<Task> ParseTask(std::string_view json_text);
+
+std::string SerializeTaskCreateRequest(const TaskCreateRequest& request);
+JsonDecodeResult<TaskCreateRequest> ParseTaskCreateRequest(
+    std::string_view json_text);
+
+std::string SerializeTaskPollResponse(const TaskPollResponse& response);
+JsonDecodeResult<TaskPollResponse> ParseTaskPollResponse(
+    std::string_view json_text);
+
+std::string SerializeTaskError(const TaskError& error);
+JsonDecodeResult<TaskError> ParseTaskError(std::string_view json_text);
+
+std::string SerializeTaskRunningRequest(const TaskRunningRequest& request);
+JsonDecodeResult<TaskRunningRequest> ParseTaskRunningRequest(
+    std::string_view json_text);
+
+std::string SerializeTaskResultRequest(const TaskResultRequest& request);
+JsonDecodeResult<TaskResultRequest> ParseTaskResultRequest(
+    std::string_view json_text);
+
+std::string SerializeTaskInput(const TaskInput& input);
+JsonDecodeResult<TaskInput> ParseTaskInput(TaskType type,
+                                           std::string_view json_text);
+
+std::string SerializeTaskResultData(const TaskResultData& result);
+JsonDecodeResult<TaskResultData> ParseTaskResultData(TaskType type,
+                                                     std::string_view json_text);
+
+std::string SerializeAuditPayload(
+    std::initializer_list<AuditPayloadField> fields);
 
 } // namespace zfleet::protocol
