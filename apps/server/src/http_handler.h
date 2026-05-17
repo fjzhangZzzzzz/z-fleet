@@ -18,14 +18,25 @@ class HttpHandler {
       const http::request<http::string_body>& request) const;
 
  private:
+  http::response<http::string_body> HandleTaskCreate(
+      const http::request<http::string_body>& request) const;
   http::response<http::string_body> HandleRegister(
       const http::request<http::string_body>& request) const;
   http::response<http::string_body> HandleHeartbeat(
       const http::request<http::string_body>& request,
       std::string_view agent_id) const;
+  http::response<http::string_body> HandleTaskPoll(
+      const http::request<http::string_body>& request,
+      std::string_view agent_id) const;
   http::response<http::string_body> HandleAssets(
       const http::request<http::string_body>& request,
       std::string_view agent_id) const;
+  http::response<http::string_body> HandleTaskRunning(
+      const http::request<http::string_body>& request,
+      std::string_view task_id) const;
+  http::response<http::string_body> HandleTaskResult(
+      const http::request<http::string_body>& request,
+      std::string_view task_id) const;
 
   http::response<http::string_body> MakeStatusResponse(
       http::status status_code,

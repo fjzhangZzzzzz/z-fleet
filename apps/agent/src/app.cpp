@@ -16,9 +16,11 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 
 namespace zfleet::agent {
 namespace {
@@ -114,6 +116,42 @@ zfleet::protocol::StatusResponse PostJson(const ServerEndpoint& endpoint,
   throw std::runtime_error("server returned unexpected response");
 }
 
+template <typename Response>
+Response GetJson(const ServerEndpoint& endpoint,
+                 std::string_view target,
+                 std::string_view request_id) {
+  asio::io_context io_context;
+  tcp::resolver resolver(io_context);
+  tcp::socket socket(io_context);
+  const auto endpoints = resolver.resolve(endpoint.host, endpoint.port);
+  asio::connect(socket, endpoints);
+
+  http::request<http::string_body> request{http::verb::get,
+                                           std::string(target), 11};
+  request.set(http::field::host, endpoint.host);
+  request.set("X-Request-Id", request_id);
+  http::write(socket, request);
+
+  boost::beast::flat_buffer buffer;
+  http::response<http::string_body> response;
+  http::read(socket, buffer, response);
+
+  const auto response_json = nlohmann::json::parse(response.body());
+  if (response.result() == http::status::ok) {
+    return response_json.get<Response>();
+  }
+
+  if (response_json.contains("error_code")) {
+    const auto error = response_json.get<zfleet::protocol::ErrorResponse>();
+    throw std::runtime_error(
+        "server returned " + std::to_string(response.result_int()) + " " +
+        std::string(zfleet::protocol::ToString(error.error_code)) + ": " +
+        error.message);
+  }
+
+  throw std::runtime_error("server returned unexpected response");
+}
+
 zfleet::protocol::RegistrationRequest MakeRegistrationRequest(
     const AgentState& state) {
   return zfleet::protocol::RegistrationRequest{
@@ -151,6 +189,53 @@ zfleet::protocol::AssetSnapshotRequest MakeAssetSnapshotRequest(
       .os_version = std::nullopt,
       .arch = zfleet::platform::architecture_name(),
       .agent_version = std::string(zfleet::core::version()),
+  };
+}
+
+zfleet::protocol::CollectBasicInventoryResult ExecuteCollectBasicInventory() {
+  return zfleet::protocol::CollectBasicInventoryResult{
+      .hostname = zfleet::platform::hostname(),
+      .os = std::string(zfleet::platform::os_name()),
+      .arch = zfleet::platform::architecture_name(),
+      .agent_version = std::string(zfleet::core::version()),
+  };
+}
+
+zfleet::protocol::TaskResultRequest MakeTaskResultRequest(
+    const AgentState& state,
+    const zfleet::protocol::Task& task) {
+  zfleet::protocol::TaskResultRequest request{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .task_id = task.task_id,
+      .agent_id = state.agent_id,
+      .task_type = task.task_type,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .status = zfleet::protocol::TaskExecutionStatus::failed,
+      .result = std::nullopt,
+      .error = std::nullopt,
+  };
+
+  switch (task.task_type) {
+    case zfleet::protocol::TaskType::collect_basic_inventory:
+      request.status = zfleet::protocol::TaskExecutionStatus::succeeded;
+      request.result = ExecuteCollectBasicInventory();
+      break;
+  }
+
+  return request;
+}
+
+zfleet::protocol::TaskRunningRequest MakeTaskRunningRequest(
+    const AgentState& state,
+    const zfleet::protocol::Task& task) {
+  return zfleet::protocol::TaskRunningRequest{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .task_id = task.task_id,
+      .agent_id = state.agent_id,
+      .task_type = task.task_type,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
   };
 }
 
@@ -206,7 +291,53 @@ RunResult RunOnce(const AgentConfig& config) {
              assets_response.request_id,
              assets_response.server_time);
 
-  return RunResult{.agent_id = state.agent_id};
+  const auto poll_request_id = zfleet::core::GenerateUuid();
+  const auto poll_response = GetJson<zfleet::protocol::TaskPollResponse>(
+      endpoint,
+      JoinTarget(endpoint.base_target,
+                 "/v1/agents/" + state.agent_id + "/tasks/poll"),
+      poll_request_id);
+  if (poll_response.status == zfleet::protocol::TaskPollStatus::idle ||
+      !poll_response.task.has_value()) {
+    ZFLOG_INFO(logger,
+               "task poll idle request_id={} server_time={}",
+               poll_response.request_id,
+               poll_response.server_time);
+    return RunResult{.agent_id = state.agent_id, .completed_task_id = std::nullopt};
+  }
+
+  const auto& task = *poll_response.task;
+  ZFLOG_INFO(logger,
+             "task assigned request_id={} task_id={} task_type={}",
+             poll_response.request_id,
+             task.task_id,
+             zfleet::protocol::ToString(task.task_type));
+
+  const auto task_running = MakeTaskRunningRequest(state, task);
+  const auto task_running_response =
+      PostJson(endpoint,
+               JoinTarget(endpoint.base_target,
+                          "/v1/tasks/" + task.task_id + "/running"),
+               task_running);
+  ZFLOG_INFO(logger,
+             "task running accepted request_id={} task_id={} server_time={}",
+             task_running_response.request_id,
+             task.task_id,
+             task_running_response.server_time);
+
+  const auto task_result = MakeTaskResultRequest(state, task);
+  const auto task_result_response =
+      PostJson(endpoint,
+               JoinTarget(endpoint.base_target,
+                          "/v1/tasks/" + task.task_id + "/result"),
+               task_result);
+  ZFLOG_INFO(logger,
+             "task result accepted request_id={} task_id={} server_time={}",
+             task_result_response.request_id,
+             task.task_id,
+             task_result_response.server_time);
+
+  return RunResult{.agent_id = state.agent_id, .completed_task_id = task.task_id};
 }
 
 } // namespace zfleet::agent

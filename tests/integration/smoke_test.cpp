@@ -11,13 +11,22 @@
 #include "zfleet/protocol/message.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/http.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace {
+
+namespace asio = boost::asio;
+namespace http = boost::beast::http;
+using tcp = asio::ip::tcp;
 
 bool TableExists(const std::filesystem::path& database_path,
                  const std::string& table_name) {
@@ -47,6 +56,39 @@ std::string ReadSingleTextColumn(const std::filesystem::path& database_path,
     return {};
   }
   return query.getColumn(0).getString();
+}
+
+std::string ReadSingleTextColumnNoParam(const std::filesystem::path& database_path,
+                                        const std::string& query_text) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(db, query_text);
+  if (!query.executeStep()) {
+    return {};
+  }
+  return query.getColumn(0).getString();
+}
+
+http::response<http::string_body> PostJson(std::uint16_t port,
+                                           std::string_view target,
+                                           std::string body) {
+  asio::io_context io_context;
+  tcp::resolver resolver(io_context);
+  tcp::socket socket(io_context);
+  const auto endpoints = resolver.resolve("127.0.0.1", std::to_string(port));
+  asio::connect(socket, endpoints);
+
+  http::request<http::string_body> request{http::verb::post,
+                                           std::string(target), 11};
+  request.set(http::field::host, "127.0.0.1");
+  request.set(http::field::content_type, "application/json");
+  request.body() = std::move(body);
+  request.prepare_payload();
+  http::write(socket, request);
+
+  boost::beast::flat_buffer buffer;
+  http::response<http::string_body> response;
+  http::read(socket, buffer, response);
+  return response;
 }
 
 struct RunningServer {
@@ -147,6 +189,95 @@ TEST_CASE("agent run once registers heartbeats and uploads assets end to end") {
                 database_path,
                 "select agent_id from asset_snapshots where agent_id = ?",
                 result.agent_id) == result.agent_id);
+  }
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("agent run once polls task and uploads result end to end") {
+  namespace fs = std::filesystem;
+
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+  const auto database_path = test_root / "zfleet-tasks.db";
+  const auto agent_data_dir = test_root / "agent-task-data";
+
+  {
+    RunningServer server(database_path);
+    const auto seeded_agent_id = "agent-task-1";
+    server.database.UpsertAgent(zfleet::protocol::RegistrationRequest{
+        .protocol_version = "v1",
+        .request_id = "seed-agent",
+        .agent_id = seeded_agent_id,
+        .occurred_at = "2026-05-17T10:00:00Z",
+        .agent_version = "0.1.0",
+        .hostname = "devbox-01",
+        .os = "linux",
+        .arch = "x86_64",
+    });
+    const auto create_response = PostJson(
+        server.server.port(), "/v1/tasks",
+        R"json({
+          "protocol_version": "v1",
+          "request_id": "task-create-integration-1",
+          "occurred_at": "2026-05-17T10:00:01Z",
+          "task": {
+            "protocol_version": "v1",
+            "task_id": "task-integration-1",
+            "agent_id": "agent-task-1",
+            "task_type": "collect_basic_inventory",
+            "capability_level": "readonly",
+            "created_at": "2026-05-17T10:00:01Z",
+            "expires_at": "2099-05-17T10:05:00Z",
+            "input": {}
+          }
+        })json");
+    REQUIRE(create_response.result() == http::status::ok);
+
+    fs::create_directories(agent_data_dir);
+    {
+      std::ofstream state_stream(agent_data_dir / "state.toml");
+      REQUIRE(state_stream);
+      state_stream << "[state]\n";
+      state_stream << "agent_id = \"" << seeded_agent_id << "\"\n";
+    }
+
+    const zfleet::agent::AgentConfig config{
+        .server_url =
+            "http://127.0.0.1:" + std::to_string(server.server.port()),
+        .data_dir = agent_data_dir,
+        .state_file = "state.toml",
+        .log =
+            {
+                .level = zfleet::core::log::Level::kError,
+                .enable_console = false,
+                .file_path = test_root / "agent-task.log",
+            },
+    };
+
+    const auto result = zfleet::agent::RunOnce(config);
+
+    REQUIRE(result.agent_id == seeded_agent_id);
+    REQUIRE(result.completed_task_id == std::optional<std::string>{"task-integration-1"});
+    REQUIRE(CountRows(database_path, "task_results") == 1);
+    REQUIRE(ReadSingleTextColumn(
+                database_path,
+                "select state from tasks where task_id = ?",
+                "task-integration-1") == "succeeded");
+    REQUIRE(ReadSingleTextColumn(
+                database_path,
+                "select task_type from task_results where task_id = ?",
+                "task-integration-1") == "collect_basic_inventory");
+    REQUIRE(CountRows(database_path, "task_results") == 1);
+    REQUIRE(ReadSingleTextColumnNoParam(
+                database_path,
+                "select count(*) from audit_events where event_type = 'task.running'") ==
+            "1");
+    REQUIRE(ReadSingleTextColumnNoParam(
+                database_path,
+                "select event_type from audit_events where event_type like 'task.%' order by rowid desc limit 1") ==
+            "task.succeeded");
   }
 
   fs::remove_all(test_root);

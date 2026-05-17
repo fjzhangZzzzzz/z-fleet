@@ -265,15 +265,334 @@ v0.1 固定事件类型：
 
 ## v0.2 任务模型
 
-待定义：
+v0.2 目标是在不引入任意 shell 或高风险写入的前提下，建立最小只读任务闭环。
 
-- 任务类型；
-- 输入和输出结构；
-- 状态机；
-- 错误码；
-- 超时和取消语义；
-- 审计字段；
-- 所需权限和默认开关。
+v0.2 初始接口：
+
+```text
+POST /v1/tasks
+GET  /v1/agents/{agent_id}/tasks/poll
+POST /v1/tasks/{task_id}/running
+POST /v1/tasks/{task_id}/result
+```
+
+约束：
+
+- `tasks/poll` 只返回能力等级为 `readonly` 的任务。
+- `POST /v1/tasks` 用于创建最小只读任务；v0.2 不涉及复杂调度策略。
+- Agent 在任一时刻只要求串行执行一个任务；v0.2 不要求并发任务调度。
+- Server 可以返回空任务结果，表示当前无可执行任务。
+- 任务下发、领取、开始、完成、失败和过期都必须产生审计事件。
+- v0.2 不定义取消、暂停、恢复和任务优先级抢占。
+
+### 任务能力等级
+
+v0.2 任务契约沿用安全文档中的能力分级，初始只开放 `readonly`：
+
+| `capability_level` | 含义 | v0.2 默认值 |
+| --- | --- | --- |
+| `readonly` | 只读取系统状态或资产信息，不改变目标设备 | enabled |
+| `low_risk_write` | 低风险写入，例如更新 Agent 本地配置 | disabled |
+| `high_risk_write` | 修改系统配置、安装软件、删除文件等 | disabled |
+| `shell` | 任意命令或脚本执行 | disabled |
+
+任何非 `readonly` 任务进入协议前，都必须先补齐威胁模型、策略开关、审计字段和测试。
+
+### 任务类型
+
+v0.2 先固定一个最小只读任务类型：
+
+| `task_type` | 含义 | 输入 |
+| --- | --- | --- |
+| `collect_basic_inventory` | 读取基础主机信息并回传结果 | 无或空对象 |
+
+说明：
+
+- `collect_basic_inventory` 用于验证任务下发、Agent 执行、结果回传和审计链路。
+- 该任务只允许读取 Agent 已具备或低风险可获取的信息，例如 `hostname`、`os`、`arch`、`agent_version`、时间戳。
+- v0.2 不将“执行任意命令”包装成只读任务。
+
+### 任务对象
+
+Server 下发任务时使用以下结构：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `protocol_version` | `string` | yes | 当前固定为 `v1` |
+| `task_id` | `string` | yes | 任务唯一 ID |
+| `agent_id` | `string` | yes | 目标 Agent ID |
+| `task_type` | `string` | yes | 任务类型 |
+| `capability_level` | `string` | yes | 所需能力等级 |
+| `created_at` | `string` | yes | Server 创建任务时间 |
+| `expires_at` | `string` | yes | 任务过期时间 |
+| `input` | `object` | yes | 任务输入；无输入时使用空对象 |
+
+约束：
+
+- `task_id` 在全局范围内必须唯一。
+- `agent_id` 必须与轮询路径参数一致。
+- `expires_at` 必须晚于 `created_at`。
+- `input` 的字段由 `task_type` 决定；接收方必须忽略未知可选字段。
+
+示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "task_type": "collect_basic_inventory",
+  "capability_level": "readonly",
+  "created_at": "2026-05-16T10:00:00Z",
+  "expires_at": "2026-05-16T10:05:00Z",
+  "input": {}
+}
+```
+
+### 任务轮询响应
+
+Agent 轮询响应分为“有任务”和“无任务”两种。
+
+字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `protocol_version` | `string` | yes | 当前固定为 `v1` |
+| `request_id` | `string` | yes | 本次轮询请求 ID |
+| `agent_id` | `string` | yes | Agent 稳定身份 |
+| `occurred_at` | `string` | yes | Server 生成响应时间 |
+| `task` | `object` | no | 有任务时返回任务对象；无任务时省略 |
+| `status` | `string` | yes | `assigned` 或 `idle` |
+| `server_time` | `string` | yes | Server 当前时间 |
+
+无任务示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "poll-req-1",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "occurred_at": "2026-05-16T10:00:10Z",
+  "status": "idle",
+  "server_time": "2026-05-16T10:00:10Z"
+}
+```
+
+有任务示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "poll-req-2",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "occurred_at": "2026-05-16T10:00:20Z",
+  "status": "assigned",
+  "task": {
+    "protocol_version": "v1",
+    "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+    "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+    "task_type": "collect_basic_inventory",
+    "capability_level": "readonly",
+    "created_at": "2026-05-16T10:00:00Z",
+    "expires_at": "2026-05-16T10:05:00Z",
+    "input": {}
+  },
+  "server_time": "2026-05-16T10:00:20Z"
+}
+```
+
+### 任务创建请求
+
+Server 通过以下结构接收最小任务创建请求：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `protocol_version` | `string` | yes | 当前固定为 `v1` |
+| `request_id` | `string` | yes | 任务创建请求 ID |
+| `occurred_at` | `string` | yes | 请求发生时间 |
+| `task` | `object` | yes | 完整任务对象 |
+
+示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "task-create-1",
+  "occurred_at": "2026-05-17T10:00:00Z",
+  "task": {
+    "protocol_version": "v1",
+    "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+    "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+    "task_type": "collect_basic_inventory",
+    "capability_level": "readonly",
+    "created_at": "2026-05-17T10:00:00Z",
+    "expires_at": "2026-05-17T10:05:00Z",
+    "input": {}
+  }
+}
+```
+
+### 任务开始执行上报
+
+Agent 在本地开始执行任务前，通过以下结构向 Server 上报 `running` 状态：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `protocol_version` | `string` | yes | 当前固定为 `v1` |
+| `request_id` | `string` | yes | 本次上报请求 ID |
+| `task_id` | `string` | yes | 任务 ID |
+| `agent_id` | `string` | yes | 执行任务的 Agent ID |
+| `task_type` | `string` | yes | 任务类型 |
+| `occurred_at` | `string` | yes | Agent 开始执行任务的时间 |
+
+示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "task-running-1",
+  "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "task_type": "collect_basic_inventory",
+  "occurred_at": "2026-05-17T10:00:10Z"
+}
+```
+
+### 任务结果回传
+
+Agent 完成或失败后，通过结果接口回传统一结构。
+
+字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `protocol_version` | `string` | yes | 当前固定为 `v1` |
+| `request_id` | `string` | yes | 结果回传请求 ID |
+| `task_id` | `string` | yes | 任务 ID |
+| `agent_id` | `string` | yes | 执行任务的 Agent ID |
+| `task_type` | `string` | yes | 任务类型；必须与下发任务一致 |
+| `occurred_at` | `string` | yes | Agent 完成任务的时间 |
+| `status` | `string` | yes | `succeeded`、`failed` 或 `expired` |
+| `result` | `object` | no | 成功结果对象；失败或过期时可省略 |
+| `error` | `object` | no | 失败或过期时返回；成功时省略 |
+
+约束：
+
+- `task_id` 必须与路径参数一致。
+- `agent_id` 必须与任务归属一致。
+- `task_type` 必须与原始任务类型一致。
+- `result` 和 `error` 不能同时为空；至少一方应与 `status` 对应。
+- `status = succeeded` 时必须省略 `error`。
+- `status = failed` 或 `expired` 时必须提供 `error`。
+
+成功示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "result-req-1",
+  "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "task_type": "collect_basic_inventory",
+  "occurred_at": "2026-05-16T10:00:30Z",
+  "status": "succeeded",
+  "result": {
+    "hostname": "devbox-01",
+    "os": "linux",
+    "arch": "x86_64",
+    "agent_version": "0.1.0"
+  }
+}
+```
+
+失败示例：
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "result-req-2",
+  "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
+  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
+  "task_type": "collect_basic_inventory",
+  "occurred_at": "2026-05-16T10:00:30Z",
+  "status": "failed",
+  "error": {
+    "error_code": "task_execution_failed",
+    "message": "inventory collection returned unexpected empty hostname",
+    "retryable": false
+  }
+}
+```
+
+### 任务状态机
+
+v0.2 最小状态机如下：
+
+| 状态 | 含义 |
+| --- | --- |
+| `queued` | 任务已创建，等待 Agent 轮询领取 |
+| `assigned` | 任务已通过轮询返回给目标 Agent |
+| `running` | Agent 已开始执行任务 |
+| `succeeded` | Agent 成功完成并回传结果 |
+| `failed` | Agent 执行失败并回传错误 |
+| `expired` | 任务在执行前或执行中超过 `expires_at` |
+
+状态流转约束：
+
+- `queued -> assigned`
+- `assigned -> running`
+- `running -> succeeded`
+- `running -> failed`
+- `queued -> expired`
+- `assigned -> expired`
+- `running -> expired`
+
+v0.2 不允许：
+
+- `succeeded` 或 `failed` 再次回到非终态；
+- 不经过 `assigned` 直接进入 `running`；
+- 同一 `task_id` 多次成功回传结果。
+
+### 最小任务错误码
+
+v0.2 先固定以下任务错误码：
+
+| 错误码 | HTTP 状态码 | 含义 | `retryable` |
+| --- | --- | --- | --- |
+| `task_not_found` | `404` | 指定 `task_id` 不存在 | `false` |
+| `task_agent_mismatch` | `400` | 结果回传中的 `agent_id` 与任务归属不一致 | `false` |
+| `task_already_finished` | `409` | 任务已进入终态，不接受重复结果 | `false` |
+| `task_expired` | `409` | 任务已过期 | `false` |
+| `unsupported_task_type` | `400` | Agent 或 Server 不支持该任务类型 | `false` |
+| `capability_not_allowed` | `403` | 任务能力等级未被当前策略允许 | `false` |
+| `task_execution_failed` | `200` in result payload | Agent 执行任务失败的稳定错误码 | `false` |
+| `task_result_invalid` | `400` | 结果回传结构非法或缺少必填字段 | `false` |
+
+说明：
+
+- `task_execution_failed` 是任务结果中的业务错误码，不是结果接口本身的 HTTP 错误。
+- 如果 Agent 无法执行一个已分配任务，应尽量回传 `failed` 结果，而不是直接沉默超时。
+
+### 任务审计字段
+
+v0.2 任务相关审计事件建议至少包含以下字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `audit_id` | `string` | 审计事件 ID |
+| `occurred_at` | `string` | 事件时间 |
+| `agent_id` | `string` | 目标 Agent |
+| `task_id` | `string` | 关联任务 |
+| `request_id` | `string` | 关联请求 |
+| `event_type` | `string` | 例如 `task.queued`、`task.assigned`、`task.running`、`task.succeeded`、`task.failed`、`task.expired` |
+| `result` | `string` | `success` 或 `failure` |
+| `payload_json` | `string` | 任务类型、状态、错误码、能力等级等补充字段 |
+
+约束：
+
+- `task_id` 应成为任务相关审计的首要检索键之一。
+- 审计中不得存放敏感密钥、凭据原文或高基数大体积原始输出。
+- 若任务结果体较大，应只保存摘要和关键字段，而不是无上限原文。
 
 ## 兼容性规则
 
