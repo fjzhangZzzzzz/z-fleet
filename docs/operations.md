@@ -1,12 +1,12 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-13
+最后更新：2026-05-17
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
 
-本文档记录本地运行、构建、配置、部署、升级、回滚和排障流程。
+本文档记录本地运行、构建、配置、部署、发布、升级、回滚和排障流程。
 
 ## 构建
 
@@ -96,6 +96,17 @@ enable_console = true
 - Agent 首次启动会在 `data_dir/state.toml` 生成本地状态文件。
 - 当前 `state.toml` 只保存 `agent_id`，属于程序持久化状态，不应与运维配置混写。
 - 重复启动同一 `data_dir` 时，Agent 必须复用同一个 `agent_id`。
+
+## 部署、发布与升级
+
+当前 installer 尚未实现；后续部署、发布、升级和回滚流程以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
+
+本文档当前仅承接实施分期，不展开未实现命令、完整 manifest schema 或平台脚本细节：
+
+- `P1`：文档收口与承接，确认 ADR 0006 为决策源，并在运维文档集中记录部署、发布、升级、回滚主题入口。
+- `P2`：落地 manifest/package 基本结构，以及 installer 最小 `apply` / `status` 能力。
+- `P3`：补齐 active-version launcher 与 `rollback` 流程，形成相邻版本切换能力。
+- `P4`：完成跨平台验证、脚本接入和运维说明完善。
 
 ## 排障
 
