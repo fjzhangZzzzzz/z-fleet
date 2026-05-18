@@ -1,7 +1,7 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-17
+最后更新：2026-05-18
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
@@ -99,7 +99,7 @@ enable_console = true
 
 ## 部署、发布与升级
 
-当前已完成 P2 范围内的 installer 最小 `apply` / `status` 能力；后续部署、发布、升级和回滚流程继续以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
+当前已完成 P3 范围内的 installer 最小 `apply` / `status` / `rollback` 能力和 active-version launcher；后续部署、发布、升级和回滚流程继续以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
 
 本文档当前仅承接实施分期，不展开未实现命令、完整 manifest schema 或平台脚本细节：
 
@@ -167,6 +167,37 @@ P2 约束：
 - `source`、`target` 必须是安全相对路径；`source` 必须位于 `payload/` 下，`target` 不得写入 `META/`。
 - `apply` 仅做完整性校验：检查文件存在、普通文件属性、大小、SHA-256，且 source 路径不得经过符号链接。
 - `signatures` 字段可缺省或为空；P2 **不做签名验证，也不提供签名来源认证**。
+
+### P3：rollback 与 launcher
+
+P3 在 P2 基础上补齐相邻版本切换能力，但**不包含**打包脚本、归档解包、签名、自更新下载、服务托管、运行中进程替换或启动后健康探针。
+
+新增命令：
+
+```bash
+./build/linux-debug/apps/installer/zfleet_installer rollback \
+  --root /tmp/zfleet-root \
+  --component agent
+```
+
+`previous-version` 语义：
+
+- 状态文件仍位于 `<root>/zfleet/<component>/var/`。
+- `active-version` 记录当前 launcher 应启动的版本。
+- `previous-version` 只记录**相邻上一健康版本**。
+- 首次 `apply` 只写 `active-version`，不生成 `previous-version`。
+- 当健康 active 从 `A` 切到 `B` 且 `A != B` 时，installer 先写 `previous-version=A`，再写 `active-version=B`。
+- 如果当前 active 已损坏，允许通过 `apply` 新版本修复，但不会把损坏版本写入 `previous-version`。
+- `rollback` 成功从 `B -> A` 后，installer 会写 `previous-version=B`，再写 `active-version=A`，因此下一次 `rollback` 可再切回 `B`。
+
+launcher 目录与启动模型：
+
+- 固定入口为 `<root>/zfleet/<component>/bin/zfleet_*`。
+- launcher 按自身路径推导 `<component_root>`，读取 `<component_root>/var/active-version`。
+- 真实目标位于 `<component_root>/releases/<version>/bin/<same executable name>`。
+- launcher 仅做启动路径安全检查：`active-version` 必须是安全单段版本，目标必须存在且为普通可执行文件。
+- 参数按原样透传，不经过 shell；POSIX 通过 `execv` 替换当前进程，Windows 分支等待子进程并返回其退出码。
+- P3 **不负责** 服务级重启、运行中进程替换或旧进程清理；新版本生效点仍是下一次通过固定 stub 路径启动组件。
 
 ## 排障
 

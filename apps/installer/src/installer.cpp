@@ -6,8 +6,10 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace zfleet::installer {
@@ -21,10 +23,23 @@ struct ComponentPaths {
   fs::path staging_root;
   fs::path var_root;
   fs::path active_version_path;
+  fs::path previous_version_path;
 };
 
 struct ReleaseValidation {
   bool ok;
+  std::string version;
+  std::string message;
+};
+
+enum class ActiveReleaseState {
+  kMissing,
+  kHealthy,
+  kCorrupt,
+};
+
+struct ActiveReleaseInfo {
+  ActiveReleaseState state;
   std::string version;
   std::string message;
 };
@@ -37,6 +52,7 @@ ComponentPaths BuildPaths(const fs::path& root, const std::string& component) {
       .staging_root = component_root / ".staging",
       .var_root = component_root / "var",
       .active_version_path = component_root / "var" / "active-version",
+      .previous_version_path = component_root / "var" / "previous-version",
   };
 }
 
@@ -159,17 +175,17 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
                            .message = {}};
 }
 
-void WriteActiveVersion(const ComponentPaths& paths, const std::string& version) {
-  fs::create_directories(paths.var_root);
-  const auto temp_path = paths.active_version_path.string() + ".tmp";
+void WriteVersionFile(const fs::path& path, const std::string& version) {
+  fs::create_directories(path.parent_path());
+  const auto temp_path = path.string() + ".tmp";
   WriteTextFile(temp_path, version + "\n");
 
   std::error_code rename_error;
-  fs::rename(temp_path, paths.active_version_path, rename_error);
+  fs::rename(temp_path, path, rename_error);
   if (rename_error) {
     std::error_code remove_error;
-    fs::remove(paths.active_version_path, remove_error);
-    fs::rename(temp_path, paths.active_version_path);
+    fs::remove(path, remove_error);
+    fs::rename(temp_path, path);
   }
 }
 
@@ -212,6 +228,88 @@ void StageRelease(const fs::path& package_dir,
                 fs::copy_options::overwrite_existing);
 }
 
+ActiveReleaseInfo InspectActiveRelease(const ComponentPaths& paths,
+                                       const std::string& component) {
+  if (!fs::exists(paths.active_version_path)) {
+    return ActiveReleaseInfo{
+        .state = ActiveReleaseState::kMissing,
+        .version = {},
+        .message = {},
+    };
+  }
+
+  std::string version;
+  try {
+    version = ReadFileTrimmed(paths.active_version_path);
+  } catch (const std::exception& ex) {
+    return ActiveReleaseInfo{
+        .state = ActiveReleaseState::kCorrupt,
+        .version = {},
+        .message = ex.what(),
+    };
+  }
+
+  if (!IsSafeVersionString(version)) {
+    return ActiveReleaseInfo{
+        .state = ActiveReleaseState::kCorrupt,
+        .version = {},
+        .message = "active-version is invalid",
+    };
+  }
+
+  const auto release_dir = paths.releases_root / version;
+  if (!fs::exists(release_dir) || !fs::is_directory(release_dir)) {
+    return ActiveReleaseInfo{
+        .state = ActiveReleaseState::kCorrupt,
+        .version = version,
+        .message = "active release missing",
+    };
+  }
+
+  const auto validation = ValidateReleaseDirectory(release_dir, component);
+  if (!validation.ok) {
+    return ActiveReleaseInfo{
+        .state = ActiveReleaseState::kCorrupt,
+        .version = validation.version,
+        .message = validation.message,
+    };
+  }
+
+  return ActiveReleaseInfo{
+      .state = ActiveReleaseState::kHealthy,
+      .version = validation.version,
+      .message = {},
+  };
+}
+
+bool ShouldRecordPreviousVersion(const ActiveReleaseInfo& active_release,
+                                 const std::string& next_version) {
+  return active_release.state == ActiveReleaseState::kHealthy &&
+         active_release.version != next_version;
+}
+
+void SwitchActiveVersion(const ComponentPaths& paths,
+                         const ActiveReleaseInfo& active_release,
+                         const std::string& next_version) {
+  if (ShouldRecordPreviousVersion(active_release, next_version)) {
+    WriteVersionFile(paths.previous_version_path, active_release.version);
+  }
+  WriteVersionFile(paths.active_version_path, next_version);
+}
+
+RollbackResult MakeRollbackFailure(const std::string& component,
+                                   const std::string& from_version,
+                                   const std::string& to_version,
+                                   const std::string& message) {
+  return RollbackResult{
+      .ok = false,
+      .component = component,
+      .from_version = from_version,
+      .to_version = to_version,
+      .message = message,
+  };
+}
+
 } // namespace
 
 bool IsKnownComponent(const std::string& component) {
@@ -227,6 +325,7 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
 
     const auto manifest = LoadManifest(package_dir / "META" / "manifest.json");
     const auto paths = BuildPaths(root, manifest.component);
+    const auto active_release = InspectActiveRelease(paths, manifest.component);
     const auto release_dir = paths.releases_root / manifest.version;
 
     if (fs::exists(release_dir)) {
@@ -241,7 +340,7 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
                                validation.message};
       }
 
-      WriteActiveVersion(paths, manifest.version);
+      SwitchActiveVersion(paths, active_release, manifest.version);
       return ApplyResult{.ok = true,
                          .component = manifest.component,
                          .version = manifest.version,
@@ -253,7 +352,7 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
       StageRelease(package_dir, staging_dir, manifest);
       fs::create_directories(paths.releases_root);
       fs::rename(staging_dir, release_dir);
-      WriteActiveVersion(paths, manifest.version);
+      SwitchActiveVersion(paths, active_release, manifest.version);
     } catch (...) {
       std::error_code cleanup_error;
       fs::remove_all(staging_dir, cleanup_error);
@@ -272,13 +371,88 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
   }
 }
 
+RollbackResult RollbackComponent(const fs::path& root,
+                                 const std::string& component) {
+  if (!IsKnownComponent(component)) {
+    throw std::invalid_argument("unknown component: " + component);
+  }
+
+  const auto paths = BuildPaths(root, component);
+  const auto active_release = InspectActiveRelease(paths, component);
+  if (active_release.state == ActiveReleaseState::kMissing) {
+    return MakeRollbackFailure(component, {}, {}, "active release is not installed");
+  }
+  if (active_release.state == ActiveReleaseState::kCorrupt) {
+    return MakeRollbackFailure(component, active_release.version, {},
+                               "active release is corrupt: " +
+                                   active_release.message);
+  }
+
+  if (!fs::exists(paths.previous_version_path)) {
+    return MakeRollbackFailure(component, active_release.version, {},
+                               "previous-version is missing");
+  }
+
+  std::string previous_version;
+  try {
+    previous_version = ReadFileTrimmed(paths.previous_version_path);
+  } catch (const std::exception& ex) {
+    return MakeRollbackFailure(component, active_release.version, {},
+                               ex.what());
+  }
+
+  if (!IsSafeVersionString(previous_version)) {
+    return MakeRollbackFailure(component, active_release.version,
+                               previous_version,
+                               "previous-version is invalid");
+  }
+  if (previous_version == active_release.version) {
+    return MakeRollbackFailure(component, active_release.version,
+                               previous_version,
+                               "previous-version matches active-version");
+  }
+
+  const auto previous_release_dir = paths.releases_root / previous_version;
+  if (!fs::exists(previous_release_dir) || !fs::is_directory(previous_release_dir)) {
+    return MakeRollbackFailure(component, active_release.version,
+                               previous_version,
+                               "previous release missing");
+  }
+
+  const auto validation =
+      ValidateReleaseDirectory(previous_release_dir, component);
+  if (!validation.ok) {
+    return MakeRollbackFailure(component, active_release.version,
+                               previous_version,
+                               "previous release is unhealthy: " +
+                                   validation.message);
+  }
+
+  try {
+    WriteVersionFile(paths.previous_version_path, active_release.version);
+    WriteVersionFile(paths.active_version_path, previous_version);
+  } catch (const std::exception& ex) {
+    return MakeRollbackFailure(component, active_release.version,
+                               previous_version, ex.what());
+  }
+
+  return RollbackResult{
+      .ok = true,
+      .component = component,
+      .from_version = active_release.version,
+      .to_version = previous_version,
+      .message = "rolled back",
+  };
+}
+
 StatusResult GetStatus(const fs::path& root, const std::string& component) {
   if (!IsKnownComponent(component)) {
     throw std::invalid_argument("unknown component: " + component);
   }
 
   const auto paths = BuildPaths(root, component);
-  if (!fs::exists(paths.active_version_path)) {
+  const auto active_release = InspectActiveRelease(paths, component);
+  if (active_release.state == ActiveReleaseState::kMissing) {
     return StatusResult{
         .component = component,
         .state = "not_installed",
@@ -286,52 +460,21 @@ StatusResult GetStatus(const fs::path& root, const std::string& component) {
         .message = std::nullopt,
     };
   }
-
-  std::string version;
-  try {
-    version = ReadFileTrimmed(paths.active_version_path);
-  } catch (const std::exception& ex) {
+  if (active_release.state == ActiveReleaseState::kCorrupt) {
     return StatusResult{
         .component = component,
         .state = "corrupt",
-        .version = std::nullopt,
-        .message = ex.what(),
-    };
-  }
-
-  if (!IsSafeVersionString(version)) {
-    return StatusResult{
-        .component = component,
-        .state = "corrupt",
-        .version = std::nullopt,
-        .message = "active-version is invalid",
-    };
-  }
-
-  const auto release_dir = paths.releases_root / version;
-  if (!fs::exists(release_dir) || !fs::is_directory(release_dir)) {
-    return StatusResult{
-        .component = component,
-        .state = "corrupt",
-        .version = version,
-        .message = "active release missing",
-    };
-  }
-
-  const auto validation = ValidateReleaseDirectory(release_dir, component);
-  if (!validation.ok) {
-    return StatusResult{
-        .component = component,
-        .state = "corrupt",
-        .version = validation.version,
-        .message = validation.message,
+        .version = active_release.version.empty()
+                       ? std::nullopt
+                       : std::optional<std::string>{active_release.version},
+        .message = active_release.message,
     };
   }
 
   return StatusResult{
       .component = component,
       .state = "installed",
-      .version = validation.version,
+      .version = active_release.version,
       .message = std::nullopt,
   };
 }

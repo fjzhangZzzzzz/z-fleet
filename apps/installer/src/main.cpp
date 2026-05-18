@@ -28,12 +28,34 @@ int main(int argc, char** argv) {
       ->required()
       ->check(CLI::IsMember({"agent", "server", "installer"}));
 
+  std::string rollback_root_arg;
+  std::string rollback_component_arg;
+  auto* rollback_command =
+      app.add_subcommand("rollback", "Rollback to the previous component release");
+  rollback_command->add_option("--root", rollback_root_arg, "Install root")
+      ->required();
+  rollback_command
+      ->add_option("--component", rollback_component_arg, "Component name")
+      ->required()
+      ->check(CLI::IsMember({"agent", "server", "installer"}));
+
   CLI11_PARSE(app, argc, argv);
 
   try {
     if (*apply_command) {
       const auto result =
           zfleet::installer::ApplyPackage(root_arg, package_arg);
+      if (!result.ok) {
+        std::cerr << result.message << '\n';
+        return 1;
+      }
+      return 0;
+    }
+
+    if (*rollback_command) {
+      const auto result =
+          zfleet::installer::RollbackComponent(rollback_root_arg,
+                                               rollback_component_arg);
       if (!result.ok) {
         std::cerr << result.message << '\n';
         return 1;

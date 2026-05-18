@@ -148,6 +148,27 @@ std::string ReadTextFile(const fs::path& path) {
                      std::istreambuf_iterator<char>());
 }
 
+fs::path ComponentRoot(const fs::path& root, const std::string& component) {
+  return root / "zfleet" / component;
+}
+
+fs::path ActiveVersionPath(const fs::path& root, const std::string& component) {
+  return ComponentRoot(root, component) / "var" / "active-version";
+}
+
+fs::path PreviousVersionPath(const fs::path& root,
+                             const std::string& component) {
+  return ComponentRoot(root, component) / "var" / "previous-version";
+}
+
+fs::path ReleaseBinaryPath(const fs::path& root,
+                           const std::string& component,
+                           const std::string& version) {
+  const auto binary_name = "zfleet_" + component;
+  return ComponentRoot(root, component) / "releases" / version / "bin" /
+         binary_name;
+}
+
 } // namespace
 
 TEST_CASE("manifest parser accepts a valid manifest") {
@@ -317,8 +338,8 @@ TEST_CASE("apply writes release content and active-version") {
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
   REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
   REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "var" /
-                       "active-version") == "0.1.0\n");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
+  REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
   fs::remove_all(test_root);
 }
@@ -422,8 +443,8 @@ TEST_CASE("same healthy version can be applied repeatedly") {
       zfleet::installer::ApplyPackage(test_root, package_dir);
 
   REQUIRE(second_result.ok);
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "var" /
-                       "active-version") == "0.1.0\n");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
+  REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
   fs::remove_all(test_root);
 }
@@ -451,10 +472,275 @@ TEST_CASE("new version apply switches active-version and preserves old release")
 
   REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.1.0"));
   REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.2.0"));
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "var" /
-                       "active-version") == "0.2.0\n");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+  REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
                        "bin" / "zfleet_agent") == "agent-binary-v1");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("same active version does not rewrite previous-version to self") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto package_v1 =
+      CreatePackage(test_root / "v1", "agent", "0.1.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v1",
+                                     .executable = true}});
+  const auto package_v2 =
+      CreatePackage(test_root / "v2", "agent", "0.2.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v2",
+                                     .executable = true}});
+
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+  REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("apply from corrupt active to new version does not record corrupt previous") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto package_v1 =
+      CreatePackage(test_root / "v1", "agent", "0.1.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v1",
+                                     .executable = true}});
+  const auto package_v2 =
+      CreatePackage(test_root / "v2", "agent", "0.2.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v2",
+                                     .executable = true}});
+
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+  WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.1.0"),
+                "tampered-binary");
+
+  const auto result = zfleet::installer::ApplyPackage(test_root, package_v2);
+
+  REQUIRE(result.ok);
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+  REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("rollback swaps active and previous versions") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto package_v1 =
+      CreatePackage(test_root / "v1", "agent", "0.1.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v1",
+                                     .executable = true}});
+  const auto package_v2 =
+      CreatePackage(test_root / "v2", "agent", "0.2.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v2",
+                                     .executable = true}});
+
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+
+  const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+  REQUIRE(rollback.ok);
+  REQUIRE(rollback.component == "agent");
+  REQUIRE(rollback.from_version == "0.2.0");
+  REQUIRE(rollback.to_version == "0.1.0");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
+  REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.2.0\n");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("rollback can switch between adjacent versions repeatedly") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto package_v1 =
+      CreatePackage(test_root / "v1", "agent", "0.1.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v1",
+                                     .executable = true}});
+  const auto package_v2 =
+      CreatePackage(test_root / "v2", "agent", "0.2.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v2",
+                                     .executable = true}});
+
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+  REQUIRE(zfleet::installer::RollbackComponent(test_root, "agent").ok);
+
+  const auto second_rollback =
+      zfleet::installer::RollbackComponent(test_root, "agent");
+
+  REQUIRE(second_rollback.ok);
+  REQUIRE(second_rollback.from_version == "0.1.0");
+  REQUIRE(second_rollback.to_version == "0.2.0");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+  REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("rollback failures keep active-version unchanged") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  SECTION("missing previous-version") {
+    const auto package_dir =
+        CreatePackage(test_root, "agent", "0.1.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
+    REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
+  }
+
+  SECTION("invalid previous-version") {
+    const auto package_v1 =
+        CreatePackage(test_root / "v1", "agent", "0.1.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v1",
+                                       .executable = true}});
+    const auto package_v2 =
+        CreatePackage(test_root / "v2", "agent", "0.2.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v2",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+    WriteTextFile(PreviousVersionPath(test_root, "agent"), "../bad\n");
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+    REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "../bad\n");
+  }
+
+  SECTION("previous-version matches active-version") {
+    const auto package_dir =
+        CreatePackage(test_root, "agent", "0.2.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v2",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
+    WriteTextFile(PreviousVersionPath(test_root, "agent"), "0.2.0\n");
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+    REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.2.0\n");
+  }
+
+  SECTION("previous release missing") {
+    const auto package_v1 =
+        CreatePackage(test_root / "v1", "agent", "0.1.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v1",
+                                       .executable = true}});
+    const auto package_v2 =
+        CreatePackage(test_root / "v2", "agent", "0.2.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v2",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+    fs::remove_all(ComponentRoot(test_root, "agent") / "releases" / "0.1.0");
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+    REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
+  }
+
+  SECTION("previous release tampered") {
+    const auto package_v1 =
+        CreatePackage(test_root / "v1", "agent", "0.1.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v1",
+                                       .executable = true}});
+    const auto package_v2 =
+        CreatePackage(test_root / "v2", "agent", "0.2.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v2",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+    WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.1.0"),
+                  "tampered-binary");
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+    REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
+  }
+
+  SECTION("active release corrupt") {
+    const auto package_v1 =
+        CreatePackage(test_root / "v1", "agent", "0.1.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v1",
+                                       .executable = true}});
+    const auto package_v2 =
+        CreatePackage(test_root / "v2", "agent", "0.2.0",
+                      {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                       .target = "bin/zfleet_agent",
+                                       .content = "agent-binary-v2",
+                                       .executable = true}});
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
+    REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
+    WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.2.0"),
+                  "tampered-binary");
+
+    const auto rollback = zfleet::installer::RollbackComponent(test_root, "agent");
+
+    REQUIRE_FALSE(rollback.ok);
+    REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
+    REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
+  }
 
   fs::remove_all(test_root);
 }
@@ -548,6 +834,14 @@ TEST_CASE("component installs stay isolated under the shared root") {
   REQUIRE(zfleet::installer::ApplyPackage(test_root, agent_package).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, server_package).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, installer_package).ok);
+  const auto agent_package_v2 =
+      CreatePackage(test_root / "agent-pkg-v2", "agent", "0.2.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary-v2",
+                                     .executable = true}});
+  REQUIRE(zfleet::installer::ApplyPackage(test_root, agent_package_v2).ok);
+  REQUIRE(zfleet::installer::RollbackComponent(test_root, "agent").ok);
 
   REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
                      "bin" / "zfleet_agent"));
@@ -555,12 +849,12 @@ TEST_CASE("component installs stay isolated under the shared root") {
                      "bin" / "zfleet_server"));
   REQUIRE(fs::exists(test_root / "zfleet" / "installer" / "releases" /
                      "0.1.0" / "bin" / "zfleet_installer"));
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "var" /
-                       "active-version") == "0.1.0\n");
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "server" / "var" /
-                       "active-version") == "0.1.0\n");
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "installer" / "var" /
-                       "active-version") == "0.1.0\n");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
+  REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.2.0\n");
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "server")) == "0.1.0\n");
+  REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "server")));
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "installer")) == "0.1.0\n");
+  REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "installer")));
 
   fs::remove_all(test_root);
 }
