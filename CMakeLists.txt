@@ -13,6 +13,7 @@ add_subdirectory(libs/protocol)
 add_subdirectory(libs/platform)
 
 add_subdirectory(apps/agent)
+add_subdirectory(apps/installer)
 add_subdirectory(apps/server)
 
 if(BUILD_TESTING)

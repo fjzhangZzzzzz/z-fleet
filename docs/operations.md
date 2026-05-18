@@ -99,7 +99,7 @@ enable_console = true
 
 ## 部署、发布与升级
 
-当前 installer 尚未实现；后续部署、发布、升级和回滚流程以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
+当前已完成 P2 范围内的 installer 最小 `apply` / `status` 能力；后续部署、发布、升级和回滚流程继续以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
 
 本文档当前仅承接实施分期，不展开未实现命令、完整 manifest schema 或平台脚本细节：
 
@@ -107,6 +107,66 @@ enable_console = true
 - `P2`：落地 manifest/package 基本结构，以及 installer 最小 `apply` / `status` 能力。
 - `P3`：补齐 active-version launcher 与 `rollback` 流程，形成相邻版本切换能力。
 - `P4`：完成跨平台验证、脚本接入和运维说明完善。
+
+### P2：installer 最小命令
+
+当前仅支持**目录形式 package**：
+
+- `<package_dir>/META/manifest.json`
+- `<package_dir>/payload/...`
+
+最小命令：
+
+```bash
+./build/linux-debug/apps/installer/zfleet_installer apply \
+  --root /tmp/zfleet-root \
+  --package /tmp/packages/agent-0.1.0
+
+./build/linux-debug/apps/installer/zfleet_installer status \
+  --root /tmp/zfleet-root \
+  --component agent
+```
+
+`status` 输出为单行 JSON。当前状态值：
+
+- `not_installed`
+- `installed`
+- `corrupt`
+
+示例：
+
+```json
+{"component":"agent","state":"installed","version":"0.1.0"}
+```
+
+### P2：manifest 最小 schema
+
+```json
+{
+  "schema_version": 1,
+  "component": "agent",
+  "version": "0.1.0",
+  "min_installer_version": "0.1.0",
+  "files": [
+    {
+      "source": "payload/bin/zfleet_agent",
+      "target": "bin/zfleet_agent",
+      "size": 123,
+      "sha256": "64 lowercase hex chars",
+      "executable": true
+    }
+  ],
+  "signatures": []
+}
+```
+
+P2 约束：
+
+- `component` 仅支持 `agent`、`server`、`installer`。
+- `min_installer_version` 当前只要求字段存在且非空，不做版本比较。
+- `source`、`target` 必须是安全相对路径；`source` 必须位于 `payload/` 下，`target` 不得写入 `META/`。
+- `apply` 仅做完整性校验：检查文件存在、普通文件属性、大小、SHA-256，且 source 路径不得经过符号链接。
+- `signatures` 字段可缺省或为空；P2 **不做签名验证，也不提供签名来源认证**。
 
 ## 排障
 
