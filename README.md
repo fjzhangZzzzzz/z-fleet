@@ -84,11 +84,12 @@ z-fleet/
 本地和 CI 共用同一套脚本与 CMake presets：
 
 ```bash
-./scripts/build.sh linux-debug
-./scripts/test.sh linux-debug
+./scripts/build.sh
+./scripts/test.sh
 ```
 
 Windows 本地构建要求在 Git Bash 中执行脚本，并提前安装 Visual Studio Build Tools、CMake、Ninja 和 Git。
+未指定 preset 时，Linux 默认使用 `linux-debug`，Windows Git Bash 默认使用 `windows-debug`。
 
 更多构建、配置、运行和排障说明见 [docs/operations.md](docs/operations.md)。
 

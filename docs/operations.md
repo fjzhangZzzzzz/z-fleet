@@ -13,8 +13,15 @@
 项目使用 CMake + vcpkg manifest mode。
 
 ```bash
-./scripts/build.sh linux-debug
-./scripts/test.sh linux-debug
+./scripts/build.sh
+./scripts/test.sh
+```
+
+未指定 preset 时，Linux 默认使用 `linux-debug`，Windows Git Bash 默认使用 `windows-debug`。也可以显式指定：
+
+```bash
+./scripts/build.sh linux-release
+./scripts/test.sh linux-release
 ```
 
 标准预设：
@@ -29,7 +36,7 @@
 测试通过 CTest 运行，单元测试与小型组件测试统一使用 Catch2。
 
 ```bash
-./scripts/test.sh linux-debug
+./scripts/test.sh
 ctest --preset linux-debug
 ```
 
@@ -99,14 +106,15 @@ enable_console = true
 
 ## 部署、发布与升级
 
-当前已完成 P3 范围内的 installer 最小 `apply` / `status` / `rollback` 能力和 active-version launcher；后续部署、发布、升级和回滚流程继续以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
+当前已完成 P4 范围内的 installer 本地打包与部署脚本接入；后续部署、发布、升级和回滚流程继续以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 作为决策依据。
 
-本文档当前仅承接实施分期，不展开未实现命令、完整 manifest schema 或平台脚本细节：
+当前实施分期如下；已实现项在对应小节记录可执行用法，未实现能力只记录边界：
 
 - `P1`：文档收口与承接，确认 ADR 0006 为决策源，并在运维文档集中记录部署、发布、升级、回滚主题入口。
 - `P2`：落地 manifest/package 基本结构，以及 installer 最小 `apply` / `status` 能力。
 - `P3`：补齐 active-version launcher 与 `rollback` 流程，形成相邻版本切换能力。
-- `P4`：完成跨平台验证、脚本接入和运维说明完善。
+- `P4`：完成本地 `package` / `deploy-local` 脚本接入、bootstrap stub 复制和运维说明完善。
+- `P5.1`：提取 `scripts/lib/common.sh` 公共脚本库，为后续 C/C++ 打包工具和归档部署准备。
 
 ### P2：installer 最小命令
 
@@ -199,10 +207,249 @@ launcher 目录与启动模型：
 - 参数按原样透传，不经过 shell；POSIX 通过 `execv` 替换当前进程，Windows 分支等待子进程并返回其退出码。
 - P3 **不负责** 服务级重启、运行中进程替换或旧进程清理；新版本生效点仍是下一次通过固定 stub 路径启动组件。
 
+### P4：本地打包与部署脚本
+
+P4 提供两个仓库脚本：
+
+- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 生成**目录形式 package**。
+- `scripts/deploy-local.sh`：编排本地 `apply` / `status` / `rollback`，并在安装成功后复制 launcher stub 到固定 bootstrap 路径。
+
+P5.1 在 P4 脚本基础上提取 `scripts/lib/common.sh` 作为公共 shell 函数库，用于复用路径解析、平台判断和参数错误处理。该文件只提供 `zf_` 前缀函数与仓库路径推导，不直接执行构建、打包或部署动作。
+
+P4 仍然只支持组件：
+
+- `agent`
+- `server`
+- `installer`
+
+#### package 目录布局
+
+`package.sh` 只生成目录，不做压缩、签名、归档或下载。默认输出到 `<repo>/build/packages/<component>/<version>/`：
+
+```text
+build/packages/
+  agent/
+    0.1.0/
+      META/
+        manifest.json
+      payload/
+        bin/
+          zfleet_agent
+```
+
+`manifest.json` 由脚本直接生成，最小结构如下：
+
+```json
+{
+  "schema_version": 1,
+  "component": "agent",
+  "version": "0.1.0",
+  "min_installer_version": "0.1.0",
+  "files": [
+    {
+      "source": "payload/bin/zfleet_agent",
+      "target": "bin/zfleet_agent",
+      "size": 123,
+      "sha256": "64 lowercase hex chars",
+      "executable": true
+    }
+  ],
+  "signatures": []
+}
+```
+
+约束：
+
+- `version` 和 `min_installer_version` 只允许安全单段字符：`[A-Za-z0-9._-]+`，且不得为 `.` 或 `..`。
+- package 目录已存在时默认失败；只有 `--force` 才会删除**将要生成的那个 package 目录**。
+- `component` 目录隔离，路径保持下划线命名风格，不引入额外 bundle 或多文件层级。
+- 当前只收集主程序二进制，不递归收集动态库，不处理签名，不生成压缩包。
+
+#### package.sh 用法
+
+```bash
+./scripts/package.sh --component <agent|server|installer> --version <version> \
+  [--preset <preset>] \
+  [--output-dir <dir>] \
+  [--min-installer-version <version>] \
+  [--build|--no-build] \
+  [--force]
+```
+
+默认值：
+
+- Linux 默认 `--preset linux-debug`
+- `MINGW` / `MSYS` / `CYGWIN` 默认 `--preset windows-debug`
+- `--output-dir` 默认 `<repo>/build/packages`
+- `--min-installer-version` 默认 `0.1.0`
+- 默认执行 `--build`
+
+示例：
+
+```bash
+./scripts/package.sh --component agent --version 0.1.0
+
+./scripts/package.sh --component server --version 0.1.1-rc1 \
+  --preset linux-release \
+  --no-build
+
+./scripts/package.sh --component installer --version 0.1.0 \
+  --output-dir /tmp/zfleet-packages \
+  --force
+```
+
+说明：
+
+- 日志写到 `stderr`。
+- `stdout` 最后一行输出 package 绝对路径，便于外层脚本捕获。
+- Linux 优先使用 `sha256sum`；macOS 兼容 `shasum -a 256`；Windows Git Bash 一般使用 `sha256sum`。
+
+#### deploy-local.sh 用法
+
+```bash
+./scripts/deploy-local.sh apply --component <component> --version <version> \
+  [--root <root>] \
+  [--preset <preset>] \
+  [--packages-dir <dir>] \
+  [--package-dir <dir>] \
+  [--force-package] \
+  [--build|--no-build]
+
+./scripts/deploy-local.sh status --component <component> \
+  [--root <root>] \
+  [--preset <preset>]
+
+./scripts/deploy-local.sh rollback --component <component> \
+  [--root <root>] \
+  [--preset <preset>]
+```
+
+默认值：
+
+- `--root` 默认 `/tmp/zfleet-root`
+- `--preset` 默认规则与 `package.sh` 相同
+- `--packages-dir` 默认 `<repo>/build/packages`
+
+行为：
+
+- `apply` 未指定 `--package-dir` 时，会先调用 `scripts/package.sh` 生成 package。
+- `apply` 指定 `--package-dir` 时，package manifest 中的 `component` / `version` 必须与命令行参数一致。
+- `apply` 指定 `--force-package` 时，会把 `--force` 透传给 `package.sh`。
+- `apply` 使用 `build/<preset>/apps/installer/zfleet_installer[.exe]` 执行安装。
+- `apply` 成功后，会把 `build/<preset>/apps/launcher/zfleet_<component>[.exe]` 复制到 `<root>/zfleet/<component>/bin/`，作为固定 bootstrap stub。
+- `status` / `rollback` 优先调用已部署的 `<root>/zfleet/installer/bin/zfleet_installer[.exe]`；不存在时回退到 `build/<preset>/apps/installer/zfleet_installer[.exe]`。
+
+#### 首次部署顺序
+
+首次在一个新的 root 上部署时，建议顺序如下：
+
+1. 先部署 `installer`，建立 `<root>/zfleet/installer/` 的 release 与 bootstrap stub。
+2. 再部署 `server`。
+3. 最后部署 `agent`。
+
+示例：
+
+```bash
+./scripts/deploy-local.sh apply --component installer --version 0.1.0
+./scripts/deploy-local.sh apply --component server --version 0.1.0
+./scripts/deploy-local.sh apply --component agent --version 0.1.0
+```
+
+如果 package 已经提前生成，也可以直接传目录：
+
+```bash
+./scripts/deploy-local.sh apply \
+  --component agent \
+  --version 0.1.0 \
+  --package-dir /tmp/zfleet-packages/agent/0.1.0 \
+  --no-build
+```
+
+#### 本地部署后的目录布局
+
+安装完成后，本地 root 的最小布局如下：
+
+```text
+/tmp/zfleet-root/
+  zfleet/
+    agent/
+      bin/
+        zfleet_agent
+      releases/
+        0.1.0/
+          META/
+            manifest.json
+          bin/
+            zfleet_agent
+      var/
+        active-version
+        previous-version
+```
+
+说明：
+
+- `bin/zfleet_*` 是 launcher stub，不是 release 内真实业务二进制。
+- `releases/<version>/bin/zfleet_*` 才是 manifest 管理的真实目标。
+- 首次安装通常只有 `active-version`；发生版本切换后才会出现 `previous-version`。
+
+#### status 与 rollback 示例
+
+查看状态：
+
+```bash
+./scripts/deploy-local.sh status --component agent
+```
+
+可能输出：
+
+```json
+{"component":"agent","state":"installed","version":"0.1.0"}
+```
+
+执行回滚：
+
+```bash
+./scripts/deploy-local.sh rollback --component agent
+```
+
+常见流程：
+
+1. 部署 `0.1.0`
+2. 再部署 `0.1.1`
+3. 如需回退，执行 `rollback`
+4. launcher 后续从固定 `bin/zfleet_agent` 启动时，将重新指向 `0.1.0`
+
+#### 错误与边界
+
+- 参数错误统一返回 `2`。
+- 执行失败统一返回 `1`。
+- `package.sh` 找不到构建产物、哈希工具缺失、package 已存在且未加 `--force` 时会失败。
+- `deploy-local.sh apply` 不负责服务停机、进程替换或运行中热更新；只负责生成 package、调用 installer 和复制 stub。
+- `deploy-local.sh status` 如果已部署 installer stub 存在但其 `active-version` 或目标 release 已损坏，会按 installer 的错误或 `corrupt` 状态返回。
+- 当前不会自动清理旧版本 package 目录，也不会清理 `<root>/zfleet/<component>/releases/` 中的历史版本。
+
+#### 跨平台边界
+
+- Windows Git Bash 下，如检测到 `cygpath`，脚本会把传给原生 `.exe` 的 `--root` / `--package` 参数转换为 Windows 本地路径。
+- package 内部的 `manifest.json` 路径分隔符始终保持 `/`，不随宿主平台变化。
+- 当前脚本只处理主二进制与 launcher stub，不负责 `.dll`、`.so`、`.dylib` 的递归打包和安装。
+
+#### P4 明确不纳入范围
+
+以下能力不属于 P4：
+
+- 签名与签名验证
+- 压缩、归档、解包
+- 远程下载与自更新拉取
+- service 管理
+- 动态库递归收集
+- 旧版本自动清理
+- 运行中进程替换
+
 ## 排障
 
 - 构建失败：
-  先执行 `./scripts/build.sh linux-debug`，如果失败，优先检查 `VCPKG_ROOT`、CMake preset 和本地编译器是否可用。
+  先执行 `./scripts/build.sh`，如果失败，优先检查 `VCPKG_ROOT`、CMake preset 和本地编译器是否可用。
 - Server 监听失败：
   检查 `--listen` 或配置文件中的 `server.listen` 是否被占用，确认绑定地址和端口格式为 `host:port`。
 - Agent 注册、心跳或资产上报失败：

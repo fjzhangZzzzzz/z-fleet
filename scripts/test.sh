@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-preset="${1:-}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-if [[ -z "$preset" ]]; then
-  echo "Usage: $0 <cmake-preset>" >&2
-  exit 2
-fi
+preset="${1:-$(zf_default_preset)}"
 
-# source "$script_dir/bootstrap-vcpkg.sh"
+# source "$ZF_SCRIPT_DIR/bootstrap-vcpkg.sh"
 
 ctest --preset "$preset"

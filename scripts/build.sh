@@ -1,25 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
-preset="${1:-}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-if [[ -z "$preset" ]]; then
-  echo "Usage: $0 <cmake-preset>" >&2
-  exit 2
-fi
+script_dir="$ZF_SCRIPT_DIR"
+repo_root="$ZF_REPO_ROOT"
+preset="${1:-$(zf_default_preset)}"
 
 source "$script_dir/bootstrap-vcpkg.sh"
 
 cache_dir="$repo_root/.cache/vcpkg/archives"
 mkdir -p "$cache_dir"
 
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    cache_dir="$(cygpath -am "$cache_dir")"
-    ;;
-esac
+cache_dir="$(zf_to_native_path_if_needed "$cache_dir")"
 
 export VCPKG_BINARY_SOURCES="clear;files,$cache_dir,readwrite"
 
