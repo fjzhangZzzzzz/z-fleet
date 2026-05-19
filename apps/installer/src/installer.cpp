@@ -2,8 +2,13 @@
 
 #include "manifest.h"
 
+#include <zfleet/package/archive.h>
+
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -11,6 +16,12 @@
 #include <string>
 #include <system_error>
 #include <utility>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace zfleet::installer {
 namespace {
@@ -228,6 +239,48 @@ void StageRelease(const fs::path& package_dir,
                 fs::copy_options::overwrite_existing);
 }
 
+fs::path CreateUniqueTempDirectory() {
+  const auto base_dir = fs::temp_directory_path() / "zfleet-installer";
+  fs::create_directories(base_dir);
+
+  static std::atomic<std::uint64_t> counter{0};
+#ifdef _WIN32
+  const auto process_id = static_cast<unsigned long>(_getpid());
+#else
+  const auto process_id = static_cast<unsigned long>(::getpid());
+#endif
+  const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+
+  for (int attempt = 0; attempt < 128; ++attempt) {
+    const auto candidate = base_dir / (std::to_string(process_id) + "-" +
+                                       std::to_string(timestamp) + "-" +
+                                       std::to_string(counter.fetch_add(1)));
+    std::error_code ec;
+    if (fs::create_directories(candidate, ec) && !ec) {
+      return candidate;
+    }
+    if (fs::exists(candidate, ec) && !ec && fs::is_directory(candidate, ec) &&
+        !ec) {
+      continue;
+    }
+  }
+
+  throw std::runtime_error("failed to create temporary directory");
+}
+
+struct TempDirectoryGuard {
+  fs::path path;
+
+  ~TempDirectoryGuard() {
+    if (path.empty()) {
+      return;
+    }
+
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
+};
+
 ActiveReleaseInfo InspectActiveRelease(const ComponentPaths& paths,
                                        const std::string& component) {
   if (!fs::exists(paths.active_version_path)) {
@@ -317,7 +370,8 @@ bool IsKnownComponent(const std::string& component) {
          component == "installer";
 }
 
-ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
+ApplyResult ApplyPackageDirectory(const fs::path& root,
+                                  const fs::path& package_dir) {
   try {
     if (!fs::exists(package_dir) || !fs::is_directory(package_dir)) {
       throw std::runtime_error("package must be a directory");
@@ -363,6 +417,34 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_dir) {
                        .component = manifest.component,
                        .version = manifest.version,
                        .message = "applied"};
+  } catch (const std::exception& ex) {
+    return ApplyResult{.ok = false,
+                       .component = {},
+                       .version = {},
+                       .message = ex.what()};
+  }
+}
+
+ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_path) {
+  if (fs::exists(package_path) && fs::is_directory(package_path)) {
+    return ApplyPackageDirectory(root, package_path);
+  }
+
+  if (!zfleet::package::IsArchivePath(package_path)) {
+    return ApplyResult{.ok = false,
+                       .component = {},
+                       .version = {},
+                       .message = "package must be a directory or .zip archive"};
+  }
+
+  try {
+    const auto temp_dir = CreateUniqueTempDirectory();
+    TempDirectoryGuard cleanup{.path = temp_dir};
+
+    zfleet::package::ExtractArchive(
+        {.archive_path = package_path, .output_dir = temp_dir, .force = true});
+
+    return ApplyPackageDirectory(root, temp_dir);
   } catch (const std::exception& ex) {
     return ApplyResult{.ok = false,
                        .component = {},

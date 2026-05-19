@@ -8,6 +8,7 @@ add_library(zfleet_packager_app
 target_link_libraries(zfleet_packager_app
   PRIVATE
     OpenSSL::Crypto
+    zfleet::package
 )
 
 target_include_directories(zfleet_packager_app
@@ -40,6 +41,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_packager_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::package
       zfleet_packager_app
   )
 

@@ -115,13 +115,18 @@ enable_console = true
 - `P3`：补齐 active-version launcher 与 `rollback` 流程，形成相邻版本切换能力。
 - `P4`：完成本地 `package` / `deploy-local` 脚本接入、bootstrap stub 复制和运维说明完善。
 - `P5.1`：提取 `scripts/lib/common.sh` 公共脚本库，为后续 C/C++ 打包工具和归档部署准备。
+- `P5.2`：由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。
+- `P5.3`：增加归档输入支持，保持目录包作为默认发布形态。
+- `P5.4`：将安装包归档收敛为标准 `.zip` 容器，支持按需列出条目、单独读取 `META/manifest.json`，并以流式方式处理 `Create` / `Extract` 的 payload，避免大文件 OOM；后续签名只需在 `META/` 下新增 manifest 签名文件，不影响归档格式。
 
 ### P2：installer 最小命令
 
-当前仅支持**目录形式 package**：
+当前支持**目录形式 package** 和 **`.zip` 压缩归档包**：
 
 - `<package_dir>/META/manifest.json`
 - `<package_dir>/payload/...`
+
+归档包使用标准 ZIP 容器和 deflate 压缩。归档库支持不完整解压即可列出条目、单独读取 `META/manifest.json`，便于后续先验证安装包元信息；当前 `zfleet_installer apply` 仍先解压到临时目录，再复用目录 package 的完整性校验。Create / Extract 都采用流式处理，避免一次性把大 payload 载入内存。
 
 最小命令：
 
@@ -211,12 +216,16 @@ launcher 目录与启动模型：
 
 P4 提供两个仓库脚本：
 
-- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 编排目录形式 package，底层调用 `build/<preset>/apps/packager/zfleet_packager[.exe] pack-dir`。
+- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 编排 package，默认生成目录包，`--archive` 时调用 `build/<preset>/apps/packager/zfleet_packager[.exe] pack-archive` 生成 ZIP 安装包。
 - `scripts/deploy-local.sh`：编排本地 `apply` / `status` / `rollback`，并在安装成功后复制 launcher stub 到固定 bootstrap 路径。
 
 P5.1 在 P4 脚本基础上提取 `scripts/lib/common.sh` 作为公共 shell 函数库，用于复用路径解析、平台判断和参数错误处理。该文件只提供 `zf_` 前缀函数与仓库路径推导，不直接执行构建、打包或部署动作。
 
-P5.2 由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。当前阶段仍只生成目录 package，不做 `.zfpkg` 压缩归档，也不做签名或动态库递归收集；`.zfpkg` 压缩归档留到下一阶段。
+P5.2 由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。当前阶段目录 package 仍是默认输出，不做签名或动态库递归收集。
+
+P5.3 在 P5.2 基础上补齐归档输入支持。归档内部仍然只包含 `META/manifest.json + payload/...`，不纳入签名、远程下载、service 管理或运行中替换。
+
+P5.4 在 P5.3 基础上将归档格式固定为标准 `.zip`，并明确采用流式 Create / Extract，保证归档/解包过程不因大文件触发 OOM。签名后续只需在 `META/` 下增加 manifest 签名文件，不改变归档格式。
 
 P4 仍然只支持组件：
 
@@ -226,7 +235,7 @@ P4 仍然只支持组件：
 
 #### package 目录布局
 
-`package.sh` 只编排目录 package 生成，不做压缩、签名、归档或下载。默认输出到 `<repo>/build/packages/<component>/<version>/`：
+`package.sh` 默认只编排目录 package 生成，不做签名或下载；加 `--archive` 时改为生成 `.zip` 归档。默认输出到 `<repo>/build/packages/<component>/<version>/`：
 
 ```text
 build/packages/
@@ -298,13 +307,21 @@ build/packages/
 ./scripts/package.sh --component installer --version 0.1.0 \
   --output-dir /tmp/zfleet-packages \
   --force
+
+./scripts/package.sh --component agent --version 0.1.0 \
+  --archive
+
+./scripts/package.sh --component agent --version 0.1.0 \
+  --preset linux-release \
+  --archive
 ```
 
 说明：
 
 - 日志写到 `stderr`。
-- `stdout` 最后一行输出 package 绝对路径，便于外层脚本捕获。
-- hash、manifest 和目录复制逻辑都由 `zfleet_packager pack-dir` 负责，`package.sh` 只做参数编排与输出转发。
+- `stdout` 最后一行输出 package 绝对路径；目录模式输出 package 目录，`--archive` 模式输出 `.zip` 绝对路径。
+- 目录模式下，hash、manifest 和目录复制逻辑都由 `zfleet_packager pack-dir` 负责；`--archive` 模式下对应逻辑由 `zfleet_packager pack-archive` 负责，`package.sh` 只做参数编排与输出转发。
+- `--archive` 会调用 `zfleet_packager pack-archive`，其余参数含义与目录模式保持一致。
 
 #### deploy-local.sh 用法
 
@@ -426,6 +443,7 @@ build/packages/
 - 参数错误统一返回 `2`。
 - 执行失败统一返回 `1`。
 - `package.sh` 找不到构建产物、哈希工具缺失、package 已存在且未加 `--force` 时会失败。
+- `package.sh --archive` 找不到构建产物、哈希工具缺失、归档目标已存在且未加 `--force` 时会失败。
 - `deploy-local.sh apply` 不负责服务停机、进程替换或运行中热更新；只负责生成 package、调用 installer 和复制 stub。
 - `deploy-local.sh status` 如果已部署 installer stub 存在但其 `active-version` 或目标 release 已损坏，会按 installer 的错误或 `corrupt` 状态返回。
 - 当前不会自动清理旧版本 package 目录，也不会清理 `<root>/zfleet/<component>/releases/` 中的历史版本。
@@ -435,6 +453,7 @@ build/packages/
 - Windows Git Bash 下，如检测到 `cygpath`，脚本会把传给原生 `.exe` 的 `--root` / `--package` 参数转换为 Windows 本地路径。
 - package 内部的 `manifest.json` 路径分隔符始终保持 `/`，不随宿主平台变化。
 - 当前脚本只处理主二进制与 launcher stub，不负责 `.dll`、`.so`、`.dylib` 的递归打包和安装。
+- `deploy-local.sh` 仍主要面向目录包工作流；如果要用 `.zip` 归档包，建议直接调用 `zfleet_installer apply --package <file.zip>`。
 
 #### P4 明确不纳入范围
 

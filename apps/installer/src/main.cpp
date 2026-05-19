@@ -12,9 +12,10 @@ int main(int argc, char** argv) {
 
   std::string root_arg;
   std::string package_arg;
-  auto* apply_command = app.add_subcommand("apply", "Apply a package directory");
+  auto* apply_command =
+      app.add_subcommand("apply", "Apply a package directory or .zip archive");
   apply_command->add_option("--root", root_arg, "Install root")->required();
-  apply_command->add_option("--package", package_arg, "Package directory")
+  apply_command->add_option("--package", package_arg, "Package path")
       ->required();
 
   std::string status_root_arg;

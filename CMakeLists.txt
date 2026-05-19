@@ -11,6 +11,7 @@ include(CTest)
 add_subdirectory(libs/core)
 add_subdirectory(libs/protocol)
 add_subdirectory(libs/platform)
+add_subdirectory(libs/package)
 
 add_subdirectory(apps/agent)
 add_subdirectory(apps/installer)

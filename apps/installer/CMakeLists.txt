@@ -12,6 +12,7 @@ target_link_libraries(zfleet_installer_app
   PRIVATE
     OpenSSL::Crypto
     nlohmann_json::nlohmann_json
+    zfleet::package
 )
 
 target_include_directories(zfleet_installer_app
@@ -44,6 +45,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_installer_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::package
       zfleet_installer_app
   )
 

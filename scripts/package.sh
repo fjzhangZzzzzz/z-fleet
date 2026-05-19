@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./scripts/package.sh --component <agent|server|installer> --version <version> [--preset <preset>] [--output-dir <dir>] [--min-installer-version <version>] [--build|--no-build] [--force]
+Usage: ./scripts/package.sh --component <agent|server|installer> --version <version> [--preset <preset>] [--output-dir <dir>] [--min-installer-version <version>] [--build|--no-build] [--force] [--archive]
 EOF
 }
 
@@ -17,6 +17,7 @@ output_dir="$repo_root/build/packages"
 min_installer_version="0.1.0"
 do_build=1
 force=0
+archive=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +56,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force)
       force=1
+      shift
+      ;;
+    --archive)
+      archive=1
       shift
       ;;
     -h|--help)
@@ -96,14 +101,26 @@ fi
 [[ -f "$source_binary" ]] || zf_fail_exec "built binary not found: $source_binary"
 [[ -f "$packager_binary" ]] || zf_fail_exec "packager binary not found: $packager_binary"
 
-packager_args=(
-  pack-dir
-  --component "$component"
-  --version "$version"
-  --binary "$source_binary_arg"
-  --output-dir "$output_dir_arg"
-  --min-installer-version "$min_installer_version"
-)
+packager_args=()
+if [[ $archive -eq 1 ]]; then
+  packager_args+=(
+    pack-archive
+    --component "$component"
+    --version "$version"
+    --binary "$source_binary_arg"
+    --output-dir "$output_dir_arg"
+    --min-installer-version "$min_installer_version"
+  )
+else
+  packager_args+=(
+    pack-dir
+    --component "$component"
+    --version "$version"
+    --binary "$source_binary_arg"
+    --output-dir "$output_dir_arg"
+    --min-installer-version "$min_installer_version"
+  )
+fi
 if [[ $force -eq 1 ]]; then
   packager_args+=(--force)
 fi
@@ -116,9 +133,9 @@ if [[ $packager_exit -ne 0 ]]; then
   exit "$packager_exit"
 fi
 
-package_dir="$(printf '%s\n' "$packager_output" | tail -n 1)"
-package_dir="${package_dir%$'\r'}"
-[[ -n "$package_dir" ]] || zf_fail_exec "packager did not report package path"
-package_dir="$(zf_to_posix_path_if_needed "$package_dir")"
+package_path="$(printf '%s\n' "$packager_output" | tail -n 1)"
+package_path="${package_path%$'\r'}"
+[[ -n "$package_path" ]] || zf_fail_exec "packager did not report package path"
+package_path="$(zf_to_posix_path_if_needed "$package_path")"
 
-printf '%s\n' "$package_dir"
+printf '%s\n' "$package_path"

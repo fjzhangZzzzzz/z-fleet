@@ -1,6 +1,8 @@
 #include "installer.h"
 #include "manifest.h"
 
+#include <zfleet/package/archive.h>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -10,8 +12,11 @@
 #include <optional>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -35,8 +40,13 @@ struct ManifestEntrySpec {
 std::atomic<int> g_test_sequence = 0;
 
 fs::path MakeTestRoot() {
+#ifndef _WIN32
+  const auto process_id = getpid();
+#else
+  const auto process_id = 0;
+#endif
   return fs::temp_directory_path() / "zfleet-installer-tests" /
-         (std::to_string(getpid()) + "-" +
+         (std::to_string(process_id) + "-" +
           std::to_string(g_test_sequence.fetch_add(1)));
 }
 
@@ -139,6 +149,12 @@ fs::path CreatePackage(const fs::path& root,
           : *manifest_override;
   WriteTextFile(package_dir / "META" / "manifest.json", manifest);
   return package_dir;
+}
+
+fs::path CreateArchivePackage(const fs::path& package_dir,
+                              const fs::path& archive_path) {
+  zfleet::package::CreateArchive({package_dir, archive_path, true});
+  return archive_path;
 }
 
 std::string ReadTextFile(const fs::path& path) {
@@ -340,6 +356,36 @@ TEST_CASE("apply writes release content and active-version") {
   REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
+
+  fs::remove_all(test_root);
+}
+
+TEST_CASE("apply accepts a .zip archive and preserves directory install checks") {
+  const auto test_root = MakeTestRoot();
+  fs::remove_all(test_root);
+  fs::create_directories(test_root);
+
+  const auto package_dir =
+      CreatePackage(test_root / "package-dir", "agent", "0.1.0",
+                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
+                                     .target = "bin/zfleet_agent",
+                                     .content = "agent-binary",
+                                     .executable = true}});
+  const auto archive_path = test_root / "package.zip";
+  CreateArchivePackage(package_dir, archive_path);
+
+  const auto result = zfleet::installer::ApplyPackage(test_root, archive_path);
+
+  REQUIRE(result.ok);
+  REQUIRE(result.component == "agent");
+  REQUIRE(result.version == "0.1.0");
+  const auto release_root =
+      test_root / "zfleet" / "agent" / "releases" / "0.1.0";
+  REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
+  REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
+  REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
 
   fs::remove_all(test_root);
 }
