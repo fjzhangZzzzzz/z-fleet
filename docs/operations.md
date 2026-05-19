@@ -113,11 +113,14 @@ enable_console = true
 - `P1`：文档收口与承接，确认 ADR 0006 为决策源，并在运维文档集中记录部署、发布、升级、回滚主题入口。
 - `P2`：落地 manifest/package 基本结构，以及 installer 最小 `apply` / `status` 能力。
 - `P3`：补齐 active-version launcher 与 `rollback` 流程，形成相邻版本切换能力。
-- `P4`：完成本地 `package` / `deploy-local` 脚本接入、bootstrap stub 复制和运维说明完善。
+- `P4`：完成本地打包 / 安装脚本接入、bootstrap stub 复制和运维说明完善。
 - `P5.1`：提取 `scripts/lib/common.sh` 公共脚本库，为后续 C/C++ 打包工具和归档部署准备。
-- `P5.2`：由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。
+- `P5.2`：由 C/C++ packager 接管目录 package 生成，打包脚本只保留 CLI 编排、构建前置和路径校验。
 - `P5.3`：增加归档输入支持，保持目录包作为默认发布形态。
 - `P5.4`：将安装包归档收敛为标准 `.zip` 容器，支持按需列出条目、单独读取 `META/manifest.json`，并以流式方式处理 `Create` / `Extract` 的 payload，避免大文件 OOM；后续签名只需在 `META/` 下新增 manifest 签名文件，不影响归档格式。
+- `P5.5`：收口本地归档部署链路，`install-local.sh apply --zip` 先调用 `scripts/make-package.sh --zip` 生成 ZIP，再调用 installer `apply --package <zip>`；安装成功后仍复制 launcher stub。该阶段不引入签名、远程下载、service 管理或运行中替换。
+- `P5.6`：packager payload-dir 多文件输入与 CLI 收敛，入口统一为 `zfleet_packager pack`，由 `--payload-dir` + `--entry` 描述输入，`--zip` 仅控制输出目录包或 ZIP。
+- `P5.7`：脚本职责与版本来源收敛，`make-package.sh` 面向 CI/本地生成安装包，`install-local.sh` 面向本地 root 安装；组件作为位置参数，package 版本从 CMake 生成的组件版本文件读取，不再由脚本手输。
 
 ### P2：installer 最小命令
 
@@ -127,6 +130,18 @@ enable_console = true
 - `<package_dir>/payload/...`
 
 归档包使用标准 ZIP 容器和 deflate 压缩。归档库支持不完整解压即可列出条目、单独读取 `META/manifest.json`，便于后续先验证安装包元信息；当前 `zfleet_installer apply` 仍先解压到临时目录，再复用目录 package 的完整性校验。Create / Extract 都采用流式处理，避免一次性把大 payload 载入内存。
+
+`zfleet_packager pack` 的输入以 payload 目录为中心：`scripts/make-package.sh` 会先创建 staging payload 目录，当前默认只放主程序 binary，后续可扩展动态库或其他文件收集；packager 遍历 `--payload-dir` 下的文件并生成 `manifest.files[]`，再根据 `--zip` 输出目录包或 ZIP。日常和 CI 优先使用脚本入口，不直接调用 packager。
+
+```bash
+zfleet_packager pack \
+  --component <agent|server|installer> \
+  --version <version> \
+  --payload-dir <payload-dir> \
+  --entry <entry-path> \
+  --output-dir <dir> \
+  [--zip]
+```
 
 最小命令：
 
@@ -216,12 +231,12 @@ launcher 目录与启动模型：
 
 P4 提供两个仓库脚本：
 
-- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 编排 package，默认生成目录包，`--archive` 时调用 `build/<preset>/apps/packager/zfleet_packager[.exe] pack-archive` 生成 ZIP 安装包。
-- `scripts/deploy-local.sh`：编排本地 `apply` / `status` / `rollback`，并在安装成功后复制 launcher stub 到固定 bootstrap 路径。
+- `scripts/make-package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 和同目录组件版本文件编排 package，先创建 staging payload 目录并调用 `build/<preset>/apps/packager/zfleet_packager[.exe] pack`，默认生成目录包，`--zip` 时输出 ZIP 安装包。
+- `scripts/install-local.sh`：编排本地 `apply` / `status` / `rollback`，并在安装成功后复制 launcher stub 到固定 bootstrap 路径。
 
-P5.1 在 P4 脚本基础上提取 `scripts/lib/common.sh` 作为公共 shell 函数库，用于复用路径解析、平台判断和参数错误处理。该文件只提供 `zf_` 前缀函数与仓库路径推导，不直接执行构建、打包或部署动作。
+P5.1 在 P4 脚本基础上提取 `scripts/lib/common.sh` 作为公共 shell 函数库，用于复用路径解析、平台判断和参数错误处理。该文件只提供 `zf_` 前缀函数与仓库路径推导，不直接执行构建、打包或安装动作。
 
-P5.2 由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。当前阶段目录 package 仍是默认输出，不做签名或动态库递归收集。
+P5.2 由 C/C++ packager 接管目录 package 生成，`scripts/make-package.sh` 只保留 CLI 编排、构建前置和路径校验。当前阶段目录 package 仍是默认输出，不做签名或动态库递归收集。
 
 P5.3 在 P5.2 基础上补齐归档输入支持。归档内部仍然只包含 `META/manifest.json + payload/...`，不纳入签名、远程下载、service 管理或运行中替换。
 
@@ -235,7 +250,7 @@ P4 仍然只支持组件：
 
 #### package 目录布局
 
-`package.sh` 默认只编排目录 package 生成，不做签名或下载；加 `--archive` 时改为生成 `.zip` 归档。默认输出到 `<repo>/build/packages/<component>/<version>/`：
+`make-package.sh` 默认只编排目录 package 生成，不做签名或下载；加 `--zip` 时改为生成 `.zip` 归档。版本从 `build/<preset>/apps/<component>/zfleet_<component>_version.txt` 读取，默认输出到 `<repo>/build/packages/<component>/<version>/`：
 
 ```text
 build/packages/
@@ -273,72 +288,71 @@ build/packages/
 
 - `version` 和 `min_installer_version` 只允许安全单段字符：`[A-Za-z0-9._-]+`，且不得为 `.` 或 `..`。
 - package 目录已存在时默认失败；只有 `--force` 才会删除**将要生成的那个 package 目录**。
-- `component` 目录隔离，路径保持下划线命名风格，不引入额外 bundle 或多文件层级。
-- 当前只收集主程序二进制，不递归收集动态库，不处理签名，不生成压缩包。
+- `component` 目录隔离，路径保持下划线命名风格；payload 可包含多文件和子目录，packager 会逐个生成 `files[]`。
+- 当前 staging payload 默认只收集主程序二进制；packager 仍按 `payload-dir` 遍历生成 `files[]`，不递归收集动态库，不处理签名，是否生成 ZIP 由 `--zip` 控制。
 
-#### package.sh 用法
+#### make-package.sh 用法
 
 ```bash
-./scripts/package.sh --component <agent|server|installer> --version <version> \
+./scripts/make-package.sh <agent|server|installer> \
   [--preset <preset>] \
-  [--output-dir <dir>] \
-  [--min-installer-version <version>] \
-  [--build|--no-build] \
-  [--force]
+  [--out <dir>] \
+  [--no-build] \
+  [--force] \
+  [--zip]
 ```
 
 默认值：
 
 - Linux 默认 `--preset linux-debug`
 - `MINGW` / `MSYS` / `CYGWIN` 默认 `--preset windows-debug`
-- `--output-dir` 默认 `<repo>/build/packages`
-- `--min-installer-version` 默认 `0.1.0`
-- 默认执行 `--build`
+- `--out` 默认 `<repo>/build/packages`
+- 默认执行构建；`--no-build` 表示复用现有构建产物
+- package 版本来自组件构建目录的 `zfleet_<component>_version.txt`，不通过脚本参数传入。
 
 示例：
 
 ```bash
-./scripts/package.sh --component agent --version 0.1.0
+./scripts/make-package.sh agent
 
-./scripts/package.sh --component server --version 0.1.1-rc1 \
+./scripts/make-package.sh server \
   --preset linux-release \
   --no-build
 
-./scripts/package.sh --component installer --version 0.1.0 \
-  --output-dir /tmp/zfleet-packages \
+./scripts/make-package.sh installer \
+  --out /tmp/zfleet-packages \
   --force
 
-./scripts/package.sh --component agent --version 0.1.0 \
-  --archive
+./scripts/make-package.sh agent --zip
 
-./scripts/package.sh --component agent --version 0.1.0 \
+./scripts/make-package.sh agent \
   --preset linux-release \
-  --archive
+  --zip
 ```
 
 说明：
 
 - 日志写到 `stderr`。
-- `stdout` 最后一行输出 package 绝对路径；目录模式输出 package 目录，`--archive` 模式输出 `.zip` 绝对路径。
-- 目录模式下，hash、manifest 和目录复制逻辑都由 `zfleet_packager pack-dir` 负责；`--archive` 模式下对应逻辑由 `zfleet_packager pack-archive` 负责，`package.sh` 只做参数编排与输出转发。
-- `--archive` 会调用 `zfleet_packager pack-archive`，其余参数含义与目录模式保持一致。
+- `stdout` 最后一行输出 package 绝对路径；目录模式输出 package 目录，`--zip` 模式输出 `.zip` 绝对路径。
+- `make-package.sh` 先创建 staging payload 目录并收集待打包文件，再调用 `zfleet_packager pack` 生成目录包或 ZIP。
+- `zfleet_packager pack` 的输入通过 `--payload-dir` + `--entry` 描述；`--payload-dir` 会被完整遍历生成 `files[]`，`--entry` 标识组件主入口，`--zip` 只决定输出目录包还是 ZIP。
+- 当前 staging payload 目录里默认只放主程序 binary，但文档约束不再假设 packager 只能处理单个 binary，后续可扩展为动态库和其他文件。
 
-#### deploy-local.sh 用法
+#### install-local.sh 用法
 
 ```bash
-./scripts/deploy-local.sh apply --component <component> --version <version> \
+./scripts/install-local.sh apply <component> \
   [--root <root>] \
   [--preset <preset>] \
-  [--packages-dir <dir>] \
-  [--package-dir <dir>] \
-  [--force-package] \
-  [--build|--no-build]
+  [--zip] \
+  [--force] \
+  [--no-build]
 
-./scripts/deploy-local.sh status --component <component> \
+./scripts/install-local.sh status <component> \
   [--root <root>] \
   [--preset <preset>]
 
-./scripts/deploy-local.sh rollback --component <component> \
+./scripts/install-local.sh rollback <component> \
   [--root <root>] \
   [--preset <preset>]
 ```
@@ -346,14 +360,14 @@ build/packages/
 默认值：
 
 - `--root` 默认 `/tmp/zfleet-root`
-- `--preset` 默认规则与 `package.sh` 相同
-- `--packages-dir` 默认 `<repo>/build/packages`
+- `--preset` 默认规则与 `make-package.sh` 相同
 
 行为：
 
-- `apply` 未指定 `--package-dir` 时，会先调用 `scripts/package.sh` 生成 package。
-- `apply` 指定 `--package-dir` 时，package manifest 中的 `component` / `version` 必须与命令行参数一致。
-- `apply` 指定 `--force-package` 时，会把 `--force` 透传给 `package.sh`。
+- `apply` 默认走目录部署链路，会先调用 `scripts/make-package.sh` 生成目录 package。
+- `apply` 指定 `--zip` 时，会先调用 `scripts/make-package.sh --zip` 生成 ZIP，再调用 installer `apply --package <zip>`。
+- `apply` 指定 `--force` 时，会把 `--force` 透传给 `make-package.sh`，用于覆盖本次生成的 package 或 ZIP。
+- `apply` 指定 `--no-build` 时，会把 `--no-build` 透传给 `make-package.sh`，复用现有构建产物。
 - `apply` 使用 `build/<preset>/apps/installer/zfleet_installer[.exe]` 执行安装。
 - `apply` 成功后，会把 `build/<preset>/apps/launcher/zfleet_<component>[.exe]` 复制到 `<root>/zfleet/<component>/bin/`，作为固定 bootstrap stub。
 - `status` / `rollback` 优先调用已部署的 `<root>/zfleet/installer/bin/zfleet_installer[.exe]`；不存在时回退到 `build/<preset>/apps/installer/zfleet_installer[.exe]`。
@@ -369,20 +383,12 @@ build/packages/
 示例：
 
 ```bash
-./scripts/deploy-local.sh apply --component installer --version 0.1.0
-./scripts/deploy-local.sh apply --component server --version 0.1.0
-./scripts/deploy-local.sh apply --component agent --version 0.1.0
+./scripts/install-local.sh apply installer
+./scripts/install-local.sh apply server
+./scripts/install-local.sh apply agent
 ```
 
-如果 package 已经提前生成，也可以直接传目录：
-
-```bash
-./scripts/deploy-local.sh apply \
-  --component agent \
-  --version 0.1.0 \
-  --package-dir /tmp/zfleet-packages/agent/0.1.0 \
-  --no-build
-```
+如果 package 已经提前生成，不再通过 `install-local.sh` 转发；应直接调用 `zfleet_installer apply --package <package>`，避免本地安装脚本同时承担生成包和任意包安装两类职责。
 
 #### 本地部署后的目录布局
 
@@ -416,7 +422,7 @@ build/packages/
 查看状态：
 
 ```bash
-./scripts/deploy-local.sh status --component agent
+./scripts/install-local.sh status agent
 ```
 
 可能输出：
@@ -428,7 +434,7 @@ build/packages/
 执行回滚：
 
 ```bash
-./scripts/deploy-local.sh rollback --component agent
+./scripts/install-local.sh rollback agent
 ```
 
 常见流程：
@@ -442,10 +448,10 @@ build/packages/
 
 - 参数错误统一返回 `2`。
 - 执行失败统一返回 `1`。
-- `package.sh` 找不到构建产物、哈希工具缺失、package 已存在且未加 `--force` 时会失败。
-- `package.sh --archive` 找不到构建产物、哈希工具缺失、归档目标已存在且未加 `--force` 时会失败。
-- `deploy-local.sh apply` 不负责服务停机、进程替换或运行中热更新；只负责生成 package、调用 installer 和复制 stub。
-- `deploy-local.sh status` 如果已部署 installer stub 存在但其 `active-version` 或目标 release 已损坏，会按 installer 的错误或 `corrupt` 状态返回。
+- `make-package.sh` 找不到构建产物、组件版本文件缺失、哈希工具缺失、package 已存在且未加 `--force` 时会失败。
+- `make-package.sh --zip` 找不到构建产物、组件版本文件缺失、哈希工具缺失、归档目标已存在且未加 `--force` 时会失败。
+- `install-local.sh apply` 不负责服务停机、进程替换或运行中热更新；只负责生成 package、调用 installer 和复制 stub。
+- `install-local.sh status` 如果已部署 installer stub 存在但其 `active-version` 或目标 release 已损坏，会按 installer 的错误或 `corrupt` 状态返回。
 - 当前不会自动清理旧版本 package 目录，也不会清理 `<root>/zfleet/<component>/releases/` 中的历史版本。
 
 #### 跨平台边界
@@ -453,7 +459,7 @@ build/packages/
 - Windows Git Bash 下，如检测到 `cygpath`，脚本会把传给原生 `.exe` 的 `--root` / `--package` 参数转换为 Windows 本地路径。
 - package 内部的 `manifest.json` 路径分隔符始终保持 `/`，不随宿主平台变化。
 - 当前脚本只处理主二进制与 launcher stub，不负责 `.dll`、`.so`、`.dylib` 的递归打包和安装。
-- `deploy-local.sh` 仍主要面向目录包工作流；如果要用 `.zip` 归档包，建议直接调用 `zfleet_installer apply --package <file.zip>`。
+- `install-local.sh` 的归档路径应由 `apply --zip` 收口：先由 `scripts/make-package.sh --zip` 产出 ZIP，再交给 installer `apply --package <zip>`，安装完成后仍复制 launcher stub。
 
 #### P4 明确不纳入范围
 

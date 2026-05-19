@@ -2,36 +2,48 @@
 
 #include <openssl/evp.h>
 
+#include <zfleet/package/archive.h>
+
+#include <algorithm>
 #include <array>
-#include <cstdint>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iterator>
 #include <memory>
-#include <system_error>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
+#include <system_error>
 #include <thread>
-
-#include <zfleet/package/archive.h>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace zfleet::packager {
 namespace {
 
 namespace fs = std::filesystem;
 
+constexpr std::string_view kManifestRelativePath = "META/manifest.json";
+
 struct PackagePaths {
   fs::path package_dir;
   fs::path manifest_dir;
   fs::path payload_dir;
-  fs::path payload_binary;
   fs::path manifest_path;
+};
+
+struct PayloadFile {
+  std::string relative_path;
+  fs::path source_path;
+  std::uintmax_t size_bytes = 0;
+  std::string sha256_hex;
+  bool executable = false;
 };
 
 class ScopedDirectory {
@@ -51,8 +63,6 @@ class ScopedDirectory {
     fs::remove_all(path_, error);
   }
 
-  const fs::path& path() const { return path_; }
-
  private:
   fs::path path_;
 };
@@ -67,6 +77,42 @@ bool IsSafeSingleSegment(std::string_view value) {
       return false;
     }
   }
+  return true;
+}
+
+bool IsWindowsDrivePrefix(std::string_view value) {
+  return value.size() >= 2 &&
+         std::isalpha(static_cast<unsigned char>(value[0])) != 0 &&
+         value[1] == ':';
+}
+
+bool IsSafeRelativePath(std::string_view value) {
+  if (value.empty()) {
+    return false;
+  }
+  if (value.front() == '/' || value.front() == '\\' ||
+      value.back() == '/' || value.back() == '\\' ||
+      value.find('\\') != std::string_view::npos) {
+    return false;
+  }
+  if (IsWindowsDrivePrefix(value)) {
+    return false;
+  }
+
+  std::size_t start = 0;
+  while (start <= value.size()) {
+    const std::size_t end = value.find('/', start);
+    const auto part =
+        value.substr(start, end == std::string_view::npos ? end : end - start);
+    if (part.empty() || part == "." || part == "..") {
+      return false;
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+
   return true;
 }
 
@@ -159,18 +205,21 @@ std::string JsonString(std::string_view value) {
   return output;
 }
 
-void SetExecutable(const fs::path& path) {
-  const auto mask = fs::perms::owner_exec | fs::perms::group_exec |
-                    fs::perms::others_exec;
-  fs::permissions(path, mask, fs::perm_options::add);
+bool HasExecutablePermissions(const fs::perms permissions) {
+#ifndef _WIN32
+  return (permissions & fs::perms::owner_exec) != fs::perms::none ||
+         (permissions & fs::perms::group_exec) != fs::perms::none ||
+         (permissions & fs::perms::others_exec) != fs::perms::none;
+#else
+  (void)permissions;
+  return false;
+#endif
 }
 
 std::string BuildManifestText(const std::string& component,
                               const std::string& version,
                               const std::string& min_installer_version,
-                              const std::string& binary_name,
-                              std::uintmax_t size_bytes,
-                              const std::string& sha256_hex) {
+                              const std::vector<PayloadFile>& files) {
   std::ostringstream stream;
   stream << "{\n";
   stream << "  \"schema_version\": 1,\n";
@@ -179,16 +228,19 @@ std::string BuildManifestText(const std::string& component,
   stream << "  \"min_installer_version\": "
          << JsonString(min_installer_version) << ",\n";
   stream << "  \"files\": [\n";
-  stream << "    {\n";
-  stream << "      \"source\": "
-         << JsonString(std::string("payload/bin/") + binary_name) << ",\n";
-  stream << "      \"target\": "
-         << JsonString(std::string("bin/") + binary_name)
-         << ",\n";
-  stream << "      \"size\": " << size_bytes << ",\n";
-  stream << "      \"sha256\": " << JsonString(sha256_hex) << ",\n";
-  stream << "      \"executable\": true\n";
-  stream << "    }\n";
+  for (std::size_t index = 0; index < files.size(); ++index) {
+    const auto& file = files[index];
+    stream << "    {\n";
+    stream << "      \"source\": "
+           << JsonString(std::string("payload/") + file.relative_path)
+           << ",\n";
+    stream << "      \"target\": " << JsonString(file.relative_path) << ",\n";
+    stream << "      \"size\": " << file.size_bytes << ",\n";
+    stream << "      \"sha256\": " << JsonString(file.sha256_hex) << ",\n";
+    stream << "      \"executable\": "
+           << (file.executable ? "true" : "false") << "\n";
+    stream << "    }" << (index + 1 == files.size() ? "\n" : ",\n");
+  }
   stream << "  ],\n";
   stream << "  \"signatures\": []\n";
   stream << "}\n";
@@ -212,23 +264,26 @@ PackagePaths BuildPackagePaths(const std::string& component,
                                const std::string& version,
                                const fs::path& output_dir) {
   const auto package_dir = output_dir / component / version;
-  const auto manifest_dir = package_dir / "META";
-  const auto payload_dir = package_dir / "payload" / "bin";
-  const auto binary_name = BinaryNameForComponent(component);
   return PackagePaths{
       .package_dir = package_dir,
-      .manifest_dir = manifest_dir,
-      .payload_dir = payload_dir,
-      .payload_binary = payload_dir / binary_name,
-      .manifest_path = manifest_dir / "manifest.json",
+      .manifest_dir = package_dir / "META",
+      .payload_dir = package_dir / "payload",
+      .manifest_path = package_dir / fs::path(kManifestRelativePath),
   };
+}
+
+fs::path ArchivePathForPackageDir(const fs::path& package_dir) {
+  auto archive_name = package_dir.filename();
+  archive_name += ".zip";
+  return package_dir.parent_path() / archive_name;
 }
 
 fs::path CreateTemporaryRoot() {
   const auto base_dir = fs::temp_directory_path() / "zfleet-packager";
   fs::create_directories(base_dir);
 
-  const auto process_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+  const auto process_id =
+      std::hash<std::thread::id>{}(std::this_thread::get_id());
   const auto timestamp = static_cast<unsigned long long>(
       std::chrono::steady_clock::now().time_since_epoch().count());
 
@@ -246,8 +301,104 @@ fs::path CreateTemporaryRoot() {
   throw std::runtime_error("failed to create temporary package directory");
 }
 
-PackDirResult PackDirImpl(const PackDirOptions& options,
-                          const fs::path& output_dir_abs) {
+void ValidatePayloadDir(const fs::path& payload_dir) {
+  const auto status = fs::symlink_status(payload_dir);
+  if (fs::is_symlink(status)) {
+    throw std::runtime_error("payload directory cannot be a symlink: " +
+                             payload_dir.string());
+  }
+  if (!fs::exists(status) || !fs::is_directory(status)) {
+    throw std::runtime_error("payload directory must be an existing directory: " +
+                             payload_dir.string());
+  }
+}
+
+std::vector<PayloadFile> CollectPayloadFiles(const fs::path& payload_dir,
+                                             std::string_view entry_path) {
+  std::vector<PayloadFile> files;
+  std::unordered_set<std::string> seen_paths;
+  bool found_entry = false;
+
+  for (fs::recursive_directory_iterator it(payload_dir), end; it != end; ++it) {
+    const auto status = it->symlink_status();
+    if (fs::is_symlink(status)) {
+      throw std::runtime_error("symlink is not allowed in payload directory: " +
+                               it->path().string());
+    }
+    if (fs::is_directory(status)) {
+      continue;
+    }
+    if (!fs::is_regular_file(status)) {
+      throw std::runtime_error("unsupported file type in payload directory: " +
+                               it->path().string());
+    }
+
+    const auto relative_path = it->path().lexically_relative(payload_dir);
+    const auto relative_string = relative_path.generic_string();
+    if (!IsSafeRelativePath(relative_string)) {
+      throw std::runtime_error("payload path is not safe: " + relative_string);
+    }
+    if (relative_string == "META" || relative_string.starts_with("META/")) {
+      throw std::runtime_error("payload target must not write META: " +
+                               relative_string);
+    }
+    if (!seen_paths.insert(relative_string).second) {
+      throw std::runtime_error("duplicate payload path: " + relative_string);
+    }
+
+    PayloadFile file;
+    file.relative_path = relative_string;
+    file.source_path = it->path();
+    file.size_bytes = fs::file_size(it->path());
+    file.sha256_hex = ComputeSha256Hex(it->path());
+    file.executable = relative_string == entry_path ||
+                      HasExecutablePermissions(fs::status(it->path()).permissions());
+    if (relative_string == entry_path) {
+      found_entry = true;
+    }
+    files.push_back(std::move(file));
+  }
+
+  std::sort(files.begin(), files.end(),
+            [](const PayloadFile& lhs, const PayloadFile& rhs) {
+              return lhs.relative_path < rhs.relative_path;
+            });
+
+  if (files.empty()) {
+    throw std::runtime_error("payload directory must contain at least one file");
+  }
+  if (!found_entry) {
+    throw std::runtime_error("entry file is missing from payload directory: " +
+                             std::string(entry_path));
+  }
+  return files;
+}
+
+void CopyPayloadFiles(const fs::path& package_payload_dir,
+                      const std::vector<PayloadFile>& files) {
+  for (const auto& file : files) {
+    const auto target_path = package_payload_dir / fs::path(file.relative_path);
+    if (const auto parent = target_path.parent_path(); !parent.empty()) {
+      fs::create_directories(parent);
+    }
+    if (!fs::copy_file(file.source_path, target_path,
+                       fs::copy_options::overwrite_existing)) {
+      throw std::runtime_error("failed to copy payload file: " +
+                               file.source_path.string());
+    }
+#ifndef _WIN32
+    if (file.executable) {
+      fs::permissions(target_path,
+                      fs::perms::owner_exec | fs::perms::group_exec |
+                          fs::perms::others_exec,
+                      fs::perm_options::add);
+    }
+#endif
+  }
+}
+
+PackResult PackToDirectory(const PackOptions& options,
+                           const fs::path& output_dir_abs) {
   const auto component = ValidateComponent(options.component);
   if (!IsSafeSingleSegment(options.version)) {
     throw std::invalid_argument(
@@ -258,13 +409,16 @@ PackDirResult PackDirImpl(const PackDirOptions& options,
         "invalid --min-installer-version; expected [A-Za-z0-9._-]+ and not . or ..");
   }
 
-  const auto paths = BuildPackagePaths(component, options.version, output_dir_abs);
+  const auto payload_dir = NormalizePath(options.payload_dir);
+  ValidatePayloadDir(payload_dir);
 
-  const auto binary_status = fs::status(options.binary_path);
-  if (!fs::exists(binary_status) || !fs::is_regular_file(binary_status)) {
-    throw std::runtime_error("binary must be an existing regular file: " +
-                             options.binary_path.string());
+  const auto entry_string = options.entry_path.generic_string();
+  if (!IsSafeRelativePath(entry_string)) {
+    throw std::invalid_argument("invalid --entry; expected safe relative path");
   }
+
+  const auto files = CollectPayloadFiles(payload_dir, entry_string);
+  const auto paths = BuildPackagePaths(component, options.version, output_dir_abs);
 
   if (fs::exists(paths.package_dir)) {
     if (!options.force) {
@@ -277,20 +431,11 @@ PackDirResult PackDirImpl(const PackDirOptions& options,
 
   fs::create_directories(paths.manifest_dir);
   fs::create_directories(paths.payload_dir);
+  CopyPayloadFiles(paths.payload_dir, files);
 
-  if (!fs::copy_file(options.binary_path, paths.payload_binary,
-                     fs::copy_options::overwrite_existing)) {
-    throw std::runtime_error("failed to copy binary into package");
-  }
-  SetExecutable(paths.payload_binary);
-
-  const auto size_bytes = fs::file_size(paths.payload_binary);
-  const auto sha256_hex = ComputeSha256Hex(paths.payload_binary);
-  const auto manifest_text = BuildManifestText(component, options.version,
-                                               options.min_installer_version,
-                                               BinaryNameForComponent(component),
-                                               size_bytes, sha256_hex);
-
+  const auto manifest_text =
+      BuildManifestText(component, options.version,
+                        options.min_installer_version, files);
   std::ofstream manifest_stream(paths.manifest_path, std::ios::binary);
   if (!manifest_stream) {
     throw std::runtime_error("failed to open manifest for write: " +
@@ -302,13 +447,7 @@ PackDirResult PackDirImpl(const PackDirOptions& options,
                              paths.manifest_path.string());
   }
 
-  return PackDirResult{.package_dir = paths.package_dir};
-}
-
-fs::path ArchivePathForPackageDir(const fs::path& package_dir) {
-  auto archive_name = package_dir.filename();
-  archive_name += ".zip";
-  return package_dir.parent_path() / archive_name;
+  return PackResult{.package_path = paths.package_dir, .archive = false};
 }
 
 } // namespace
@@ -334,27 +473,21 @@ std::string BinaryNameForComponent(std::string_view component) {
 #endif
 }
 
-PackDirResult PackDir(const PackDirOptions& options) {
-  return PackDirImpl(options, NormalizePath(options.output_dir));
-}
+PackResult Pack(const PackOptions& options) {
+  const auto output_dir_abs = NormalizePath(options.output_dir);
+  if (!options.archive) {
+    return PackToDirectory(options, output_dir_abs);
+  }
 
-PackArchiveResult PackArchive(const PackArchiveOptions& options) {
   const auto component = ValidateComponent(options.component);
   if (!IsSafeSingleSegment(options.version)) {
     throw std::invalid_argument(
         "invalid --version; expected [A-Za-z0-9._-]+ and not . or ..");
   }
-  if (!IsSafeSingleSegment(options.min_installer_version)) {
-    throw std::invalid_argument(
-        "invalid --min-installer-version; expected [A-Za-z0-9._-]+ and not . or ..");
-  }
 
-  const auto output_dir_abs = NormalizePath(options.output_dir);
-  const auto package_root = output_dir_abs / component;
-  const auto package_dir = package_root / options.version;
-  const auto archive_path = ArchivePathForPackageDir(package_dir);
+  const auto archive_path =
+      ArchivePathForPackageDir(output_dir_abs / component / options.version);
   fs::create_directories(archive_path.parent_path());
-
   if (fs::exists(archive_path) && !options.force) {
     throw std::runtime_error("archive already exists: " + archive_path.string() +
                              " (use --force to overwrite)");
@@ -362,48 +495,25 @@ PackArchiveResult PackArchive(const PackArchiveOptions& options) {
 
   const auto temp_root = CreateTemporaryRoot();
   ScopedDirectory cleanup(temp_root);
-
-  const auto pack_result = PackDirImpl(PackDirOptions{
-                                          .component = options.component,
-                                          .version = options.version,
-                                          .binary_path = options.binary_path,
-                                          .output_dir = temp_root,
-                                          .min_installer_version =
-                                              options.min_installer_version,
-                                          .force = options.force,
-                                      },
-                                      temp_root);
-
-  zfleet::package::CreateArchive(
-      {.package_dir = pack_result.package_dir,
-       .archive_path = archive_path,
-       .force = options.force});
-
-  return PackArchiveResult{.archive_path = NormalizePath(archive_path)};
-}
-
-ArchiveDirResult ArchiveDir(const ArchiveDirOptions& options) {
-  const auto package_dir = NormalizePath(options.package_dir);
-  const auto archive_path = NormalizePath(options.archive_path);
-
-  const auto package_status = fs::status(package_dir);
-  if (!fs::exists(package_status) || !fs::is_directory(package_status)) {
-    throw std::runtime_error("package must be an existing directory: " +
-                             package_dir.string());
-  }
-
-  fs::create_directories(archive_path.parent_path());
-  if (fs::exists(archive_path) && !options.force) {
-    throw std::runtime_error("archive already exists: " + archive_path.string() +
-                             " (use --force to overwrite)");
-  }
+  const auto pack_result =
+      PackToDirectory(PackOptions{
+                          .component = options.component,
+                          .version = options.version,
+                          .payload_dir = options.payload_dir,
+                          .entry_path = options.entry_path,
+                          .output_dir = temp_root,
+                          .min_installer_version =
+                              options.min_installer_version,
+                          .archive = false,
+                          .force = true,
+                      },
+                      temp_root);
 
   zfleet::package::CreateArchive(
-      {.package_dir = package_dir,
+      {.package_dir = pack_result.package_path,
        .archive_path = archive_path,
        .force = options.force});
-
-  return ArchiveDirResult{.archive_path = archive_path};
+  return PackResult{.package_path = NormalizePath(archive_path), .archive = true};
 }
 
 } // namespace zfleet::packager

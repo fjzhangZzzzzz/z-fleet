@@ -6,45 +6,23 @@
 
 namespace zfleet::packager {
 
-struct PackDirOptions {
+struct PackOptions {
   std::string component;
   std::string version;
-  std::filesystem::path binary_path;
+  std::filesystem::path payload_dir;
+  std::filesystem::path entry_path;
   std::filesystem::path output_dir;
   std::string min_installer_version = "0.1.0";
+  bool archive = false;
   bool force = false;
 };
 
-struct PackDirResult {
-  std::filesystem::path package_dir;
+struct PackResult {
+  std::filesystem::path package_path;
+  bool archive = false;
 };
 
-struct PackArchiveOptions {
-  std::string component;
-  std::string version;
-  std::filesystem::path binary_path;
-  std::filesystem::path output_dir;
-  std::string min_installer_version = "0.1.0";
-  bool force = false;
-};
-
-struct PackArchiveResult {
-  std::filesystem::path archive_path;
-};
-
-struct ArchiveDirOptions {
-  std::filesystem::path package_dir;
-  std::filesystem::path archive_path;
-  bool force = false;
-};
-
-struct ArchiveDirResult {
-  std::filesystem::path archive_path;
-};
-
-PackDirResult PackDir(const PackDirOptions& options);
-PackArchiveResult PackArchive(const PackArchiveOptions& options);
-ArchiveDirResult ArchiveDir(const ArchiveDirOptions& options);
+PackResult Pack(const PackOptions& options);
 
 bool IsSafeSegment(std::string_view value);
 bool IsKnownComponent(std::string_view component);

@@ -2,6 +2,8 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus CONFIG REQUIRED)
 
+set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
+
 add_library(zfleet_agent_app
   src/app.cpp
   src/config.cpp
@@ -26,6 +28,10 @@ target_compile_features(zfleet_agent_app PUBLIC cxx_std_20)
 
 add_executable(zfleet_agent
   src/main.cpp
+)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/zfleet_agent_version.txt"
+  "${ZFLEET_AGENT_VERSION}\n"
 )
 
 target_link_libraries(zfleet_agent

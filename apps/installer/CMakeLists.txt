@@ -2,6 +2,8 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+set(ZFLEET_INSTALLER_VERSION "${PROJECT_VERSION}")
+
 add_library(zfleet_installer_app
   src/installer.cpp
   src/json_codec.cpp
@@ -24,6 +26,10 @@ target_compile_features(zfleet_installer_app PUBLIC cxx_std_20)
 
 add_executable(zfleet_installer
   src/main.cpp
+)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/zfleet_installer_version.txt"
+  "${ZFLEET_INSTALLER_VERSION}\n"
 )
 
 target_link_libraries(zfleet_installer

@@ -5,50 +5,30 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./scripts/package.sh --component <agent|server|installer> --version <version> [--preset <preset>] [--output-dir <dir>] [--min-installer-version <version>] [--build|--no-build] [--force] [--archive]
+Usage: ./scripts/make-package.sh <agent|server|installer> [--preset <preset>] [--out <dir>] [--no-build] [--force] [--zip]
 EOF
 }
 
 repo_root="$ZF_REPO_ROOT"
 component=""
-version=""
 preset="$(zf_default_preset)"
 output_dir="$repo_root/build/packages"
 min_installer_version="0.1.0"
 do_build=1
 force=0
-archive=0
+zip=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --component)
-      [[ $# -ge 2 ]] || zf_fail_arg "missing value for --component"
-      component="$2"
-      shift 2
-      ;;
-    --version)
-      [[ $# -ge 2 ]] || zf_fail_arg "missing value for --version"
-      version="$2"
-      shift 2
-      ;;
     --preset)
       [[ $# -ge 2 ]] || zf_fail_arg "missing value for --preset"
       preset="$2"
       shift 2
       ;;
-    --output-dir)
-      [[ $# -ge 2 ]] || zf_fail_arg "missing value for --output-dir"
+    --out)
+      [[ $# -ge 2 ]] || zf_fail_arg "missing value for --out"
       output_dir="$2"
       shift 2
-      ;;
-    --min-installer-version)
-      [[ $# -ge 2 ]] || zf_fail_arg "missing value for --min-installer-version"
-      min_installer_version="$2"
-      shift 2
-      ;;
-    --build)
-      do_build=1
-      shift
       ;;
     --no-build)
       do_build=0
@@ -58,37 +38,40 @@ while [[ $# -gt 0 ]]; do
       force=1
       shift
       ;;
-    --archive)
-      archive=1
+    --zip)
+      zip=1
       shift
       ;;
     -h|--help)
       usage
       exit 2
       ;;
-    *)
+    --*)
       zf_fail_arg "unknown argument: $1"
+      ;;
+    *)
+      if [[ -n "$component" ]]; then
+        zf_fail_arg "unexpected argument: $1"
+      fi
+      component="$1"
+      shift
       ;;
   esac
 done
 
 zf_validate_component "$component" ||
   zf_fail_arg "invalid --component; expected agent, server, or installer"
-
-zf_is_safe_segment "$version" || zf_fail_arg "invalid --version; expected [A-Za-z0-9._-]+ and not . or .."
-zf_is_safe_segment "$min_installer_version" || zf_fail_arg "invalid --min-installer-version; expected [A-Za-z0-9._-]+ and not . or .."
-
 mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir"
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
 binary_name="$(zf_component_binary_name "$component")"
 
 source_binary="$repo_root/build/$preset/apps/$component/$binary_name"
+version_file="$repo_root/build/$preset/apps/$component/${binary_name}_version.txt"
 packager_binary_name="zfleet_packager"
 if zf_is_windows_host; then
   packager_binary_name="${packager_binary_name}.exe"
 fi
 packager_binary="$repo_root/build/$preset/apps/packager/$packager_binary_name"
-source_binary_arg="$(zf_to_native_path_if_needed "$source_binary")"
 output_dir_arg="$(zf_to_native_path_if_needed "$output_dir_abs")"
 packager_binary_arg="$(zf_to_native_path_if_needed "$packager_binary")"
 
@@ -99,27 +82,40 @@ if [[ $do_build -eq 1 ]]; then
 fi
 
 [[ -f "$source_binary" ]] || zf_fail_exec "built binary not found: $source_binary"
+[[ -f "$version_file" ]] ||
+  zf_fail_exec "component version file not found: $version_file; run ./scripts/build.sh $preset"
 [[ -f "$packager_binary" ]] || zf_fail_exec "packager binary not found: $packager_binary"
 
+version="$(tr -d '[:space:]' < "$version_file")"
+zf_is_safe_segment "$version" ||
+  zf_fail_exec "invalid component version in $version_file: $version"
+
+staging_root="$(mktemp -d "${TMPDIR:-/tmp}/zfleet-package-staging.XXXXXX")" ||
+  zf_fail_exec "failed to create staging directory"
+cleanup_staging() {
+  rm -rf "$staging_root"
+}
+trap cleanup_staging EXIT
+
+payload_dir="$staging_root/payload"
+entry_path="bin/$binary_name"
+mkdir -p "$payload_dir/bin" || zf_fail_exec "failed to create payload staging dir"
+cp -p "$source_binary" "$payload_dir/$entry_path" ||
+  zf_fail_exec "failed to stage component binary"
+payload_dir_arg="$(zf_to_native_path_if_needed "$payload_dir")"
+
 packager_args=()
-if [[ $archive -eq 1 ]]; then
-  packager_args+=(
-    pack-archive
-    --component "$component"
-    --version "$version"
-    --binary "$source_binary_arg"
-    --output-dir "$output_dir_arg"
-    --min-installer-version "$min_installer_version"
-  )
-else
-  packager_args+=(
-    pack-dir
-    --component "$component"
-    --version "$version"
-    --binary "$source_binary_arg"
-    --output-dir "$output_dir_arg"
-    --min-installer-version "$min_installer_version"
-  )
+packager_args+=(
+  pack
+  --component "$component"
+  --version "$version"
+  --payload-dir "$payload_dir_arg"
+  --entry "$entry_path"
+  --output-dir "$output_dir_arg"
+  --min-installer-version "$min_installer_version"
+)
+if [[ $zip -eq 1 ]]; then
+  packager_args+=(--zip)
 fi
 if [[ $force -eq 1 ]]; then
   packager_args+=(--force)

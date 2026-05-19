@@ -5,6 +5,8 @@ add_library(zfleet_server_app
   src/http_server.cpp
 )
 
+set(ZFLEET_SERVER_VERSION "${PROJECT_VERSION}")
+
 find_package(CLI11 CONFIG REQUIRED)
 find_package(SQLiteCpp CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
@@ -28,6 +30,10 @@ target_compile_features(zfleet_server_app PUBLIC cxx_std_20)
 
 add_executable(zfleet_server
   src/main.cpp
+)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/zfleet_server_version.txt"
+  "${ZFLEET_SERVER_VERSION}\n"
 )
 
 target_link_libraries(zfleet_server
