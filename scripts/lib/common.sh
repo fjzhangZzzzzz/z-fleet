@@ -70,6 +70,15 @@ zf_to_native_path_if_needed() {
   fi
 }
 
+zf_to_posix_path_if_needed() {
+  local path="$1"
+  if zf_is_windows_host && command -v cygpath >/dev/null 2>&1; then
+    cygpath -au "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
 zf_component_binary_name() {
   local component="$1"
   local binary_name="zfleet_${component}"

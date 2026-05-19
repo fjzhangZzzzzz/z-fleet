@@ -1,7 +1,7 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-18
+最后更新：2026-05-19
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
@@ -211,10 +211,12 @@ launcher 目录与启动模型：
 
 P4 提供两个仓库脚本：
 
-- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 生成**目录形式 package**。
+- `scripts/package.sh`：从 `build/<preset>/apps/<component>/zfleet_<component>[.exe]` 编排目录形式 package，底层调用 `build/<preset>/apps/packager/zfleet_packager[.exe] pack-dir`。
 - `scripts/deploy-local.sh`：编排本地 `apply` / `status` / `rollback`，并在安装成功后复制 launcher stub 到固定 bootstrap 路径。
 
 P5.1 在 P4 脚本基础上提取 `scripts/lib/common.sh` 作为公共 shell 函数库，用于复用路径解析、平台判断和参数错误处理。该文件只提供 `zf_` 前缀函数与仓库路径推导，不直接执行构建、打包或部署动作。
+
+P5.2 由 C/C++ packager 接管目录 package 生成，`scripts/package.sh` 只保留 CLI 编排、构建前置和路径校验。当前阶段仍只生成目录 package，不做 `.zfpkg` 压缩归档，也不做签名或动态库递归收集；`.zfpkg` 压缩归档留到下一阶段。
 
 P4 仍然只支持组件：
 
@@ -224,7 +226,7 @@ P4 仍然只支持组件：
 
 #### package 目录布局
 
-`package.sh` 只生成目录，不做压缩、签名、归档或下载。默认输出到 `<repo>/build/packages/<component>/<version>/`：
+`package.sh` 只编排目录 package 生成，不做压缩、签名、归档或下载。默认输出到 `<repo>/build/packages/<component>/<version>/`：
 
 ```text
 build/packages/
@@ -237,7 +239,7 @@ build/packages/
           zfleet_agent
 ```
 
-`manifest.json` 由脚本直接生成，最小结构如下：
+`manifest.json` 由 packager 生成，最小结构如下：
 
 ```json
 {
@@ -302,7 +304,7 @@ build/packages/
 
 - 日志写到 `stderr`。
 - `stdout` 最后一行输出 package 绝对路径，便于外层脚本捕获。
-- Linux 优先使用 `sha256sum`；macOS 兼容 `shasum -a 256`；Windows Git Bash 一般使用 `sha256sum`。
+- hash、manifest 和目录复制逻辑都由 `zfleet_packager pack-dir` 负责，`package.sh` 只做参数编排与输出转发。
 
 #### deploy-local.sh 用法
 

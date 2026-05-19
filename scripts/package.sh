@@ -75,12 +75,17 @@ zf_is_safe_segment "$min_installer_version" || zf_fail_arg "invalid --min-instal
 
 mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir"
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
-package_dir="$output_dir_abs/$component/$version"
 binary_name="$(zf_component_binary_name "$component")"
 
 source_binary="$repo_root/build/$preset/apps/$component/$binary_name"
-manifest_path="$package_dir/META/manifest.json"
-payload_binary="$package_dir/payload/bin/$binary_name"
+packager_binary_name="zfleet_packager"
+if zf_is_windows_host; then
+  packager_binary_name="${packager_binary_name}.exe"
+fi
+packager_binary="$repo_root/build/$preset/apps/packager/$packager_binary_name"
+source_binary_arg="$(zf_to_native_path_if_needed "$source_binary")"
+output_dir_arg="$(zf_to_native_path_if_needed "$output_dir_abs")"
+packager_binary_arg="$(zf_to_native_path_if_needed "$packager_binary")"
 
 if [[ $do_build -eq 1 ]]; then
   zf_log "building preset: $preset"
@@ -89,40 +94,31 @@ if [[ $do_build -eq 1 ]]; then
 fi
 
 [[ -f "$source_binary" ]] || zf_fail_exec "built binary not found: $source_binary"
+[[ -f "$packager_binary" ]] || zf_fail_exec "packager binary not found: $packager_binary"
 
-if [[ -e "$package_dir" ]]; then
-  if [[ $force -eq 1 ]]; then
-    zf_log "removing existing package dir: $package_dir"
-    rm -rf "$package_dir" || zf_fail_exec "failed to remove existing package dir: $package_dir"
-  else
-    zf_fail_exec "package already exists: $package_dir (use --force to overwrite)"
-  fi
+packager_args=(
+  pack-dir
+  --component "$component"
+  --version "$version"
+  --binary "$source_binary_arg"
+  --output-dir "$output_dir_arg"
+  --min-installer-version "$min_installer_version"
+)
+if [[ $force -eq 1 ]]; then
+  packager_args+=(--force)
 fi
 
-zf_log "creating package dir: $package_dir"
-mkdir -p "$package_dir/META" "$package_dir/payload/bin" || zf_fail_exec "failed to create package dir"
-cp -p "$source_binary" "$payload_binary" || zf_fail_exec "failed to copy binary into package"
+set +e
+packager_output="$("$packager_binary_arg" "${packager_args[@]}")"
+packager_exit=$?
+set -e
+if [[ $packager_exit -ne 0 ]]; then
+  exit "$packager_exit"
+fi
 
-size_bytes="$(wc -c < "$payload_binary" | tr -d '[:space:]')"
-sha256_value="$(zf_compute_sha256 "$payload_binary")"
-
-cat > "$manifest_path" <<EOF
-{
-  "schema_version": 1,
-  "component": "$component",
-  "version": "$version",
-  "min_installer_version": "$min_installer_version",
-  "files": [
-    {
-      "source": "payload/bin/$binary_name",
-      "target": "bin/$binary_name",
-      "size": $size_bytes,
-      "sha256": "$sha256_value",
-      "executable": true
-    }
-  ],
-  "signatures": []
-}
-EOF
+package_dir="$(printf '%s\n' "$packager_output" | tail -n 1)"
+package_dir="${package_dir%$'\r'}"
+[[ -n "$package_dir" ]] || zf_fail_exec "packager did not report package path"
+package_dir="$(zf_to_posix_path_if_needed "$package_dir")"
 
 printf '%s\n' "$package_dir"
