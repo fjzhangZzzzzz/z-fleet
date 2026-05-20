@@ -6,11 +6,12 @@
 
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
+#include <zfleet/package/manifest.h>
 #include <zfleet/platform/file_permissions.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,34 +31,28 @@ struct ExpectedFile {
   bool executable = false;
 };
 
-std::string ExpectedManifest(const std::string& component,
-                             const std::string& version,
-                             const std::string& min_installer_version,
-                             const std::vector<ExpectedFile>& files) {
-  std::ostringstream stream;
-  stream << "{\n";
-  stream << "  \"schema_version\": 1,\n";
-  stream << "  \"component\": \"" << component << "\",\n";
-  stream << "  \"version\": \"" << version << "\",\n";
-  stream << "  \"min_installer_version\": \"" << min_installer_version
-         << "\",\n";
-  stream << "  \"files\": [\n";
-  for (std::size_t index = 0; index < files.size(); ++index) {
-    const auto& file = files[index];
-    stream << "    {\n";
-    stream << "      \"source\": \"payload/" << file.relative_path << "\",\n";
-    stream << "      \"target\": \"" << file.relative_path << "\",\n";
-    stream << "      \"size\": " << fs::file_size(file.path) << ",\n";
-    stream << "      \"sha256\": \""
-           << zfleet::crypto::Sha256FileHex(file.path) << "\",\n";
-    stream << "      \"executable\": "
-           << (file.executable ? "true" : "false") << "\n";
-    stream << "    }" << (index + 1 == files.size() ? "\n" : ",\n");
+std::string ExpectedManifestJson(const std::string& component,
+                                 const std::string& version,
+                                 const std::string& min_installer_version,
+                                 const std::vector<ExpectedFile>& files) {
+  zfleet::package::Manifest manifest{
+      .schema_version = 1,
+      .component = component,
+      .version = version,
+      .min_installer_version = min_installer_version,
+      .files = {},
+  };
+  manifest.files.reserve(files.size());
+  for (const auto& file : files) {
+    manifest.files.push_back(zfleet::package::ManifestFile{
+        .source = "payload/" + file.relative_path,
+        .target = file.relative_path,
+        .size = static_cast<std::uint64_t>(fs::file_size(file.path)),
+        .sha256 = zfleet::crypto::Sha256FileHex(file.path),
+        .executable = file.executable,
+    });
   }
-  stream << "  ],\n";
-  stream << "  \"signatures\": []\n";
-  stream << "}\n";
-  return stream.str();
+  return zfleet::package::SerializeManifestJson(manifest);
 }
 
 } // namespace
@@ -99,16 +94,17 @@ TEST_CASE("pack creates package layout from payload directory") {
                                      "agent.conf") ==
           "config");
   REQUIRE(zfleet::test::ReadTextFile(package_dir / "META" / "manifest.json") ==
-          ExpectedManifest("agent", "1.2.3", "0.1.0",
-                           {ExpectedFile{.relative_path = "bin/zfleet_agent",
-                                         .path = binary_path,
-                                         .executable = true},
-                            ExpectedFile{.relative_path = "lib/libagent_support.so",
-                                         .path = library_path,
-                                         .executable = false},
-                            ExpectedFile{.relative_path = "share/agent.conf",
-                                         .path = config_path,
-                                         .executable = false}}));
+          ExpectedManifestJson(
+              "agent", "1.2.3", "0.1.0",
+              {ExpectedFile{.relative_path = "bin/zfleet_agent",
+                            .path = binary_path,
+                            .executable = true},
+               ExpectedFile{.relative_path = "lib/libagent_support.so",
+                            .path = library_path,
+                            .executable = false},
+               ExpectedFile{.relative_path = "share/agent.conf",
+                            .path = config_path,
+                            .executable = false}}));
 #ifndef _WIN32
   REQUIRE(zfleet::platform::IsExecutableFile(package_dir / "payload" / "bin" /
                                              "zfleet_agent"));
@@ -152,13 +148,14 @@ TEST_CASE("pack creates a zip archive from payload directory") {
                                      "libserver_support.so") ==
           "server-library");
   REQUIRE(zfleet::test::ReadTextFile(extracted_dir / "META" / "manifest.json") ==
-          ExpectedManifest("server", "3.4.5", "0.1.0",
-                           {ExpectedFile{.relative_path = "bin/zfleet_server",
-                                         .path = binary_path,
-                                         .executable = true},
-                            ExpectedFile{.relative_path = "lib/libserver_support.so",
-                                         .path = library_path,
-                                         .executable = false}}));
+          ExpectedManifestJson(
+              "server", "3.4.5", "0.1.0",
+              {ExpectedFile{.relative_path = "bin/zfleet_server",
+                            .path = binary_path,
+                            .executable = true},
+               ExpectedFile{.relative_path = "lib/libserver_support.so",
+                            .path = library_path,
+                            .executable = false}}));
 }
 
 TEST_CASE("pack rejects existing output unless force is set") {

@@ -25,6 +25,7 @@ if(BUILD_TESTING)
     PRIVATE
       Catch2::Catch2WithMain
       zfleet::platform
+      zfleet_test_support
   )
 
   catch_discover_tests(zfleet_platform_tests)

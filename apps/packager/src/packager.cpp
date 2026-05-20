@@ -43,7 +43,7 @@ struct PayloadFile {
   bool executable = false;
 };
 
-std::string BuildManifestText(const std::string& component,
+std::string BuildManifestJson(const std::string& component,
                               const std::string& version,
                               const std::string& min_installer_version,
                               const std::vector<PayloadFile>& files) {
@@ -234,7 +234,7 @@ PackResult PackToDirectory(const PackOptions& options,
   CopyPayloadFiles(paths.payload_dir, files);
 
   const auto manifest_text =
-      BuildManifestText(component, options.version,
+      BuildManifestJson(component, options.version,
                         options.min_installer_version, files);
   std::ofstream manifest_stream(paths.manifest_path, std::ios::binary);
   if (!manifest_stream) {

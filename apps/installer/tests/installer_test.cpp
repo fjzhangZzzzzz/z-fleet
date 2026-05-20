@@ -28,10 +28,10 @@ struct PackageFileSpec {
   bool executable = false;
 };
 
-std::string BuildManifestText(const std::string& component,
-                              const std::string& version,
-                              const std::vector<zfleet::package::ManifestFile>&
-                                  files) {
+std::string BuildManifestJson(
+    const std::string& component,
+    const std::string& version,
+    const std::vector<zfleet::package::ManifestFile>& files) {
   return zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
       .schema_version = 1,
       .component = component,
@@ -62,7 +62,7 @@ std::string BuildManifest(const std::string& component,
     });
   }
 
-  return BuildManifestText(component, version, manifest_files);
+  return BuildManifestJson(component, version, manifest_files);
 }
 
 fs::path CreatePackage(const fs::path& root,
@@ -192,7 +192,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
                                                .executable = true}});
     const auto payload_path =
         package_dir / "payload" / "bin" / "zfleet_agent";
-    const auto manifest = BuildManifestText(
+    const auto manifest = BuildManifestJson(
         "agent", "0.1.0",
         {zfleet::package::ManifestFile{
             .source = "payload/bin/zfleet_agent",
@@ -220,7 +220,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     fs::create_directory_symlink(outside_dir, package_dir / "payload",
                                  symlink_error);
     if (!symlink_error) {
-      const auto manifest = BuildManifestText(
+      const auto manifest = BuildManifestJson(
           "agent", "0.1.0",
           {zfleet::package::ManifestFile{
               .source = "payload/bin/zfleet_agent",

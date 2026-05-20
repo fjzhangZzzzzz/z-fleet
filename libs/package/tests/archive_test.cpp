@@ -124,16 +124,6 @@ void WriteStoredZip(const fs::path& archive_path,
   REQUIRE(stream);
 }
 
-bool HasExecutableBit(const fs::path& path) {
-#ifdef _WIN32
-  (void)path;
-  return false;
-#else
-  return zfleet::platform::HasExecutablePermission(
-      fs::status(path).permissions());
-#endif
-}
-
 }  // namespace
 
 TEST_CASE("create list read and extract zip archive") {
@@ -179,7 +169,8 @@ TEST_CASE("create list read and extract zip archive") {
   REQUIRE(ReadTextFile(output_dir / "payload" / "bin" / "zfleet_agent") ==
           "agent-binary");
 #ifndef _WIN32
-  REQUIRE(HasExecutableBit(output_dir / "payload" / "bin" / "zfleet_agent"));
+  REQUIRE(zfleet::platform::IsExecutableFile(output_dir / "payload" / "bin" /
+                                             "zfleet_agent"));
 #endif
 }
 
