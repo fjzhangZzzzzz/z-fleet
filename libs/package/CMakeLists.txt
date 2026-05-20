@@ -20,6 +20,7 @@ target_link_libraries(zfleet_package
     ZLIB::ZLIB
     zfleet::core
     zfleet::crypto
+    zfleet::platform
 )
 
 target_compile_features(zfleet_package PUBLIC cxx_std_20)
@@ -38,6 +39,7 @@ if(BUILD_TESTING)
       Catch2::Catch2WithMain
       ZLIB::ZLIB
       zfleet::package
+      zfleet::platform
       zfleet_test_support
   )
 

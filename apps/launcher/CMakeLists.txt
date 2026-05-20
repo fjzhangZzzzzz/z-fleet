@@ -5,6 +5,7 @@ add_library(zfleet_launcher_app
 target_link_libraries(zfleet_launcher_app
   PUBLIC
     zfleet::core
+    zfleet::platform
 )
 
 target_include_directories(zfleet_launcher_app
@@ -46,6 +47,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_launcher_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::platform
       zfleet_launcher_app
       zfleet_test_support
   )

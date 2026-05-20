@@ -1,4 +1,5 @@
 add_library(zfleet_platform
+  src/file_permissions.cpp
   src/system.cpp
 )
 
@@ -16,6 +17,7 @@ if(BUILD_TESTING)
   include(Catch)
 
   add_executable(zfleet_platform_tests
+    tests/file_permissions_test.cpp
     tests/system_test.cpp
   )
 

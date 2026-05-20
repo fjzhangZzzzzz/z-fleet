@@ -1,5 +1,7 @@
 #include "zfleet/package/archive.h"
 
+#include "zfleet/platform/file_permissions.h"
+
 #include <zlib.h>
 
 #include <algorithm>
@@ -233,17 +235,6 @@ std::uint64_t GetFileSize(const fs::path& path) {
   return static_cast<std::uint64_t>(size);
 }
 
-bool HasExecutablePermissions(const fs::perms permissions) {
-#ifndef _WIN32
-  return (permissions & fs::perms::owner_exec) != fs::perms::none ||
-         (permissions & fs::perms::group_exec) != fs::perms::none ||
-         (permissions & fs::perms::others_exec) != fs::perms::none;
-#else
-  (void)permissions;
-  return false;
-#endif
-}
-
 std::vector<SourceEntry> CollectSourceEntries(const fs::path& package_dir) {
   std::vector<SourceEntry> entries;
   std::unordered_set<std::string> seen_paths;
@@ -284,7 +275,8 @@ std::vector<SourceEntry> CollectSourceEntries(const fs::path& package_dir) {
     entry.source_path = it->path();
     entry.uncompressed_size = file_size;
 #ifndef _WIN32
-    entry.executable = HasExecutablePermissions(fs::status(it->path()).permissions());
+    entry.executable = zfleet::platform::HasExecutablePermission(
+        fs::status(it->path()).permissions());
 #else
     entry.executable = false;
 #endif
@@ -883,10 +875,7 @@ void ExtractArchiveEntry(const fs::path& archive_path, const ArchiveRecord& entr
 
 #ifndef _WIN32
   if (entry.executable) {
-    fs::permissions(target_path,
-                    fs::perms::owner_exec | fs::perms::group_exec |
-                        fs::perms::others_exec,
-                    fs::perm_options::add);
+    zfleet::platform::SetExecutable(target_path, true);
   }
 #else
   (void)entry;

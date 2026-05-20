@@ -6,6 +6,7 @@
 
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
+#include <zfleet/platform/file_permissions.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -17,7 +18,6 @@
 namespace {
 
 namespace fs = std::filesystem;
-using zfleet::test::SetExecutable;
 
 void ExtractArchiveTo(const fs::path& archive_path, const fs::path& output_dir) {
   zfleet::package::ExtractArchive(
@@ -73,7 +73,7 @@ TEST_CASE("pack creates package layout from payload directory") {
   zfleet::test::WriteTextFile(binary_path, "agent-binary");
   zfleet::test::WriteTextFile(library_path, "library");
   zfleet::test::WriteTextFile(config_path, "config");
-  SetExecutable(binary_path);
+  zfleet::platform::SetExecutable(binary_path, true);
 
   const auto output_dir = test_root / "packages";
   const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
@@ -110,9 +110,8 @@ TEST_CASE("pack creates package layout from payload directory") {
                                          .path = config_path,
                                          .executable = false}}));
 #ifndef _WIN32
-  REQUIRE((fs::status(package_dir / "payload" / "bin" / "zfleet_agent")
-               .permissions() &
-           fs::perms::owner_exec) != fs::perms::none);
+  REQUIRE(zfleet::platform::IsExecutableFile(package_dir / "payload" / "bin" /
+                                             "zfleet_agent"));
 #endif
 }
 
@@ -125,7 +124,7 @@ TEST_CASE("pack creates a zip archive from payload directory") {
   const auto library_path = payload_dir / "lib" / "libserver_support.so";
   zfleet::test::WriteTextFile(binary_path, "server-binary");
   zfleet::test::WriteTextFile(library_path, "server-library");
-  SetExecutable(binary_path);
+  zfleet::platform::SetExecutable(binary_path, true);
 
   const auto output_dir = test_root / "archives";
   const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
@@ -169,7 +168,7 @@ TEST_CASE("pack rejects existing output unless force is set") {
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_installer";
   zfleet::test::WriteTextFile(binary_path, "installer-binary");
-  SetExecutable(binary_path);
+  zfleet::platform::SetExecutable(binary_path, true);
 
   const auto output_dir = test_root / "packages";
   const auto package_dir =
@@ -209,7 +208,7 @@ TEST_CASE("pack rejects invalid inputs") {
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_agent";
   zfleet::test::WriteTextFile(binary_path, "agent-binary");
-  SetExecutable(binary_path);
+  zfleet::platform::SetExecutable(binary_path, true);
 
   SECTION("invalid component") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
@@ -275,7 +274,7 @@ TEST_CASE("pack rejects symlinks in payload directory") {
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_agent";
   zfleet::test::WriteTextFile(binary_path, "agent-binary");
-  SetExecutable(binary_path);
+  zfleet::platform::SetExecutable(binary_path, true);
 
 #ifdef _WIN32
 #else

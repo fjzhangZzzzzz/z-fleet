@@ -1,12 +1,11 @@
 #include "installer.h"
 
-#include "file_permissions.h"
-
 #include <zfleet/core/component.h>
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/manifest.h>
 #include <zfleet/package/temp_dir.h>
+#include <zfleet/platform/file_permissions.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -170,7 +169,7 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
                                .version = manifest.version,
                                .message = "sha256 mismatch: " + file.target};
     }
-    if (IsExecutable(file_path) != file.executable) {
+    if (zfleet::platform::IsExecutableFile(file_path) != file.executable) {
       return ReleaseValidation{.ok = false,
                                .version = manifest.version,
                                .message = "executable mismatch: " +
@@ -226,7 +225,7 @@ void StageRelease(const fs::path& package_dir,
     const auto destination = staging_dir / file.target;
     fs::create_directories(destination.parent_path());
     fs::copy_file(source_path, destination, fs::copy_options::overwrite_existing);
-    SetExecutable(destination, file.executable);
+    zfleet::platform::SetExecutable(destination, file.executable);
   }
 
   const auto manifest_source = package_dir / "META" / "manifest.json";

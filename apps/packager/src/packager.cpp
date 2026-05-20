@@ -6,6 +6,7 @@
 #include <zfleet/package/archive.h>
 #include <zfleet/package/manifest.h>
 #include <zfleet/package/temp_dir.h>
+#include <zfleet/platform/file_permissions.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -41,17 +42,6 @@ struct PayloadFile {
   std::string sha256_hex;
   bool executable = false;
 };
-
-bool HasExecutablePermissions(const fs::perms permissions) {
-#ifndef _WIN32
-  return (permissions & fs::perms::owner_exec) != fs::perms::none ||
-         (permissions & fs::perms::group_exec) != fs::perms::none ||
-         (permissions & fs::perms::others_exec) != fs::perms::none;
-#else
-  (void)permissions;
-  return false;
-#endif
-}
 
 std::string BuildManifestText(const std::string& component,
                               const std::string& version,
@@ -161,7 +151,8 @@ std::vector<PayloadFile> CollectPayloadFiles(const fs::path& payload_dir,
     file.size_bytes = fs::file_size(it->path());
     file.sha256_hex = zfleet::crypto::Sha256FileHex(it->path());
     file.executable = relative_string == entry_path ||
-                      HasExecutablePermissions(fs::status(it->path()).permissions());
+                      zfleet::platform::HasExecutablePermission(
+                          fs::status(it->path()).permissions());
     if (relative_string == entry_path) {
       found_entry = true;
     }
@@ -197,10 +188,7 @@ void CopyPayloadFiles(const fs::path& package_payload_dir,
     }
 #ifndef _WIN32
     if (file.executable) {
-      fs::permissions(target_path,
-                      fs::perms::owner_exec | fs::perms::group_exec |
-                          fs::perms::others_exec,
-                      fs::perm_options::add);
+      zfleet::platform::SetExecutable(target_path, true);
     }
 #endif
   }

@@ -2,6 +2,7 @@
 
 #include "zfleet/core/component.h"
 #include "zfleet/core/path.h"
+#include "zfleet/platform/file_permissions.h"
 
 #include <cerrno>
 #include <cctype>
@@ -43,22 +44,6 @@ std::string ReadFileTrimmed(const fs::path& path) {
     value.erase(value.begin());
   }
   return value;
-}
-
-bool IsExecutableFile(const fs::path& executable_path) {
-  const auto target_status = fs::symlink_status(executable_path);
-  if (!fs::exists(target_status) || !fs::is_regular_file(target_status)) {
-    return false;
-  }
-
-#ifdef _WIN32
-  return true;
-#else
-  const auto permissions = fs::status(executable_path).permissions();
-  return (permissions & fs::perms::owner_exec) != fs::perms::none ||
-         (permissions & fs::perms::group_exec) != fs::perms::none ||
-         (permissions & fs::perms::others_exec) != fs::perms::none;
-#endif
 }
 
 } // namespace
@@ -117,7 +102,7 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
 
   const auto executable_path =
       component_root / "releases" / version / "bin" / executable_name;
-  if (!IsExecutableFile(executable_path)) {
+  if (!zfleet::platform::IsExecutableFile(executable_path)) {
     return ResolveResult{
         .ok = false,
         .target = {},

@@ -1,11 +1,11 @@
 #include "installer.h"
-#include "file_permissions.h"
 
 #include "test_util.h"
 
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/manifest.h>
+#include <zfleet/platform/file_permissions.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -51,7 +51,7 @@ std::string BuildManifest(const std::string& component,
     const auto payload_path =
         package_dir / "payload" / file.source_relative_path;
     WriteTextFile(payload_path, file.content);
-    zfleet::installer::SetExecutable(payload_path, file.executable);
+    zfleet::platform::SetExecutable(payload_path, file.executable);
 
     manifest_files.push_back(zfleet::package::ManifestFile{
         .source = "payload/" + file.source_relative_path,
@@ -127,7 +127,8 @@ TEST_CASE("apply writes release content and active-version") {
   REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
   REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
-  REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(zfleet::platform::IsExecutableFile(release_root / "bin" /
+                                             "zfleet_agent"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
@@ -155,7 +156,8 @@ TEST_CASE("apply accepts a .zip archive and preserves directory install checks")
   REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
   REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
-  REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(zfleet::platform::IsExecutableFile(release_root / "bin" /
+                                             "zfleet_agent"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
 
 }

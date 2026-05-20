@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
 
+add_subdirectory(libs/platform)
+
 if(BUILD_TESTING)
   add_subdirectory(tests/support)
 endif()
@@ -15,7 +17,6 @@ endif()
 add_subdirectory(libs/core)
 add_subdirectory(libs/crypto)
 add_subdirectory(libs/protocol)
-add_subdirectory(libs/platform)
 add_subdirectory(libs/package)
 
 add_subdirectory(apps/agent)

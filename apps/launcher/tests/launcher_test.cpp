@@ -3,6 +3,7 @@
 #include "test_util.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <zfleet/platform/file_permissions.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -64,8 +65,10 @@ TEST_CASE("resolve target derives component root from launcher path") {
   zfleet::test::WriteTextFile(test_root / "zfleet" / "agent" / "releases" /
                                   "1.2.3" / "bin" / "zfleet_agent",
                               "agent-binary");
-  zfleet::test::SetExecutable(test_root / "zfleet" / "agent" / "releases" /
-                              "1.2.3" / "bin" / "zfleet_agent");
+  zfleet::platform::SetExecutable(test_root / "zfleet" / "agent" /
+                                      "releases" / "1.2.3" / "bin" /
+                                      "zfleet_agent",
+                                  true);
 
   const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
 
@@ -156,7 +159,7 @@ TEST_CASE("launcher executable forwards args and propagates exit code on POSIX")
                               "printf '%s\\n' \"$@\" > \"" +
                                   args_file.string() + "\"\n"
                               "exit 23\n");
-  zfleet::test::SetExecutable(target_path);
+  zfleet::platform::SetExecutable(target_path, true);
 
   const auto exit_code =
       RunProcess(launcher_path, {"alpha", "beta gamma", "--flag"});

@@ -32,6 +32,5 @@ std::filesystem::path operator/(const ScopedTestDir& directory,
 void WriteTextFile(const std::filesystem::path& path,
                    std::string_view content);
 std::string ReadTextFile(const std::filesystem::path& path);
-void SetExecutable(const std::filesystem::path& path);
 
 }  // namespace zfleet::test

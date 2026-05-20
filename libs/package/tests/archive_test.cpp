@@ -1,5 +1,6 @@
 #include "zfleet/package/archive.h"
 #include "zfleet/package/temp_dir.h"
+#include "zfleet/platform/file_permissions.h"
 
 #include "test_util.h"
 
@@ -128,10 +129,8 @@ bool HasExecutableBit(const fs::path& path) {
   (void)path;
   return false;
 #else
-  const auto permissions = fs::status(path).permissions();
-  return (permissions & fs::perms::owner_exec) != fs::perms::none ||
-         (permissions & fs::perms::group_exec) != fs::perms::none ||
-         (permissions & fs::perms::others_exec) != fs::perms::none;
+  return zfleet::platform::HasExecutablePermission(
+      fs::status(path).permissions());
 #endif
 }
 
@@ -145,8 +144,9 @@ TEST_CASE("create list read and extract zip archive") {
   WriteTextFile(package_dir / "META" / "manifest.json", R"({"component":"agent"})");
   WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent", "agent-binary");
 #ifndef _WIN32
-  zfleet::test::SetExecutable(package_dir / "payload" / "bin" /
-                               "zfleet_agent");
+  zfleet::platform::SetExecutable(package_dir / "payload" / "bin" /
+                                      "zfleet_agent",
+                                  true);
 #endif
 
   const auto archive_path = test_root / "package.zip";

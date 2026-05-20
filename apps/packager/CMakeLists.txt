@@ -9,6 +9,7 @@ target_link_libraries(zfleet_packager_app
     zfleet::core
     zfleet::crypto
     zfleet::package
+    zfleet::platform
 )
 
 target_include_directories(zfleet_packager_app
@@ -43,6 +44,7 @@ if(BUILD_TESTING)
       Catch2::Catch2WithMain
       zfleet::crypto
       zfleet::package
+      zfleet::platform
       zfleet_packager_app
       zfleet_test_support
   )

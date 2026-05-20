@@ -115,28 +115,4 @@ std::string ReadTextFile(const std::filesystem::path& path) {
                      std::istreambuf_iterator<char>());
 }
 
-void SetExecutable(const std::filesystem::path& path) {
-#ifdef _WIN32
-  (void)path;
-#else
-  std::error_code error;
-  const auto status = std::filesystem::status(path, error);
-  (void)status;
-  if (error) {
-    throw std::runtime_error("failed to read permissions for: " +
-                             path.string());
-  }
-
-  std::filesystem::permissions(path,
-                               std::filesystem::perms::owner_exec |
-                                   std::filesystem::perms::group_exec |
-                                   std::filesystem::perms::others_exec,
-                               std::filesystem::perm_options::add, error);
-  if (error) {
-    throw std::runtime_error("failed to set executable bit for: " +
-                             path.string());
-  }
-#endif
-}
-
 }  // namespace zfleet::test

@@ -4,7 +4,6 @@ find_package(nlohmann_json CONFIG REQUIRED)
 set(ZFLEET_INSTALLER_VERSION "${PROJECT_VERSION}")
 
 add_library(zfleet_installer_app
-  src/file_permissions.cpp
   src/installer.cpp
   src/json_codec.cpp
 )
@@ -15,6 +14,7 @@ target_link_libraries(zfleet_installer_app
     zfleet::core
     zfleet::crypto
     zfleet::package
+    zfleet::platform
 )
 
 target_include_directories(zfleet_installer_app
@@ -53,6 +53,7 @@ if(BUILD_TESTING)
       Catch2::Catch2WithMain
       zfleet::crypto
       zfleet::package
+      zfleet::platform
       zfleet_installer_app
       zfleet_test_support
   )
