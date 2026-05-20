@@ -2,7 +2,8 @@
 #include "database.h"
 #include "http_handler.h"
 
-#include "zfleet/core/uuid.h"
+#include "test_util.h"
+
 #include "zfleet/protocol/json_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
@@ -12,7 +13,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 namespace {
 
@@ -47,11 +47,6 @@ bool TableExists(const std::filesystem::path& database_path,
       "select name from sqlite_master where type = 'table' and name = ?");
   query.bind(1, table_name);
   return query.executeStep();
-}
-
-std::filesystem::path MakeTestRoot() {
-  return std::filesystem::temp_directory_path() / "zfleet-server-tests" /
-         (std::to_string(getpid()) + "-" + zfleet::core::GenerateUuid());
 }
 
 int CountRows(const std::filesystem::path& database_path,
@@ -106,9 +101,7 @@ std::string ReadTaskField(const std::filesystem::path& database_path,
 TEST_CASE("server config loads listen and database path from toml") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto config_path = test_root / "server.toml";
   {
@@ -133,15 +126,12 @@ TEST_CASE("server config loads listen and database path from toml") {
   REQUIRE(config.log.file_path == test_root / "server.log");
   REQUIRE_FALSE(config.log.enable_console);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("server database initializes schema and version") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -156,15 +146,12 @@ TEST_CASE("server database initializes schema and version") {
   REQUIRE(TableExists(database_path, "tasks"));
   REQUIRE(TableExists(database_path, "task_results"));
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("register request is accepted and persists agent") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -197,15 +184,12 @@ TEST_CASE("register request is accepted and persists agent") {
   REQUIRE(ReadAuditField(database_path, "req-register", "payload_json")
               .find("\"status\":\"accepted\"") != std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("invalid json returns structured invalid_json error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -224,15 +208,12 @@ TEST_CASE("invalid json returns structured invalid_json error") {
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_json);
   REQUIRE(CountRows(database_path, "audit_events") == 0);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("heartbeat path and body agent mismatch returns structured error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -272,15 +253,12 @@ TEST_CASE("heartbeat path and body agent mismatch returns structured error") {
               .find("\"error_code\":\"agent_id_mismatch\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("heartbeat for unregistered agent returns not found error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -308,15 +286,12 @@ TEST_CASE("heartbeat for unregistered agent returns not found error") {
               .find("\"error_code\":\"agent_not_registered\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("heartbeat and asset requests persist rows for registered agent") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -372,15 +347,12 @@ TEST_CASE("heartbeat and asset requests persist rows for registered agent") {
   REQUIRE(ReadAuditField(database_path, "req-assets", "event_type") ==
           "agent.asset_snapshot");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task poll returns idle when no queued task exists") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -408,15 +380,12 @@ TEST_CASE("task poll returns idle when no queued task exists") {
   REQUIRE(body.status == zfleet::protocol::TaskPollStatus::idle);
   REQUIRE_FALSE(body.task.has_value());
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task poll for unregistered agent returns not found error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -433,15 +402,12 @@ TEST_CASE("task poll for unregistered agent returns not found error") {
   REQUIRE(response.result() == http::status::not_found);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::agent_not_registered);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request queues task and records audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -476,15 +442,12 @@ TEST_CASE("task create request queues task and records audit") {
   REQUIRE(ReadAuditField(database_path, "task-create-1", "event_type") ==
           "task.queued");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request rejects empty task_id and records failure audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -521,15 +484,12 @@ TEST_CASE("task create request rejects empty task_id and records failure audit")
               .find("\"error_code\":\"missing_required_field\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request rejects non-readonly capability and records failure audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -566,15 +526,12 @@ TEST_CASE("task create request rejects non-readonly capability and records failu
               .find("\"error_code\":\"capability_not_allowed\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request rejects unsupported task type and records failure audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -611,15 +568,12 @@ TEST_CASE("task create request rejects unsupported task type and records failure
               .find("\"error_code\":\"unsupported_task_type\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request rejects invalid capability field and records failure audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -657,15 +611,12 @@ TEST_CASE("task create request rejects invalid capability field and records fail
       ReadAuditField(database_path, "task-create-invalid-capability", "payload_json")
           .find("\"error_code\":\"invalid_field_type\"") != std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task create request rejects invalid task input and records failure audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -702,15 +653,12 @@ TEST_CASE("task create request rejects invalid task input and records failure au
               .find("\"error_code\":\"invalid_field_type\"") !=
           std::string::npos);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task poll assigns queued task and records audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -752,15 +700,12 @@ TEST_CASE("task poll assigns queued task and records audit") {
   REQUIRE(ReadAuditField(database_path, "poll-assigned", "event_type") ==
           "task.assigned");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request updates state and records audit") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -810,15 +755,12 @@ TEST_CASE("task running request updates state and records audit") {
   REQUIRE(ReadAuditField(database_path, "task-running-1", "event_type") ==
           "task.running");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request returns not found for missing task") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -843,15 +785,12 @@ TEST_CASE("task running request returns not found for missing task") {
   REQUIRE(response.result() == http::status::not_found);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_not_found);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request rejects agent mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -886,15 +825,12 @@ TEST_CASE("task running request rejects agent mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_agent_mismatch);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request rejects path and body task_id mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -919,15 +855,12 @@ TEST_CASE("task running request rejects path and body task_id mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request rejects task type mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -962,15 +895,12 @@ TEST_CASE("task running request rejects task type mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task running request rejects already finished task") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1025,15 +955,12 @@ TEST_CASE("task running request rejects already finished task") {
   REQUIRE(response.result() == http::status::conflict);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_already_finished);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result persists terminal state and result row") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1091,15 +1018,12 @@ TEST_CASE("task result persists terminal state and result row") {
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
           "task.succeeded");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects succeeded status without result") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1136,15 +1060,12 @@ TEST_CASE("task result rejects succeeded status without result") {
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects path and body task_id mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1176,15 +1097,12 @@ TEST_CASE("task result rejects path and body task_id mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects task type mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1226,15 +1144,12 @@ TEST_CASE("task result rejects task type mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::invalid_field_type);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects failed status without error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1271,15 +1186,12 @@ TEST_CASE("task result rejects failed status without error") {
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects expired status without error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1316,15 +1228,12 @@ TEST_CASE("task result rejects expired status without error") {
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects succeeded status with error") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1372,15 +1281,12 @@ TEST_CASE("task result rejects succeeded status with error") {
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_result_invalid);
   REQUIRE(CountRows(database_path, "task_results") == 0);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result returns not found for missing task") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1412,15 +1318,12 @@ TEST_CASE("task result returns not found for missing task") {
   REQUIRE(response.result() == http::status::not_found);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_not_found);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects agent mismatch") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1462,15 +1365,12 @@ TEST_CASE("task result rejects agent mismatch") {
   REQUIRE(response.result() == http::status::bad_request);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_agent_mismatch);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects already finished task") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1532,15 +1432,12 @@ TEST_CASE("task result rejects already finished task") {
   REQUIRE(response.result() == http::status::conflict);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_already_finished);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("task result rejects non-expired terminal update for expired task") {
   namespace fs = std::filesystem;
 
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
@@ -1582,5 +1479,4 @@ TEST_CASE("task result rejects non-expired terminal update for expired task") {
   REQUIRE(response.result() == http::status::conflict);
   REQUIRE(body.error_code == zfleet::protocol::ErrorCode::task_expired);
 
-  fs::remove_all(test_root);
 }

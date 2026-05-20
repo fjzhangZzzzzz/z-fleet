@@ -42,6 +42,7 @@ if(BUILD_TESTING)
     PRIVATE
       Catch2::Catch2WithMain
       zfleet_launcher_app
+      zfleet_test_support
   )
 
   target_include_directories(zfleet_launcher_tests

@@ -11,6 +11,7 @@ target_link_libraries(zfleet_integration_tests
     zfleet_agent_app
     zfleet_server_app
     zfleet::platform
+    zfleet_test_support
 )
 
 target_compile_features(zfleet_integration_tests PRIVATE cxx_std_20)

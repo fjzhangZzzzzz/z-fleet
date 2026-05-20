@@ -4,6 +4,8 @@
 #include "http_handler.h"
 #include "http_server.h"
 
+#include "test_util.h"
+
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/version.h"
@@ -19,12 +21,12 @@
 
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <thread>
 
 namespace {
 
 namespace asio = boost::asio;
+namespace fs = std::filesystem;
 namespace http = boost::beast::http;
 using tcp = asio::ip::tcp;
 
@@ -114,11 +116,6 @@ struct RunningServer {
   }
 };
 
-std::filesystem::path MakeTestRoot() {
-  return std::filesystem::temp_directory_path() / "zfleet-integration-tests" /
-         "agent-server-run-once";
-}
-
 } // namespace
 
 TEST_CASE("integration scaffold links core platform and protocol modules") {
@@ -130,11 +127,8 @@ TEST_CASE("integration scaffold links core platform and protocol modules") {
 }
 
 TEST_CASE("server startup initializes schema for integration flow") {
-  namespace fs = std::filesystem;
-
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto test_root = test_dir.path();
   const auto database_path = test_root / "zfleet.db";
 
   {
@@ -143,16 +137,11 @@ TEST_CASE("server startup initializes schema for integration flow") {
     REQUIRE(TableExists(database_path, "heartbeats"));
     REQUIRE(TableExists(database_path, "asset_snapshots"));
   }
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("agent run once registers heartbeats and uploads assets end to end") {
-  namespace fs = std::filesystem;
-
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto test_root = test_dir.path();
   const auto database_path = test_root / "zfleet.db";
   const auto agent_data_dir = test_root / "agent-data";
 
@@ -191,15 +180,11 @@ TEST_CASE("agent run once registers heartbeats and uploads assets end to end") {
                 result.agent_id) == result.agent_id);
   }
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("agent run once polls task and uploads result end to end") {
-  namespace fs = std::filesystem;
-
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto test_root = test_dir.path();
   const auto database_path = test_root / "zfleet-tasks.db";
   const auto agent_data_dir = test_root / "agent-task-data";
 
@@ -235,13 +220,9 @@ TEST_CASE("agent run once polls task and uploads result end to end") {
         })json");
     REQUIRE(create_response.result() == http::status::ok);
 
-    fs::create_directories(agent_data_dir);
-    {
-      std::ofstream state_stream(agent_data_dir / "state.toml");
-      REQUIRE(state_stream);
-      state_stream << "[state]\n";
-      state_stream << "agent_id = \"" << seeded_agent_id << "\"\n";
-    }
+    zfleet::test::WriteTextFile(
+        agent_data_dir / "state.toml",
+        std::string("[state]\nagent_id = \"") + seeded_agent_id + "\"\n");
 
     const zfleet::agent::AgentConfig config{
         .server_url =
@@ -279,6 +260,4 @@ TEST_CASE("agent run once polls task and uploads result end to end") {
                 "select event_type from audit_events where event_type like 'task.%' order by rowid desc limit 1") ==
             "task.succeeded");
   }
-
-  fs::remove_all(test_root);
 }

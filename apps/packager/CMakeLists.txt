@@ -43,6 +43,7 @@ if(BUILD_TESTING)
       Catch2::Catch2WithMain
       zfleet::package
       zfleet_packager_app
+      zfleet_test_support
   )
 
   target_include_directories(zfleet_packager_tests

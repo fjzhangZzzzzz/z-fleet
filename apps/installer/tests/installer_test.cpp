@@ -1,26 +1,24 @@
 #include "installer.h"
 #include "manifest.h"
 
+#include "test_util.h"
+
 #include <zfleet/package/archive.h>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif
-
 namespace {
 
 namespace fs = std::filesystem;
+using zfleet::test::ReadTextFile;
+using zfleet::test::WriteTextFile;
 
 struct PackageFileSpec {
   std::string source_relative_path;
@@ -36,27 +34,6 @@ struct ManifestEntrySpec {
   std::string sha256;
   bool executable;
 };
-
-std::atomic<int> g_test_sequence = 0;
-
-fs::path MakeTestRoot() {
-#ifndef _WIN32
-  const auto process_id = getpid();
-#else
-  const auto process_id = 0;
-#endif
-  return fs::temp_directory_path() / "zfleet-installer-tests" /
-         (std::to_string(process_id) + "-" +
-          std::to_string(g_test_sequence.fetch_add(1)));
-}
-
-void WriteTextFile(const fs::path& path, const std::string& content) {
-  fs::create_directories(path.parent_path());
-  std::ofstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  stream << content;
-  REQUIRE(stream.good());
-}
 
 std::string JsonString(const std::string& value) {
   std::string escaped = "\"";
@@ -157,13 +134,6 @@ fs::path CreateArchivePackage(const fs::path& package_dir,
   return archive_path;
 }
 
-std::string ReadTextFile(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  return std::string(std::istreambuf_iterator<char>(stream),
-                     std::istreambuf_iterator<char>());
-}
-
 fs::path ComponentRoot(const fs::path& root, const std::string& component) {
   return root / "zfleet" / component;
 }
@@ -188,9 +158,7 @@ fs::path ReleaseBinaryPath(const fs::path& root,
 } // namespace
 
 TEST_CASE("manifest parser accepts a valid manifest") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_dir =
       CreatePackage(test_root, "agent", "0.1.0",
@@ -211,13 +179,10 @@ TEST_CASE("manifest parser accepts a valid manifest") {
   REQUIRE(manifest.files.front().target == "bin/zfleet_agent");
   REQUIRE(manifest.files.front().executable);
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("manifest parser rejects malformed manifests") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   SECTION("missing required field") {
     const std::string manifest = R"({
@@ -330,13 +295,10 @@ TEST_CASE("manifest parser rejects malformed manifests") {
         package_dir / "META" / "manifest.json"));
   }
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("apply writes release content and active-version") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_dir =
       CreatePackage(test_root, "agent", "0.1.0",
@@ -357,13 +319,10 @@ TEST_CASE("apply writes release content and active-version") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("apply accepts a .zip archive and preserves directory install checks") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_dir =
       CreatePackage(test_root / "package-dir", "agent", "0.1.0",
@@ -387,13 +346,10 @@ TEST_CASE("apply accepts a .zip archive and preserves directory install checks")
   REQUIRE(zfleet::installer::IsExecutable(release_root / "bin" / "zfleet_agent"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("apply fails on payload integrity mismatch without writing active-version") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   SECTION("sha mismatch") {
     const auto package_dir =
@@ -424,7 +380,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
         package_dir / "payload" / "bin" / "zfleet_agent";
     const auto manifest = BuildManifestText(
         "agent", "0.1.0",
-        {ManifestEntrySpec{
+        std::vector<ManifestEntrySpec>{ManifestEntrySpec{
             .source = "payload/bin/zfleet_agent",
             .target = "bin/zfleet_agent",
             .size = 999,
@@ -452,7 +408,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     if (!symlink_error) {
       const auto manifest = BuildManifestText(
           "agent", "0.1.0",
-          {ManifestEntrySpec{
+          std::vector<ManifestEntrySpec>{ManifestEntrySpec{
               .source = "payload/bin/zfleet_agent",
               .target = "bin/zfleet_agent",
               .size = fs::file_size(outside_file),
@@ -469,13 +425,10 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     }
   }
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("same healthy version can be applied repeatedly") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_dir =
       CreatePackage(test_root, "agent", "0.1.0",
@@ -492,13 +445,10 @@ TEST_CASE("same healthy version can be applied repeatedly") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("new version apply switches active-version and preserves old release") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_v1 =
       CreatePackage(test_root / "v1", "agent", "0.1.0",
@@ -523,13 +473,10 @@ TEST_CASE("new version apply switches active-version and preserves old release")
   REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
                        "bin" / "zfleet_agent") == "agent-binary-v1");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("same active version does not rewrite previous-version to self") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_v1 =
       CreatePackage(test_root / "v1", "agent", "0.1.0",
@@ -551,13 +498,10 @@ TEST_CASE("same active version does not rewrite previous-version to self") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("apply from corrupt active to new version does not record corrupt previous") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_v1 =
       CreatePackage(test_root / "v1", "agent", "0.1.0",
@@ -582,13 +526,10 @@ TEST_CASE("apply from corrupt active to new version does not record corrupt prev
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "agent")));
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("rollback swaps active and previous versions") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_v1 =
       CreatePackage(test_root / "v1", "agent", "0.1.0",
@@ -615,13 +556,10 @@ TEST_CASE("rollback swaps active and previous versions") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.2.0\n");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("rollback can switch between adjacent versions repeatedly") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto package_v1 =
       CreatePackage(test_root / "v1", "agent", "0.1.0",
@@ -649,13 +587,10 @@ TEST_CASE("rollback can switch between adjacent versions repeatedly") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("rollback failures keep active-version unchanged") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   SECTION("missing previous-version") {
     const auto package_dir =
@@ -788,13 +723,10 @@ TEST_CASE("rollback failures keep active-version unchanged") {
     REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
   }
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("status reports installation health") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   SECTION("not installed") {
     const auto status = zfleet::installer::GetStatus(test_root, "agent");
@@ -850,13 +782,10 @@ TEST_CASE("status reports installation health") {
     REQUIRE(status.message.has_value());
   }
 
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("component installs stay isolated under the shared root") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_root("installer");
 
   const auto agent_package =
       CreatePackage(test_root / "agent-pkg", "agent", "0.1.0",
@@ -902,5 +831,4 @@ TEST_CASE("component installs stay isolated under the shared root") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "installer")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "installer")));
 
-  fs::remove_all(test_root);
 }

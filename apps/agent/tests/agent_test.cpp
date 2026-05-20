@@ -1,27 +1,17 @@
 #include "config.h"
 #include "state.h"
 
+#include "test_util.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
 #include <string>
 
-namespace {
-
-std::filesystem::path MakeTestRoot() {
-  return std::filesystem::temp_directory_path() / "zfleet-agent-tests" /
-         "identity-config";
-}
-
-} // namespace
-
 TEST_CASE("agent config loads values from toml and resolves state path") {
-  namespace fs = std::filesystem;
-
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("agent");
+  const auto test_root = test_dir.path();
 
   const auto config_path = test_root / "agent.toml";
   {
@@ -46,16 +36,11 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
   REQUIRE(config.log.file_path == test_root / "agent.log");
   REQUIRE_FALSE(config.log.enable_console);
   REQUIRE(state_path == test_root / "data" / "agent-state.toml");
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("agent state is persisted and reused across restarts") {
-  namespace fs = std::filesystem;
-
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("agent");
+  const auto test_root = test_dir.path();
 
   const zfleet::agent::AgentConfig config{
       .server_url = "http://127.0.0.1:8080",
@@ -69,6 +54,4 @@ TEST_CASE("agent state is persisted and reused across restarts") {
 
   REQUIRE_FALSE(first_state.agent_id.empty());
   REQUIRE(second_state.agent_id == first_state.agent_id);
-
-  fs::remove_all(test_root);
 }

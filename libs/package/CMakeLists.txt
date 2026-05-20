@@ -31,6 +31,7 @@ if(BUILD_TESTING)
       Catch2::Catch2WithMain
       ZLIB::ZLIB
       zfleet::package
+      zfleet_test_support
   )
 
   target_compile_features(zfleet_package_tests PRIVATE cxx_std_20)

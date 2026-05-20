@@ -1,5 +1,7 @@
 #include "packager.h"
 
+#include "test_util.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <openssl/evp.h>
@@ -8,51 +10,18 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif
-
 namespace {
 
 namespace fs = std::filesystem;
-
-std::atomic<int> g_test_sequence = 0;
-
-fs::path MakeTestRoot() {
-#ifndef _WIN32
-  const auto process_id = getpid();
-#else
-  const auto process_id = 0;
-#endif
-  return fs::temp_directory_path() / "zfleet-packager-tests" /
-         (std::to_string(process_id) + "-" +
-          std::to_string(g_test_sequence.fetch_add(1)));
-}
-
-void WriteTextFile(const fs::path& path, const std::string& content) {
-  fs::create_directories(path.parent_path());
-  std::ofstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  stream << content;
-  REQUIRE(stream.good());
-}
-
-std::string ReadTextFile(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  return std::string(std::istreambuf_iterator<char>(stream),
-                     std::istreambuf_iterator<char>());
-}
+using zfleet::test::SetExecutable;
 
 std::string ComputeSha256Hex(const fs::path& path) {
   std::ifstream stream(path, std::ios::binary);
@@ -95,12 +64,6 @@ void ExtractArchiveTo(const fs::path& archive_path, const fs::path& output_dir) 
       {.archive_path = archive_path, .output_dir = output_dir, .force = true});
 }
 
-void SetExecutable(const fs::path& path) {
-  const auto mask = fs::perms::owner_exec | fs::perms::group_exec |
-                    fs::perms::others_exec;
-  fs::permissions(path, mask, fs::perm_options::add);
-}
-
 struct ExpectedFile {
   std::string relative_path;
   fs::path path;
@@ -139,17 +102,16 @@ std::string ExpectedManifest(const std::string& component,
 } // namespace
 
 TEST_CASE("pack creates package layout from payload directory") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("packager");
+  const auto test_root = test_dir.path();
 
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_agent";
   const auto library_path = payload_dir / "lib" / "libagent_support.so";
   const auto config_path = payload_dir / "share" / "agent.conf";
-  WriteTextFile(binary_path, "agent-binary");
-  WriteTextFile(library_path, "library");
-  WriteTextFile(config_path, "config");
+  zfleet::test::WriteTextFile(binary_path, "agent-binary");
+  zfleet::test::WriteTextFile(library_path, "library");
+  zfleet::test::WriteTextFile(config_path, "config");
   SetExecutable(binary_path);
 
   const auto output_dir = test_root / "packages";
@@ -166,13 +128,16 @@ TEST_CASE("pack creates package layout from payload directory") {
       fs::absolute(output_dir).lexically_normal() / "agent" / "1.2.3";
   REQUIRE_FALSE(result.archive);
   REQUIRE(result.package_path == package_dir);
-  REQUIRE(ReadTextFile(package_dir / "payload" / "bin" / "zfleet_agent") ==
+  REQUIRE(zfleet::test::ReadTextFile(package_dir / "payload" / "bin" /
+                                     "zfleet_agent") ==
           "agent-binary");
-  REQUIRE(ReadTextFile(package_dir / "payload" / "lib" / "libagent_support.so") ==
+  REQUIRE(zfleet::test::ReadTextFile(package_dir / "payload" / "lib" /
+                                     "libagent_support.so") ==
           "library");
-  REQUIRE(ReadTextFile(package_dir / "payload" / "share" / "agent.conf") ==
+  REQUIRE(zfleet::test::ReadTextFile(package_dir / "payload" / "share" /
+                                     "agent.conf") ==
           "config");
-  REQUIRE(ReadTextFile(package_dir / "META" / "manifest.json") ==
+  REQUIRE(zfleet::test::ReadTextFile(package_dir / "META" / "manifest.json") ==
           ExpectedManifest("agent", "1.2.3", "0.1.0",
                            {ExpectedFile{.relative_path = "bin/zfleet_agent",
                                          .path = binary_path,
@@ -188,20 +153,17 @@ TEST_CASE("pack creates package layout from payload directory") {
                .permissions() &
            fs::perms::owner_exec) != fs::perms::none);
 #endif
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("pack creates a zip archive from payload directory") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("packager");
+  const auto test_root = test_dir.path();
 
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_server";
   const auto library_path = payload_dir / "lib" / "libserver_support.so";
-  WriteTextFile(binary_path, "server-binary");
-  WriteTextFile(library_path, "server-library");
+  zfleet::test::WriteTextFile(binary_path, "server-binary");
+  zfleet::test::WriteTextFile(library_path, "server-library");
   SetExecutable(binary_path);
 
   const auto output_dir = test_root / "archives";
@@ -223,11 +185,13 @@ TEST_CASE("pack creates a zip archive from payload directory") {
 
   const auto extracted_dir = test_root / "extracted";
   ExtractArchiveTo(archive_path, extracted_dir);
-  REQUIRE(ReadTextFile(extracted_dir / "payload" / "bin" / "zfleet_server") ==
+  REQUIRE(zfleet::test::ReadTextFile(extracted_dir / "payload" / "bin" /
+                                     "zfleet_server") ==
           "server-binary");
-  REQUIRE(ReadTextFile(extracted_dir / "payload" / "lib" /
-                       "libserver_support.so") == "server-library");
-  REQUIRE(ReadTextFile(extracted_dir / "META" / "manifest.json") ==
+  REQUIRE(zfleet::test::ReadTextFile(extracted_dir / "payload" / "lib" /
+                                     "libserver_support.so") ==
+          "server-library");
+  REQUIRE(zfleet::test::ReadTextFile(extracted_dir / "META" / "manifest.json") ==
           ExpectedManifest("server", "3.4.5", "0.1.0",
                            {ExpectedFile{.relative_path = "bin/zfleet_server",
                                          .path = binary_path,
@@ -235,26 +199,23 @@ TEST_CASE("pack creates a zip archive from payload directory") {
                             ExpectedFile{.relative_path = "lib/libserver_support.so",
                                          .path = library_path,
                                          .executable = false}}));
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("pack rejects existing output unless force is set") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("packager");
+  const auto test_root = test_dir.path();
 
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_installer";
-  WriteTextFile(binary_path, "installer-binary");
+  zfleet::test::WriteTextFile(binary_path, "installer-binary");
   SetExecutable(binary_path);
 
   const auto output_dir = test_root / "packages";
   const auto package_dir =
       fs::absolute(output_dir).lexically_normal() / "installer" / "2.0.0";
   fs::create_directories(package_dir / "META");
-  WriteTextFile(package_dir / "META" / "stale.txt", "stale");
-  WriteTextFile(output_dir / "keep.txt", "keep");
+  zfleet::test::WriteTextFile(package_dir / "META" / "stale.txt", "stale");
+  zfleet::test::WriteTextFile(output_dir / "keep.txt", "keep");
 
   REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                         .component = "installer",
@@ -278,18 +239,15 @@ TEST_CASE("pack rejects existing output unless force is set") {
   REQUIRE_FALSE(fs::exists(package_dir / "META" / "stale.txt"));
   REQUIRE(fs::exists(output_dir / "keep.txt"));
   REQUIRE(fs::exists(package_dir / "payload" / "bin" / "zfleet_installer"));
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("pack rejects invalid inputs") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("packager");
+  const auto test_root = test_dir.path();
 
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_agent";
-  WriteTextFile(binary_path, "agent-binary");
+  zfleet::test::WriteTextFile(binary_path, "agent-binary");
   SetExecutable(binary_path);
 
   SECTION("invalid component") {
@@ -337,7 +295,7 @@ TEST_CASE("pack rejects invalid inputs") {
   }
 
   SECTION("payload target under META") {
-    WriteTextFile(payload_dir / "META" / "bad.txt", "bad");
+    zfleet::test::WriteTextFile(payload_dir / "META" / "bad.txt", "bad");
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "agent",
                           .version = "1.0.0",
@@ -347,27 +305,22 @@ TEST_CASE("pack rejects invalid inputs") {
                       }),
                       std::runtime_error);
   }
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("pack rejects symlinks in payload directory") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("packager");
+  const auto test_root = test_dir.path();
 
   const auto payload_dir = test_root / "payload-src";
   const auto binary_path = payload_dir / "bin" / "zfleet_agent";
-  WriteTextFile(binary_path, "agent-binary");
+  zfleet::test::WriteTextFile(binary_path, "agent-binary");
   SetExecutable(binary_path);
 
 #ifdef _WIN32
-  fs::remove_all(test_root);
 #else
   std::error_code error;
   fs::create_symlink(binary_path, payload_dir / "bin" / "link", error);
   if (error) {
-    fs::remove_all(test_root);
     SUCCEED("filesystem does not permit symlink creation in this environment");
     return;
   }
@@ -380,6 +333,5 @@ TEST_CASE("pack rejects symlinks in payload directory") {
                         .output_dir = test_root / "packages",
                     }),
                     std::runtime_error);
-  fs::remove_all(test_root);
 #endif
 }

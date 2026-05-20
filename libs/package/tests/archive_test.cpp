@@ -1,10 +1,11 @@
 #include "zfleet/package/archive.h"
 
+#include "test_util.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <zlib.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -15,33 +16,14 @@
 namespace {
 
 namespace fs = std::filesystem;
+using zfleet::test::ReadTextFile;
+using zfleet::test::WriteTextFile;
 
 struct StoredZipEntry {
   std::string path;
   std::string contents;
   std::uint32_t unix_mode = 0100644U;
 };
-
-fs::path MakeTestRoot() {
-  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  return fs::temp_directory_path() /
-         ("zfleet_package_archive_test_" + std::to_string(stamp));
-}
-
-void WriteTextFile(const fs::path& path, std::string_view contents) {
-  fs::create_directories(path.parent_path());
-  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-  REQUIRE(stream);
-  stream << contents;
-  REQUIRE(stream);
-}
-
-std::string ReadTextFile(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  return std::string((std::istreambuf_iterator<char>(stream)),
-                     std::istreambuf_iterator<char>());
-}
 
 void WriteU16(std::ostream& stream, std::uint16_t value) {
   stream.put(static_cast<char>(value & 0xffU));
@@ -155,18 +137,15 @@ bool HasExecutableBit(const fs::path& path) {
 }  // namespace
 
 TEST_CASE("create list read and extract zip archive") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("package");
+  const auto test_root = test_dir.path();
 
   const auto package_dir = test_root / "package";
   WriteTextFile(package_dir / "META" / "manifest.json", R"({"component":"agent"})");
   WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent", "agent-binary");
 #ifndef _WIN32
-  fs::permissions(package_dir / "payload" / "bin" / "zfleet_agent",
-                  fs::perms::owner_exec | fs::perms::group_exec |
-                      fs::perms::others_exec,
-                  fs::perm_options::add);
+  zfleet::test::SetExecutable(package_dir / "payload" / "bin" /
+                               "zfleet_agent");
 #endif
 
   const auto archive_path = test_root / "package.zip";
@@ -201,14 +180,11 @@ TEST_CASE("create list read and extract zip archive") {
 #ifndef _WIN32
   REQUIRE(HasExecutableBit(output_dir / "payload" / "bin" / "zfleet_agent"));
 #endif
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("archive create and extract honor force overwrite") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("package");
+  const auto test_root = test_dir.path();
 
   const auto package_dir = test_root / "package";
   WriteTextFile(package_dir / "META" / "manifest.json", "{}");
@@ -235,14 +211,11 @@ TEST_CASE("archive create and extract honor force overwrite") {
                     std::runtime_error);
   zfleet::package::ExtractArchive(
       {.archive_path = archive_path, .output_dir = output_dir, .force = true});
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("create archive rejects output inside the package tree") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("package");
+  const auto test_root = test_dir.path();
 
   const auto package_dir = test_root / "package";
   WriteTextFile(package_dir / "META" / "manifest.json", "{}");
@@ -253,14 +226,11 @@ TEST_CASE("create archive rejects output inside the package tree") {
                          .archive_path = package_dir / "payload" / "package.zip",
                          .force = false}),
                     std::runtime_error);
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("zip reader rejects unsafe duplicate and symlink entries") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("package");
+  const auto test_root = test_dir.path();
 
   const auto unsafe_archive = test_root / "unsafe.zip";
   WriteStoredZip(unsafe_archive, {StoredZipEntry{.path = "../escape.txt",
@@ -282,27 +252,22 @@ TEST_CASE("zip reader rejects unsafe duplicate and symlink entries") {
                                   .unix_mode = 0120777U}});
   REQUIRE_THROWS_AS(zfleet::package::ListArchiveEntries(symlink_archive),
                     std::runtime_error);
-
-  fs::remove_all(test_root);
 }
 
 TEST_CASE("create archive rejects symlinks in package tree") {
-  const auto test_root = MakeTestRoot();
-  fs::remove_all(test_root);
-  fs::create_directories(test_root);
+  const zfleet::test::ScopedTestDir test_dir("package");
+  const auto test_root = test_dir.path();
 
   const auto package_dir = test_root / "package";
   WriteTextFile(package_dir / "META" / "manifest.json", "{}");
   WriteTextFile(package_dir / "payload" / "file.txt", "payload");
 
 #ifdef _WIN32
-  fs::remove_all(test_root);
 #else
   std::error_code error;
   fs::create_symlink(package_dir / "payload" / "file.txt",
                      package_dir / "payload" / "link.txt", error);
   if (error) {
-    fs::remove_all(test_root);
     SUCCEED("filesystem does not permit symlink creation in this environment");
     return;
   }
@@ -312,6 +277,5 @@ TEST_CASE("create archive rejects symlinks in package tree") {
                          .archive_path = test_root / "package.zip",
                          .force = false}),
                     std::runtime_error);
-  fs::remove_all(test_root);
 #endif
 }
