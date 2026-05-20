@@ -19,5 +19,5 @@
 ## 影响
 
 - 注册、心跳、资产上报和任务轮询统一走 Agent 的出站请求。
-- 后续若需要更低延迟的任务推送，可以增加 WebSocket 或长轮询，但仍应由 Agent 发起。
+- 长期主控制通道由 [ADR 0007：Agent 控制通道采用 gRPC over HTTP/2](0007-agent-control-channel-grpc-http2.md) 定义，但仍必须由 Agent 主动发起。
 - Server 侧任务流程必须容忍 Agent 离线和轮询延迟。

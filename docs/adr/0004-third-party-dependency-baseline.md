@@ -14,7 +14,7 @@ v0.1 需要一个最小端到端闭环：Agent 身份、本地主动连接、Ser
 | 能力 | 库 |
 | --- | --- |
 | 异步网络 | `boost-asio` |
-| HTTP / WebSocket | `boost-beast` |
+| HTTP | `boost-beast` |
 | ID 生成 | `boost-uuid` |
 | TLS | `openssl` |
 | JSON 协议 | `nlohmann-json` |
@@ -25,13 +25,13 @@ v0.1 需要一个最小端到端闭环：Agent 身份、本地主动连接、Ser
 | 配置解析 | `tomlplusplus` |
 | 测试 | `catch2` |
 
-v0.1 实现层建议使用 HTTPS + JSON REST。后续如果需要低延迟任务投递，可继续沿用 Boost.Asio / Beast 栈引入 WebSocket。
+v0.1 实现层建议使用 HTTPS + JSON REST 验证最小闭环。长期 Agent/Server 主控制通道由 [ADR 0007：Agent 控制通道采用 gRPC over HTTP/2](0007-agent-control-channel-grpc-http2.md) 定义，不再以 WebSocket 作为默认演进方向。
 
 ## 备选方案
 
 - Drogon：Server 开发速度快、Web 框架功能丰富，但对最小闭环而言过宽，对 Agent 侧也没有帮助。
 - `libcurl` + Drogon：客户端稳定、Server 方便，但会在早期引入两套网络栈。
-- `gRPC` + `protobuf`：模式定义和流式能力强，但在 v0.1 协议尚未稳定前过重。
+- `gRPC` + `protobuf`：模式定义和流式能力强，v0.1 暂缓引入；长期主控制通道已由 ADR 0007 接受。
 - PostgreSQL：更适合大规模部署，但在当前阶段会增加额外服务依赖和运维负担。
 - GoogleTest：成熟且强大，但当前测试面较小，Catch2 更轻。
 
@@ -39,5 +39,5 @@ v0.1 实现层建议使用 HTTPS + JSON REST。后续如果需要低延迟任务
 
 - 依赖边界必须保持明确：JSON 属于 `libs/protocol`，日志 / 配置 / ID 辅助能力属于 `libs/core`，平台 API 属于 `libs/platform`。
 - SQLite 是 v0.1 默认持久化方案。在引入不兼容 schema 变更前，必须先设计迁移和 schema version 管理。
-- `libsodium`、`protobuf`、`grpc`、`zstd`、`libarchive`、UI 框架和插件运行时延后到对应里程碑与威胁模型准备完成后再引入。
+- `libsodium`、`zstd`、`libarchive`、UI 框架和插件运行时延后到对应里程碑与威胁模型准备完成后再引入；`protobuf` / `grpc` 按 ADR 0007 的控制通道落地计划引入。
 - 任何重大依赖替换都应更新本 ADR，或新增一个替代它的 ADR。
