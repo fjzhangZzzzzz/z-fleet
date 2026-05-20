@@ -1,5 +1,6 @@
 add_library(zfleet_package
   src/archive.cpp
+  src/temp_dir.cpp
 )
 
 add_library(zfleet::package ALIAS zfleet_package)

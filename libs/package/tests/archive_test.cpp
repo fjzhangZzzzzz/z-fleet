@@ -1,4 +1,5 @@
 #include "zfleet/package/archive.h"
+#include "zfleet/package/temp_dir.h"
 
 #include "test_util.h"
 
@@ -278,4 +279,21 @@ TEST_CASE("create archive rejects symlinks in package tree") {
                          .force = false}),
                     std::runtime_error);
 #endif
+}
+
+TEST_CASE("scoped temp dir removes child and empty base directory") {
+  fs::path temp_path;
+  fs::path base_path;
+  {
+    const zfleet::package::ScopedTempDir temp_dir(
+        "zfleet-package-temp-dir-test");
+    temp_path = temp_dir.path();
+    base_path = temp_path.parent_path();
+
+    REQUIRE(fs::exists(temp_path));
+    WriteTextFile(temp_path / "file.txt", "temporary");
+  }
+
+  REQUIRE_FALSE(fs::exists(temp_path));
+  REQUIRE_FALSE(fs::exists(base_path));
 }

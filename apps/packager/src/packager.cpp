@@ -3,15 +3,14 @@
 #include <openssl/evp.h>
 
 #include <zfleet/package/archive.h>
+#include <zfleet/package/temp_dir.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -19,7 +18,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -44,27 +42,6 @@ struct PayloadFile {
   std::uintmax_t size_bytes = 0;
   std::string sha256_hex;
   bool executable = false;
-};
-
-class ScopedDirectory {
- public:
-  explicit ScopedDirectory(fs::path path) : path_(std::move(path)) {}
-  ScopedDirectory(const ScopedDirectory&) = delete;
-  ScopedDirectory& operator=(const ScopedDirectory&) = delete;
-  ScopedDirectory(ScopedDirectory&&) = delete;
-  ScopedDirectory& operator=(ScopedDirectory&&) = delete;
-
-  ~ScopedDirectory() {
-    if (path_.empty()) {
-      return;
-    }
-
-    std::error_code error;
-    fs::remove_all(path_, error);
-  }
-
- private:
-  fs::path path_;
 };
 
 bool IsSafeSingleSegment(std::string_view value) {
@@ -278,29 +255,6 @@ fs::path ArchivePathForPackageDir(const fs::path& package_dir) {
   return package_dir.parent_path() / archive_name;
 }
 
-fs::path CreateTemporaryRoot() {
-  const auto base_dir = fs::temp_directory_path() / "zfleet-packager";
-  fs::create_directories(base_dir);
-
-  const auto process_id =
-      std::hash<std::thread::id>{}(std::this_thread::get_id());
-  const auto timestamp = static_cast<unsigned long long>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
-
-  for (unsigned int attempt = 0; attempt < 1000; ++attempt) {
-    const auto candidate =
-        base_dir / (std::to_string(timestamp) + "-" +
-                    std::to_string(process_id) + "-" +
-                    std::to_string(attempt));
-    std::error_code error;
-    if (fs::create_directories(candidate, error)) {
-      return candidate;
-    }
-  }
-
-  throw std::runtime_error("failed to create temporary package directory");
-}
-
 void ValidatePayloadDir(const fs::path& payload_dir) {
   const auto status = fs::symlink_status(payload_dir);
   if (fs::is_symlink(status)) {
@@ -493,26 +447,26 @@ PackResult Pack(const PackOptions& options) {
                              " (use --force to overwrite)");
   }
 
-  const auto temp_root = CreateTemporaryRoot();
-  ScopedDirectory cleanup(temp_root);
+  const zfleet::package::ScopedTempDir temp_root("zfleet-packager");
   const auto pack_result =
       PackToDirectory(PackOptions{
                           .component = options.component,
                           .version = options.version,
                           .payload_dir = options.payload_dir,
                           .entry_path = options.entry_path,
-                          .output_dir = temp_root,
+                          .output_dir = temp_root.path(),
                           .min_installer_version =
                               options.min_installer_version,
                           .archive = false,
                           .force = true,
                       },
-                      temp_root);
+                      temp_root.path());
 
-  zfleet::package::CreateArchive(
-      {.package_dir = pack_result.package_path,
-       .archive_path = archive_path,
-       .force = options.force});
+  zfleet::package::CreateArchive(zfleet::package::CreateArchiveOptions{
+      .package_dir = pack_result.package_path,
+      .archive_path = archive_path,
+      .force = options.force,
+  });
   return PackResult{.package_path = NormalizePath(archive_path), .archive = true};
 }
 
