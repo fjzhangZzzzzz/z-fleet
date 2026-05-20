@@ -3,6 +3,7 @@
 #include "manifest.h"
 
 #include <zfleet/core/component.h>
+#include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/temp_dir.h>
 
@@ -162,7 +163,7 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
                                .version = manifest.version,
                                .message = "size mismatch: " + file.target};
     }
-    if (ComputeSha256Hex(file_path) != file.sha256) {
+    if (zfleet::crypto::Sha256FileHex(file_path) != file.sha256) {
       return ReleaseValidation{.ok = false,
                                .version = manifest.version,
                                .message = "sha256 mismatch: " + file.target};
@@ -216,7 +217,7 @@ void StageRelease(const fs::path& package_dir,
     if (fs::file_size(source_path) != file.size) {
       throw std::runtime_error("size mismatch: " + file.source);
     }
-    if (ComputeSha256Hex(source_path) != file.sha256) {
+    if (zfleet::crypto::Sha256FileHex(source_path) != file.sha256) {
       throw std::runtime_error("sha256 mismatch: " + file.source);
     }
 

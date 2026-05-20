@@ -13,6 +13,7 @@ if(BUILD_TESTING)
 endif()
 
 add_subdirectory(libs/core)
+add_subdirectory(libs/crypto)
 add_subdirectory(libs/protocol)
 add_subdirectory(libs/platform)
 add_subdirectory(libs/package)

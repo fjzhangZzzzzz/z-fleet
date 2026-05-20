@@ -1,6 +1,5 @@
 find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
 
 set(ZFLEET_INSTALLER_VERSION "${PROJECT_VERSION}")
 
@@ -12,9 +11,9 @@ add_library(zfleet_installer_app
 
 target_link_libraries(zfleet_installer_app
   PRIVATE
-    OpenSSL::Crypto
     nlohmann_json::nlohmann_json
     zfleet::core
+    zfleet::crypto
     zfleet::package
 )
 
@@ -52,6 +51,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_installer_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::crypto
       zfleet::package
       zfleet_installer_app
       zfleet_test_support

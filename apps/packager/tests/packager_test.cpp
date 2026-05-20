@@ -4,15 +4,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <openssl/evp.h>
-
+#include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 
 #include <algorithm>
-#include <array>
 #include <filesystem>
-#include <fstream>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -22,42 +18,6 @@ namespace {
 
 namespace fs = std::filesystem;
 using zfleet::test::SetExecutable;
-
-std::string ComputeSha256Hex(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-
-  using MdCtxPtr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-  MdCtxPtr context(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
-  REQUIRE(context);
-  REQUIRE(EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) == 1);
-
-  std::array<char, 8192> buffer{};
-  while (stream.good()) {
-    stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto bytes_read = stream.gcount();
-    if (bytes_read <= 0) {
-      break;
-    }
-    REQUIRE(EVP_DigestUpdate(context.get(), buffer.data(),
-                             static_cast<std::size_t>(bytes_read)) == 1);
-  }
-
-  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_length = 0;
-  REQUIRE(EVP_DigestFinal_ex(context.get(), digest.data(), &digest_length) ==
-          1);
-
-  static constexpr char kHexDigits[] = "0123456789abcdef";
-  std::string hex;
-  hex.reserve(digest_length * 2);
-  for (unsigned int index = 0; index < digest_length; ++index) {
-    const auto value = digest[index];
-    hex.push_back(kHexDigits[(value >> 4U) & 0x0fU]);
-    hex.push_back(kHexDigits[value & 0x0fU]);
-  }
-  return hex;
-}
 
 void ExtractArchiveTo(const fs::path& archive_path, const fs::path& output_dir) {
   zfleet::package::ExtractArchive(
@@ -88,7 +48,8 @@ std::string ExpectedManifest(const std::string& component,
     stream << "      \"source\": \"payload/" << file.relative_path << "\",\n";
     stream << "      \"target\": \"" << file.relative_path << "\",\n";
     stream << "      \"size\": " << fs::file_size(file.path) << ",\n";
-    stream << "      \"sha256\": \"" << ComputeSha256Hex(file.path) << "\",\n";
+    stream << "      \"sha256\": \""
+           << zfleet::crypto::Sha256FileHex(file.path) << "\",\n";
     stream << "      \"executable\": "
            << (file.executable ? "true" : "false") << "\n";
     stream << "    }" << (index + 1 == files.size() ? "\n" : ",\n");

@@ -3,6 +3,7 @@
 
 #include "test_util.h"
 
+#include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -105,7 +106,7 @@ std::string BuildManifest(const std::string& component,
         .source = "payload/" + file.source_relative_path,
         .target = file.target,
         .size = fs::file_size(payload_path),
-        .sha256 = zfleet::installer::ComputeSha256Hex(payload_path),
+        .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
         .executable = file.executable,
     });
   }
@@ -384,7 +385,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
             .source = "payload/bin/zfleet_agent",
             .target = "bin/zfleet_agent",
             .size = 999,
-            .sha256 = zfleet::installer::ComputeSha256Hex(payload_path),
+            .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
             .executable = true,
         }});
     WriteTextFile(package_dir / "META" / "manifest.json", manifest);
@@ -412,7 +413,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
               .source = "payload/bin/zfleet_agent",
               .target = "bin/zfleet_agent",
               .size = fs::file_size(outside_file),
-              .sha256 = zfleet::installer::ComputeSha256Hex(outside_file),
+              .sha256 = zfleet::crypto::Sha256FileHex(outside_file),
               .executable = false,
           }});
       WriteTextFile(package_dir / "META" / "manifest.json", manifest);

@@ -1,19 +1,16 @@
 #include "packager.h"
 
-#include <openssl/evp.h>
-
 #include <zfleet/core/component.h>
 #include <zfleet/core/path.h>
+#include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/temp_dir.h>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -45,52 +42,6 @@ struct PayloadFile {
   std::string sha256_hex;
   bool executable = false;
 };
-
-std::string ComputeSha256Hex(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    throw std::runtime_error("failed to open file for sha256: " +
-                             path.string());
-  }
-
-  using MdCtxPtr = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
-  MdCtxPtr context(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
-  if (!context) {
-    throw std::runtime_error("failed to allocate sha256 context");
-  }
-  if (EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1) {
-    throw std::runtime_error("failed to initialize sha256");
-  }
-
-  std::array<char, 8192> buffer{};
-  while (stream.good()) {
-    stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto bytes_read = stream.gcount();
-    if (bytes_read <= 0) {
-      break;
-    }
-    if (EVP_DigestUpdate(context.get(), buffer.data(),
-                         static_cast<std::size_t>(bytes_read)) != 1) {
-      throw std::runtime_error("failed to update sha256");
-    }
-  }
-
-  std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_length = 0;
-  if (EVP_DigestFinal_ex(context.get(), digest.data(), &digest_length) != 1) {
-    throw std::runtime_error("failed to finalize sha256");
-  }
-
-  static constexpr char kHexDigits[] = "0123456789abcdef";
-  std::string hex;
-  hex.reserve(digest_length * 2);
-  for (unsigned int index = 0; index < digest_length; ++index) {
-    const auto value = digest[index];
-    hex.push_back(kHexDigits[(value >> 4U) & 0x0fU]);
-    hex.push_back(kHexDigits[value & 0x0fU]);
-  }
-  return hex;
-}
 
 std::string JsonString(std::string_view value) {
   std::string output;
@@ -259,7 +210,7 @@ std::vector<PayloadFile> CollectPayloadFiles(const fs::path& payload_dir,
     file.relative_path = relative_string;
     file.source_path = it->path();
     file.size_bytes = fs::file_size(it->path());
-    file.sha256_hex = ComputeSha256Hex(it->path());
+    file.sha256_hex = zfleet::crypto::Sha256FileHex(it->path());
     file.executable = relative_string == entry_path ||
                       HasExecutablePermissions(fs::status(it->path()).permissions());
     if (relative_string == entry_path) {

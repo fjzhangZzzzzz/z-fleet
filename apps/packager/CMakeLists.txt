@@ -1,5 +1,4 @@
 find_package(CLI11 CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
 
 add_library(zfleet_packager_app
   src/packager.cpp
@@ -7,8 +6,8 @@ add_library(zfleet_packager_app
 
 target_link_libraries(zfleet_packager_app
   PRIVATE
-    OpenSSL::Crypto
     zfleet::core
+    zfleet::crypto
     zfleet::package
 )
 
@@ -42,6 +41,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_packager_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::crypto
       zfleet::package
       zfleet_packager_app
       zfleet_test_support

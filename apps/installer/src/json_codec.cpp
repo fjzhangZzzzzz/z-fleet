@@ -2,11 +2,10 @@
 
 #include "zfleet/core/component.h"
 #include "zfleet/core/path.h"
+#include "zfleet/crypto/sha256.h"
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -47,16 +46,6 @@ std::uint64_t RequiredSize(const json& value, const char* key) {
   }
 
   return static_cast<std::uint64_t>(parsed);
-}
-
-bool IsLowerHexSha256(std::string_view value) {
-  if (value.size() != 64) {
-    return false;
-  }
-
-  return std::all_of(value.begin(), value.end(), [](unsigned char ch) {
-    return std::isdigit(ch) || (ch >= 'a' && ch <= 'f');
-  });
 }
 
 std::string ValidateRelativePath(std::string_view raw_path,
@@ -133,7 +122,7 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
     if (file.target == "META" || file.target.starts_with("META/")) {
       throw std::invalid_argument("target must not write under META/");
     }
-    if (!IsLowerHexSha256(file.sha256)) {
+    if (!zfleet::crypto::IsLowerHexSha256(file.sha256)) {
       throw std::invalid_argument("sha256 must be 64 lowercase hex chars");
     }
     if (!targets.insert(file.target).second) {
