@@ -1,17 +1,17 @@
 #include "installer.h"
-#include "manifest.h"
+#include "file_permissions.h"
 
 #include "test_util.h"
 
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
+#include <zfleet/package/manifest.h>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -28,84 +28,35 @@ struct PackageFileSpec {
   bool executable = false;
 };
 
-struct ManifestEntrySpec {
-  std::string source;
-  std::string target;
-  std::uintmax_t size;
-  std::string sha256;
-  bool executable;
-};
-
-std::string JsonString(const std::string& value) {
-  std::string escaped = "\"";
-  for (const char ch : value) {
-    switch (ch) {
-      case '"':
-        escaped += "\\\"";
-        break;
-      case '\\':
-        escaped += "\\\\";
-        break;
-      case '\n':
-        escaped += "\\n";
-        break;
-      default:
-        escaped += ch;
-        break;
-    }
-  }
-  escaped += "\"";
-  return escaped;
-}
-
 std::string BuildManifestText(const std::string& component,
                               const std::string& version,
-                              const std::vector<ManifestEntrySpec>& files) {
-  std::ostringstream stream;
-  stream << "{\n";
-  stream << "  \"schema_version\": 1,\n";
-  stream << "  \"component\": " << JsonString(component) << ",\n";
-  stream << "  \"version\": " << JsonString(version) << ",\n";
-  stream << "  \"min_installer_version\": \"0.1.0\",\n";
-  stream << "  \"files\": [\n";
-
-  for (std::size_t index = 0; index < files.size(); ++index) {
-    const auto& file = files[index];
-    stream << "    {\n";
-    stream << "      \"source\": " << JsonString(file.source) << ",\n";
-    stream << "      \"target\": " << JsonString(file.target) << ",\n";
-    stream << "      \"size\": " << file.size << ",\n";
-    stream << "      \"sha256\": " << JsonString(file.sha256) << ",\n";
-    stream << "      \"executable\": "
-           << (file.executable ? "true" : "false") << "\n";
-    stream << "    }";
-    if (index + 1 < files.size()) {
-      stream << ",";
-    }
-    stream << "\n";
-  }
-
-  stream << "  ],\n";
-  stream << "  \"signatures\": []\n";
-  stream << "}\n";
-  return stream.str();
+                              const std::vector<zfleet::package::ManifestFile>&
+                                  files) {
+  return zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
+      .schema_version = 1,
+      .component = component,
+      .version = version,
+      .min_installer_version = "0.1.0",
+      .files = files,
+  });
 }
 
 std::string BuildManifest(const std::string& component,
                           const std::string& version,
                           const std::vector<PackageFileSpec>& files,
                           const fs::path& package_dir) {
-  std::vector<ManifestEntrySpec> manifest_files;
+  std::vector<zfleet::package::ManifestFile> manifest_files;
 
   for (const auto& file : files) {
-    const auto payload_path = package_dir / "payload" / file.source_relative_path;
+    const auto payload_path =
+        package_dir / "payload" / file.source_relative_path;
     WriteTextFile(payload_path, file.content);
     zfleet::installer::SetExecutable(payload_path, file.executable);
 
-    manifest_files.push_back(ManifestEntrySpec{
+    manifest_files.push_back(zfleet::package::ManifestFile{
         .source = "payload/" + file.source_relative_path,
         .target = file.target,
-        .size = fs::file_size(payload_path),
+        .size = static_cast<std::uint64_t>(fs::file_size(payload_path)),
         .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
         .executable = file.executable,
     });
@@ -157,146 +108,6 @@ fs::path ReleaseBinaryPath(const fs::path& root,
 }
 
 } // namespace
-
-TEST_CASE("manifest parser accepts a valid manifest") {
-  const zfleet::test::ScopedTestDir test_root("installer");
-
-  const auto package_dir =
-      CreatePackage(test_root, "agent", "0.1.0",
-                    {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
-                                     .target = "bin/zfleet_agent",
-                                     .content = "agent-binary",
-                                     .executable = true}});
-
-  const auto manifest =
-      zfleet::installer::LoadManifest(package_dir / "META" / "manifest.json");
-
-  REQUIRE(manifest.schema_version == 1);
-  REQUIRE(manifest.component == "agent");
-  REQUIRE(manifest.version == "0.1.0");
-  REQUIRE(manifest.min_installer_version == "0.1.0");
-  REQUIRE(manifest.files.size() == 1);
-  REQUIRE(manifest.files.front().source == "payload/bin/zfleet_agent");
-  REQUIRE(manifest.files.front().target == "bin/zfleet_agent");
-  REQUIRE(manifest.files.front().executable);
-
-}
-
-TEST_CASE("manifest parser rejects malformed manifests") {
-  const zfleet::test::ScopedTestDir test_root("installer");
-
-  SECTION("missing required field") {
-    const std::string manifest = R"({
-      "schema_version": 1,
-      "component": "agent",
-      "version": "0.1.0",
-      "files": []
-    })";
-    const auto package_dir = CreatePackage(test_root, "agent", "0.1.0", {},
-                                           &manifest);
-    REQUIRE_THROWS(zfleet::installer::LoadManifest(
-        package_dir / "META" / "manifest.json"));
-  }
-
-  SECTION("unknown component") {
-    const std::string manifest = R"({
-      "schema_version": 1,
-      "component": "worker",
-      "version": "0.1.0",
-      "min_installer_version": "0.1.0",
-      "files": [],
-      "signatures": []
-    })";
-    const auto package_dir = CreatePackage(test_root, "agent", "0.1.0", {},
-                                           &manifest);
-    REQUIRE_THROWS(zfleet::installer::LoadManifest(
-        package_dir / "META" / "manifest.json"));
-  }
-
-  SECTION("invalid sha256") {
-    const std::string manifest = R"({
-      "schema_version": 1,
-      "component": "agent",
-      "version": "0.1.0",
-      "min_installer_version": "0.1.0",
-      "files": [
-        {
-          "source": "payload/bin/zfleet_agent",
-          "target": "bin/zfleet_agent",
-          "size": 1,
-          "sha256": "not-a-valid-sha",
-          "executable": true
-        }
-      ],
-      "signatures": []
-    })";
-    const auto package_dir = CreatePackage(test_root, "agent", "0.1.0", {},
-                                           &manifest);
-    REQUIRE_THROWS(zfleet::installer::LoadManifest(
-        package_dir / "META" / "manifest.json"));
-  }
-
-  SECTION("illegal paths") {
-    const std::string manifest = R"({
-      "schema_version": 1,
-      "component": "agent",
-      "version": "0.1.0",
-      "min_installer_version": "0.1.0",
-      "files": [
-        {
-          "source": "../payload/bin/zfleet_agent",
-          "target": "bin/zfleet_agent",
-          "size": 1,
-          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
-        },
-        {
-          "source": "payload/bin/zfleet_agent",
-          "target": "META/manifest.json",
-          "size": 1,
-          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
-        }
-      ],
-      "signatures": []
-    })";
-    const auto package_dir = CreatePackage(test_root, "agent", "0.1.0", {},
-                                           &manifest);
-    REQUIRE_THROWS(zfleet::installer::LoadManifest(
-        package_dir / "META" / "manifest.json"));
-  }
-
-  SECTION("duplicate target") {
-    const std::string manifest = R"({
-      "schema_version": 1,
-      "component": "agent",
-      "version": "0.1.0",
-      "min_installer_version": "0.1.0",
-      "files": [
-        {
-          "source": "payload/bin/a",
-          "target": "bin/zfleet_agent",
-          "size": 1,
-          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
-        },
-        {
-          "source": "payload/bin/b",
-          "target": "bin/zfleet_agent",
-          "size": 1,
-          "sha256": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
-        }
-      ],
-      "signatures": []
-    })";
-    const auto package_dir = CreatePackage(test_root, "agent", "0.1.0", {},
-                                           &manifest);
-    REQUIRE_THROWS(zfleet::installer::LoadManifest(
-        package_dir / "META" / "manifest.json"));
-  }
-
-}
 
 TEST_CASE("apply writes release content and active-version") {
   const zfleet::test::ScopedTestDir test_root("installer");
@@ -381,10 +192,10 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
         package_dir / "payload" / "bin" / "zfleet_agent";
     const auto manifest = BuildManifestText(
         "agent", "0.1.0",
-        std::vector<ManifestEntrySpec>{ManifestEntrySpec{
+        {zfleet::package::ManifestFile{
             .source = "payload/bin/zfleet_agent",
             .target = "bin/zfleet_agent",
-            .size = 999,
+            .size = 999U,
             .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
             .executable = true,
         }});
@@ -409,10 +220,10 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     if (!symlink_error) {
       const auto manifest = BuildManifestText(
           "agent", "0.1.0",
-          std::vector<ManifestEntrySpec>{ManifestEntrySpec{
+          {zfleet::package::ManifestFile{
               .source = "payload/bin/zfleet_agent",
               .target = "bin/zfleet_agent",
-              .size = fs::file_size(outside_file),
+              .size = static_cast<std::uint64_t>(fs::file_size(outside_file)),
               .sha256 = zfleet::crypto::Sha256FileHex(outside_file),
               .executable = false,
           }});

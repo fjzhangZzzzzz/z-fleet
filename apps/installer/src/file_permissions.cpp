@@ -1,31 +1,8 @@
-#include "json_codec.h"
-#include "manifest.h"
-
-#include <fstream>
-#include <iterator>
-#include <stdexcept>
-#include <string>
+#include "file_permissions.h"
 
 namespace zfleet::installer {
-namespace {
 
 namespace fs = std::filesystem;
-
-std::string ReadFile(const fs::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    throw std::runtime_error("failed to open file: " + path.string());
-  }
-
-  return std::string(std::istreambuf_iterator<char>(stream),
-                     std::istreambuf_iterator<char>());
-}
-
-} // namespace
-
-Manifest LoadManifest(const fs::path& manifest_path) {
-  return ParseManifestJson(ReadFile(manifest_path));
-}
 
 bool IsExecutable(const fs::path& path) {
   const auto permissions = fs::status(path).permissions();
@@ -42,4 +19,4 @@ void SetExecutable(const fs::path& path, bool executable) {
                              : fs::perm_options::remove);
 }
 
-} // namespace zfleet::installer
+}  // namespace zfleet::installer

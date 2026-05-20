@@ -4,9 +4,9 @@ find_package(nlohmann_json CONFIG REQUIRED)
 set(ZFLEET_INSTALLER_VERSION "${PROJECT_VERSION}")
 
 add_library(zfleet_installer_app
+  src/file_permissions.cpp
   src/installer.cpp
   src/json_codec.cpp
-  src/manifest.cpp
 )
 
 target_link_libraries(zfleet_installer_app

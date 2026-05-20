@@ -3,9 +3,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
-namespace zfleet::installer {
+namespace zfleet::package {
 
 struct ManifestFile {
   std::string source;
@@ -23,8 +24,8 @@ struct Manifest {
   std::vector<ManifestFile> files;
 };
 
+Manifest ParseManifestJson(std::string_view manifest_json);
+std::string SerializeManifestJson(const Manifest& manifest);
 Manifest LoadManifest(const std::filesystem::path& manifest_path);
-bool IsExecutable(const std::filesystem::path& path);
-void SetExecutable(const std::filesystem::path& path, bool executable);
 
-} // namespace zfleet::installer
+}  // namespace zfleet::package

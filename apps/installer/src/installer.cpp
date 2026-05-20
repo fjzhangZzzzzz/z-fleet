@@ -1,10 +1,11 @@
 #include "installer.h"
 
-#include "manifest.h"
+#include "file_permissions.h"
 
 #include <zfleet/core/component.h>
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
+#include <zfleet/package/manifest.h>
 #include <zfleet/package/temp_dir.h>
 
 #include <algorithm>
@@ -22,6 +23,7 @@ namespace zfleet::installer {
 namespace {
 
 namespace fs = std::filesystem;
+using zfleet::package::Manifest;
 
 struct ComponentPaths {
   fs::path component_root;
@@ -123,7 +125,7 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
 
   Manifest manifest;
   try {
-    manifest = LoadManifest(manifest_path);
+    manifest = zfleet::package::LoadManifest(manifest_path);
   } catch (const std::exception& ex) {
     return ReleaseValidation{.ok = false,
                              .version = release_dir.filename().string(),
@@ -325,7 +327,8 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
       throw std::runtime_error("package must be a directory");
     }
 
-    const auto manifest = LoadManifest(package_dir / "META" / "manifest.json");
+    const auto manifest =
+        zfleet::package::LoadManifest(package_dir / "META" / "manifest.json");
     const auto paths = BuildPaths(root, manifest.component);
     const auto active_release = InspectActiveRelease(paths, manifest.component);
     const auto release_dir = paths.releases_root / manifest.version;

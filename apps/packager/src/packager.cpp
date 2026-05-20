@@ -4,15 +4,14 @@
 #include <zfleet/core/path.h>
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
+#include <zfleet/package/manifest.h>
 #include <zfleet/package/temp_dir.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -43,49 +42,6 @@ struct PayloadFile {
   bool executable = false;
 };
 
-std::string JsonString(std::string_view value) {
-  std::string output;
-  output.reserve(value.size() + 2);
-  output.push_back('"');
-  for (const unsigned char ch : value) {
-    switch (ch) {
-      case '\\':
-        output += "\\\\";
-        break;
-      case '"':
-        output += "\\\"";
-        break;
-      case '\b':
-        output += "\\b";
-        break;
-      case '\f':
-        output += "\\f";
-        break;
-      case '\n':
-        output += "\\n";
-        break;
-      case '\r':
-        output += "\\r";
-        break;
-      case '\t':
-        output += "\\t";
-        break;
-      default:
-        if (ch < 0x20) {
-          static constexpr char kHexDigits[] = "0123456789abcdef";
-          output += "\\u00";
-          output.push_back(kHexDigits[(ch >> 4U) & 0x0fU]);
-          output.push_back(kHexDigits[ch & 0x0fU]);
-        } else {
-          output.push_back(static_cast<char>(ch));
-        }
-        break;
-    }
-  }
-  output.push_back('"');
-  return output;
-}
-
 bool HasExecutablePermissions(const fs::perms permissions) {
 #ifndef _WIN32
   return (permissions & fs::perms::owner_exec) != fs::perms::none ||
@@ -101,31 +57,24 @@ std::string BuildManifestText(const std::string& component,
                               const std::string& version,
                               const std::string& min_installer_version,
                               const std::vector<PayloadFile>& files) {
-  std::ostringstream stream;
-  stream << "{\n";
-  stream << "  \"schema_version\": 1,\n";
-  stream << "  \"component\": " << JsonString(component) << ",\n";
-  stream << "  \"version\": " << JsonString(version) << ",\n";
-  stream << "  \"min_installer_version\": "
-         << JsonString(min_installer_version) << ",\n";
-  stream << "  \"files\": [\n";
-  for (std::size_t index = 0; index < files.size(); ++index) {
-    const auto& file = files[index];
-    stream << "    {\n";
-    stream << "      \"source\": "
-           << JsonString(std::string("payload/") + file.relative_path)
-           << ",\n";
-    stream << "      \"target\": " << JsonString(file.relative_path) << ",\n";
-    stream << "      \"size\": " << file.size_bytes << ",\n";
-    stream << "      \"sha256\": " << JsonString(file.sha256_hex) << ",\n";
-    stream << "      \"executable\": "
-           << (file.executable ? "true" : "false") << "\n";
-    stream << "    }" << (index + 1 == files.size() ? "\n" : ",\n");
+  zfleet::package::Manifest manifest{
+      .schema_version = 1,
+      .component = component,
+      .version = version,
+      .min_installer_version = min_installer_version,
+      .files = {},
+  };
+  manifest.files.reserve(files.size());
+  for (const auto& file : files) {
+    manifest.files.push_back(zfleet::package::ManifestFile{
+        .source = std::string("payload/") + file.relative_path,
+        .target = file.relative_path,
+        .size = static_cast<std::uint64_t>(file.size_bytes),
+        .sha256 = file.sha256_hex,
+        .executable = file.executable,
+    });
   }
-  stream << "  ],\n";
-  stream << "  \"signatures\": []\n";
-  stream << "}\n";
-  return stream.str();
+  return zfleet::package::SerializeManifestJson(manifest);
 }
 
 std::string ValidateComponent(std::string_view component) {
