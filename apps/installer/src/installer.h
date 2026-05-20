@@ -34,6 +34,5 @@ RollbackResult RollbackComponent(const std::filesystem::path& root,
                                  const std::string& component);
 StatusResult GetStatus(const std::filesystem::path& root,
                        const std::string& component);
-bool IsKnownComponent(const std::string& component);
 
 } // namespace zfleet::installer

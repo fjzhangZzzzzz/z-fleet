@@ -2,6 +2,7 @@
 
 #include "manifest.h"
 
+#include <zfleet/core/component.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/temp_dir.h>
 
@@ -316,11 +317,6 @@ RollbackResult MakeRollbackFailure(const std::string& component,
 
 } // namespace
 
-bool IsKnownComponent(const std::string& component) {
-  return component == "agent" || component == "server" ||
-         component == "installer";
-}
-
 ApplyResult ApplyPackageDirectory(const fs::path& root,
                                   const fs::path& package_dir) {
   try {
@@ -407,8 +403,10 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_path) {
 
 RollbackResult RollbackComponent(const fs::path& root,
                                  const std::string& component) {
-  if (!IsKnownComponent(component)) {
-    throw std::invalid_argument("unknown component: " + component);
+  const auto component_validation = zfleet::core::ValidateComponent(component);
+  if (!component_validation.ok) {
+    throw std::invalid_argument("invalid component: " +
+                                component_validation.message);
   }
 
   const auto paths = BuildPaths(root, component);
@@ -480,8 +478,10 @@ RollbackResult RollbackComponent(const fs::path& root,
 }
 
 StatusResult GetStatus(const fs::path& root, const std::string& component) {
-  if (!IsKnownComponent(component)) {
-    throw std::invalid_argument("unknown component: " + component);
+  const auto component_validation = zfleet::core::ValidateComponent(component);
+  if (!component_validation.ok) {
+    throw std::invalid_argument("invalid component: " +
+                                component_validation.message);
   }
 
   const auto paths = BuildPaths(root, component);

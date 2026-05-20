@@ -8,6 +8,7 @@ add_library(zfleet_packager_app
 target_link_libraries(zfleet_packager_app
   PRIVATE
     OpenSSL::Crypto
+    zfleet::core
     zfleet::package
 )
 

@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <string>
-#include <string_view>
 
 namespace zfleet::packager {
 
@@ -23,9 +22,5 @@ struct PackResult {
 };
 
 PackResult Pack(const PackOptions& options);
-
-bool IsSafeSegment(std::string_view value);
-bool IsKnownComponent(std::string_view component);
-std::string BinaryNameForComponent(std::string_view component);
 
 } // namespace zfleet::packager

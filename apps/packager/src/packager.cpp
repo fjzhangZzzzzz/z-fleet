@@ -2,6 +2,8 @@
 
 #include <openssl/evp.h>
 
+#include <zfleet/core/component.h>
+#include <zfleet/core/path.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/temp_dir.h>
 
@@ -43,55 +45,6 @@ struct PayloadFile {
   std::string sha256_hex;
   bool executable = false;
 };
-
-bool IsSafeSingleSegment(std::string_view value) {
-  if (value.empty() || value == "." || value == "..") {
-    return false;
-  }
-
-  for (const unsigned char ch : value) {
-    if (!(std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-')) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool IsWindowsDrivePrefix(std::string_view value) {
-  return value.size() >= 2 &&
-         std::isalpha(static_cast<unsigned char>(value[0])) != 0 &&
-         value[1] == ':';
-}
-
-bool IsSafeRelativePath(std::string_view value) {
-  if (value.empty()) {
-    return false;
-  }
-  if (value.front() == '/' || value.front() == '\\' ||
-      value.back() == '/' || value.back() == '\\' ||
-      value.find('\\') != std::string_view::npos) {
-    return false;
-  }
-  if (IsWindowsDrivePrefix(value)) {
-    return false;
-  }
-
-  std::size_t start = 0;
-  while (start <= value.size()) {
-    const std::size_t end = value.find('/', start);
-    const auto part =
-        value.substr(start, end == std::string_view::npos ? end : end - start);
-    if (part.empty() || part == "." || part == "..") {
-      return false;
-    }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
-
-  return true;
-}
 
 std::string ComputeSha256Hex(const fs::path& path) {
   std::ifstream stream(path, std::ios::binary);
@@ -225,12 +178,11 @@ std::string BuildManifestText(const std::string& component,
 }
 
 std::string ValidateComponent(std::string_view component) {
-  if (component == "agent" || component == "server" ||
-      component == "installer") {
+  const auto validation = zfleet::core::ValidateComponent(component);
+  if (validation.ok) {
     return std::string(component);
   }
-  throw std::invalid_argument(
-      "invalid --component; expected agent, server, or installer");
+  throw std::invalid_argument("invalid --component: " + validation.message);
 }
 
 fs::path NormalizePath(const fs::path& path) {
@@ -288,10 +240,13 @@ std::vector<PayloadFile> CollectPayloadFiles(const fs::path& payload_dir,
     }
 
     const auto relative_path = it->path().lexically_relative(payload_dir);
-    const auto relative_string = relative_path.generic_string();
-    if (!IsSafeRelativePath(relative_string)) {
-      throw std::runtime_error("payload path is not safe: " + relative_string);
+    const auto relative_raw = relative_path.generic_string();
+    const auto normalized = zfleet::core::ValidateRelativePath(relative_raw);
+    if (!normalized.ok) {
+      throw std::runtime_error("payload path is not safe: " +
+                               normalized.message + ": " + relative_raw);
     }
+    const auto& relative_string = normalized.value;
     if (relative_string == "META" || relative_string.starts_with("META/")) {
       throw std::runtime_error("payload target must not write META: " +
                                relative_string);
@@ -354,24 +309,27 @@ void CopyPayloadFiles(const fs::path& package_payload_dir,
 PackResult PackToDirectory(const PackOptions& options,
                            const fs::path& output_dir_abs) {
   const auto component = ValidateComponent(options.component);
-  if (!IsSafeSingleSegment(options.version)) {
-    throw std::invalid_argument(
-        "invalid --version; expected [A-Za-z0-9._-]+ and not . or ..");
+  const auto version = zfleet::core::ValidatePathSegment(options.version);
+  if (!version.ok) {
+    throw std::invalid_argument("invalid --version: " + version.message);
   }
-  if (!IsSafeSingleSegment(options.min_installer_version)) {
+  const auto min_installer_version =
+      zfleet::core::ValidatePathSegment(options.min_installer_version);
+  if (!min_installer_version.ok) {
     throw std::invalid_argument(
-        "invalid --min-installer-version; expected [A-Za-z0-9._-]+ and not . or ..");
+        "invalid --min-installer-version: " + min_installer_version.message);
   }
 
   const auto payload_dir = NormalizePath(options.payload_dir);
   ValidatePayloadDir(payload_dir);
 
-  const auto entry_string = options.entry_path.generic_string();
-  if (!IsSafeRelativePath(entry_string)) {
-    throw std::invalid_argument("invalid --entry; expected safe relative path");
+  const auto normalized_entry =
+      zfleet::core::ValidateRelativePath(options.entry_path.generic_string());
+  if (!normalized_entry.ok) {
+    throw std::invalid_argument("invalid --entry: " + normalized_entry.message);
   }
 
-  const auto files = CollectPayloadFiles(payload_dir, entry_string);
+  const auto files = CollectPayloadFiles(payload_dir, normalized_entry.value);
   const auto paths = BuildPackagePaths(component, options.version, output_dir_abs);
 
   if (fs::exists(paths.package_dir)) {
@@ -406,27 +364,6 @@ PackResult PackToDirectory(const PackOptions& options,
 
 } // namespace
 
-bool IsSafeSegment(std::string_view value) {
-  return IsSafeSingleSegment(value);
-}
-
-bool IsKnownComponent(std::string_view component) {
-  return component == "agent" || component == "server" ||
-         component == "installer";
-}
-
-std::string BinaryNameForComponent(std::string_view component) {
-  if (!IsKnownComponent(component)) {
-    throw std::invalid_argument("unknown component: " + std::string(component));
-  }
-
-#ifdef _WIN32
-  return "zfleet_" + std::string(component) + ".exe";
-#else
-  return "zfleet_" + std::string(component);
-#endif
-}
-
 PackResult Pack(const PackOptions& options) {
   const auto output_dir_abs = NormalizePath(options.output_dir);
   if (!options.archive) {
@@ -434,9 +371,9 @@ PackResult Pack(const PackOptions& options) {
   }
 
   const auto component = ValidateComponent(options.component);
-  if (!IsSafeSingleSegment(options.version)) {
-    throw std::invalid_argument(
-        "invalid --version; expected [A-Za-z0-9._-]+ and not . or ..");
+  const auto version = zfleet::core::ValidatePathSegment(options.version);
+  if (!version.ok) {
+    throw std::invalid_argument("invalid --version: " + version.message);
   }
 
   const auto archive_path =

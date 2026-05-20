@@ -2,6 +2,11 @@ add_library(zfleet_launcher_app
   src/launcher.cpp
 )
 
+target_link_libraries(zfleet_launcher_app
+  PUBLIC
+    zfleet::core
+)
+
 target_include_directories(zfleet_launcher_app
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src

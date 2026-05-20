@@ -88,6 +88,10 @@ zf_component_binary_name() {
   printf '%s\n' "$binary_name"
 }
 
+zf_known_components_description() {
+  printf 'agent, server, or installer\n'
+}
+
 zf_validate_component() {
   case "$1" in
     agent|server|installer)

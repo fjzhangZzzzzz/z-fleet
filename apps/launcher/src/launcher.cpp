@@ -1,5 +1,8 @@
 #include "launcher.h"
 
+#include "zfleet/core/component.h"
+#include "zfleet/core/path.h"
+
 #include <cerrno>
 #include <cctype>
 #include <cstring>
@@ -42,37 +45,6 @@ std::string ReadFileTrimmed(const fs::path& path) {
   return value;
 }
 
-bool IsSafeVersionString(const std::string& version) {
-  return !version.empty() && version != "." && version != ".." &&
-         version.find('/') == std::string::npos &&
-         version.find('\\') == std::string::npos;
-}
-
-bool EndsWithCaseInsensitive(std::string_view value, std::string_view suffix) {
-  if (value.size() < suffix.size()) {
-    return false;
-  }
-
-  const auto offset = value.size() - suffix.size();
-  for (std::size_t index = 0; index < suffix.size(); ++index) {
-    const auto left = static_cast<unsigned char>(value[offset + index]);
-    const auto right = static_cast<unsigned char>(suffix[index]);
-    if (std::tolower(left) != std::tolower(right)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::string ComponentLookupName(const std::string& executable_name) {
-#ifdef _WIN32
-  if (EndsWithCaseInsensitive(executable_name, ".exe")) {
-    return executable_name.substr(0, executable_name.size() - 4);
-  }
-#endif
-  return executable_name;
-}
-
 bool IsExecutableFile(const fs::path& executable_path) {
   const auto target_status = fs::symlink_status(executable_path);
   if (!fs::exists(target_status) || !fs::is_regular_file(target_status)) {
@@ -89,26 +61,11 @@ bool IsExecutableFile(const fs::path& executable_path) {
 #endif
 }
 
-std::optional<std::string> ComponentForExecutableName(
-    const std::string& executable_name) {
-  const auto lookup_name = ComponentLookupName(executable_name);
-  if (lookup_name == "zfleet_agent") {
-    return "agent";
-  }
-  if (lookup_name == "zfleet_server") {
-    return "server";
-  }
-  if (lookup_name == "zfleet_installer") {
-    return "installer";
-  }
-  return std::nullopt;
-}
-
 } // namespace
 
 ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
   const auto executable_name = launcher_path.filename().string();
-  const auto component = ComponentForExecutableName(executable_name);
+  const auto component = zfleet::core::ComponentForBinaryName(executable_name);
   if (!component.has_value()) {
     return ResolveResult{
         .ok = false,
@@ -149,11 +106,12 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
     };
   }
 
-  if (!IsSafeVersionString(version)) {
+  const auto version_validation = zfleet::core::ValidatePathSegment(version);
+  if (!version_validation.ok) {
     return ResolveResult{
         .ok = false,
         .target = {},
-        .message = "active-version is invalid",
+        .message = "active-version is invalid: " + version_validation.message,
     };
   }
 

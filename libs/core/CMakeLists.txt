@@ -1,5 +1,7 @@
 add_library(zfleet_core
+  src/component.cpp
   src/log.cpp
+  src/path.cpp
   src/time.cpp
   src/uuid.cpp
   src/version.cpp
@@ -29,7 +31,9 @@ if(BUILD_TESTING)
   include(Catch)
 
   add_executable(zfleet_core_tests
+    tests/component_test.cpp
     tests/log_test.cpp
+    tests/path_test.cpp
     tests/time_test.cpp
     tests/version_test.cpp
   )

@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 zf_validate_component "$component" ||
-  zf_fail_arg "invalid --component; expected agent, server, or installer"
+  zf_fail_arg "invalid --component; expected $(zf_known_components_description)"
 mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir"
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
 binary_name="$(zf_component_binary_name "$component")"

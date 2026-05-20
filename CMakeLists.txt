@@ -10,7 +10,6 @@ include(CTest)
 
 if(BUILD_TESTING)
   add_subdirectory(tests/support)
-  add_subdirectory(tests/integration)
 endif()
 
 add_subdirectory(libs/core)
@@ -23,3 +22,7 @@ add_subdirectory(apps/installer)
 add_subdirectory(apps/launcher)
 add_subdirectory(apps/packager)
 add_subdirectory(apps/server)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests/integration)
+endif()

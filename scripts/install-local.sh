@@ -119,7 +119,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 zf_validate_component "$component" ||
-  zf_fail_arg "invalid --component; expected agent, server, or installer"
+  zf_fail_arg "invalid --component; expected $(zf_known_components_description)"
 
 root_abs="$(zf_make_absolute_path "$root")"
 

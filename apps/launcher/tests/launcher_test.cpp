@@ -114,7 +114,9 @@ TEST_CASE("resolve target fails for invalid active version state") {
 
     const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
     REQUIRE_FALSE(resolved.ok);
-    REQUIRE(resolved.message == "active-version is invalid");
+    REQUIRE(resolved.message ==
+            "active-version is invalid: expected non-empty single segment using "
+            "only letters, digits, '.', '_', or '-'");
   }
 
   SECTION("target executable missing") {

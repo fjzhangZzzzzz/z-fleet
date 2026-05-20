@@ -14,6 +14,7 @@ target_link_libraries(zfleet_installer_app
   PRIVATE
     OpenSSL::Crypto
     nlohmann_json::nlohmann_json
+    zfleet::core
     zfleet::package
 )
 

@@ -1,5 +1,8 @@
 #include "json_codec.h"
 
+#include "zfleet/core/component.h"
+#include "zfleet/core/path.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -56,79 +59,22 @@ bool IsLowerHexSha256(std::string_view value) {
   });
 }
 
-std::string NormalizePath(std::string_view raw_path) {
-  std::string normalized(raw_path);
-  std::replace(normalized.begin(), normalized.end(), '\\', '/');
-  return normalized;
-}
-
-bool HasWindowsDrivePrefix(std::string_view path) {
-  return path.size() >= 2 &&
-         std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':';
-}
-
 std::string ValidateRelativePath(std::string_view raw_path,
                                  const char* field_name) {
-  const auto normalized = NormalizePath(raw_path);
-  if (normalized.empty()) {
-    throw std::invalid_argument(std::string(field_name) + " must not be empty");
+  const auto normalized = zfleet::core::ValidateRelativePath(raw_path);
+  if (!normalized.ok) {
+    throw std::invalid_argument(std::string(field_name) + " " +
+                                normalized.message);
   }
-  if (normalized == "." || normalized == "..") {
-    throw std::invalid_argument(std::string(field_name) +
-                                " must not be '.' or '..'");
-  }
-  if (normalized.starts_with('/') || normalized.starts_with("//")) {
-    throw std::invalid_argument(std::string(field_name) +
-                                " must be a relative path");
-  }
-  if (HasWindowsDrivePrefix(normalized)) {
-    throw std::invalid_argument(std::string(field_name) +
-                                " must not use a Windows drive path");
-  }
-
-  fs::path path(normalized);
-  if (path.is_absolute()) {
-    throw std::invalid_argument(std::string(field_name) +
-                                " must be a relative path");
-  }
-
-  std::vector<std::string> components;
-  for (const auto& part : path) {
-    const auto piece = part.generic_string();
-    if (piece.empty()) {
-      continue;
-    }
-    if (piece == "." || piece == "..") {
-      throw std::invalid_argument(std::string(field_name) +
-                                  " must not contain '.' or '..'");
-    }
-    components.push_back(piece);
-  }
-
-  if (components.empty()) {
-    throw std::invalid_argument(std::string(field_name) +
-                                " must not be empty");
-  }
-
-  std::string collapsed = components.front();
-  for (std::size_t index = 1; index < components.size(); ++index) {
-    collapsed += "/";
-    collapsed += components[index];
-  }
-  return collapsed;
+  return normalized.value;
 }
 
 std::string ValidateVersion(std::string_view version) {
-  const auto normalized = NormalizePath(version);
-  if (normalized.empty()) {
-    throw std::invalid_argument("version must not be empty");
+  const auto validation = zfleet::core::ValidatePathSegment(version);
+  if (!validation.ok) {
+    throw std::invalid_argument("version " + validation.message);
   }
-  if (normalized.find('/') != std::string::npos || normalized == "." ||
-      normalized == ".." || HasWindowsDrivePrefix(normalized)) {
-    throw std::invalid_argument("version must be a single safe path segment");
-  }
-
-  return normalized;
+  return validation.value;
 }
 
 } // namespace
@@ -156,8 +102,10 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
   }
   manifest.version = ValidateVersion(manifest.version);
 
-  if (!IsKnownComponent(manifest.component)) {
-    throw std::invalid_argument("unknown component: " + manifest.component);
+  const auto component_validation =
+      zfleet::core::ValidateComponent(manifest.component);
+  if (!component_validation.ok) {
+    throw std::invalid_argument("component " + component_validation.message);
   }
 
   if (!parsed.contains("files") || !parsed.at("files").is_array()) {
