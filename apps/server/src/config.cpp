@@ -56,6 +56,12 @@ ServerConfig LoadConfig(
     }
   }
 
+  if (const auto* node = server->get("grpc_listen"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.grpc_listen = *value;
+    }
+  }
+
   if (const auto* node = server->get("database_path"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.database_path = *value;

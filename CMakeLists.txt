@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_program(ZFLEET_GOLD_LINKER ld.gold)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND ZFLEET_GOLD_LINKER)
+  add_link_options(-fuse-ld=gold)
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)

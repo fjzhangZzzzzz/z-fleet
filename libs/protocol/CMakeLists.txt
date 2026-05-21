@@ -24,10 +24,10 @@ add_custom_command(
     ${ZFLEET_PROTOCOL_GENERATED_HEADERS}
   COMMAND ${CMAKE_COMMAND} -E make_directory "${ZFLEET_PROTOCOL_GENERATED_DIR}"
   COMMAND protobuf::protoc
-    --proto_path="${ZFLEET_PROTOCOL_PROTO_DIR}"
-    --cpp_out="${ZFLEET_PROTOCOL_GENERATED_DIR}"
-    --grpc_out="${ZFLEET_PROTOCOL_GENERATED_DIR}"
-    --plugin=protoc-gen-grpc="${ZFLEET_GRPC_CPP_PLUGIN}"
+    --proto_path=${ZFLEET_PROTOCOL_PROTO_DIR}
+    --cpp_out=${ZFLEET_PROTOCOL_GENERATED_DIR}
+    --grpc_out=${ZFLEET_PROTOCOL_GENERATED_DIR}
+    --plugin=protoc-gen-grpc=${ZFLEET_GRPC_CPP_PLUGIN}
     ${ZFLEET_PROTOCOL_PROTO_FILES}
   DEPENDS
     ${ZFLEET_PROTOCOL_PROTO_FILES}

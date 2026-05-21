@@ -1,5 +1,7 @@
 #include "config.h"
 #include "database.h"
+#include "grpc_control_server.h"
+#include "grpc_control_service.h"
 #include "http_handler.h"
 #include "http_server.h"
 
@@ -18,11 +20,14 @@ int main(int argc, char** argv) {
 
   std::string config_path_arg;
   std::string database_path_arg;
+  std::string grpc_listen_arg;
   std::string listen_arg;
   std::string log_level_arg;
   app.add_option("--config", config_path_arg, "Path to server config file");
   app.add_option("--database-path", database_path_arg,
                  "Override server database path");
+  app.add_option("--grpc-listen", grpc_listen_arg,
+                 "Override server gRPC listen address");
   app.add_option("--listen", listen_arg, "Override server listen address");
   app.add_option("--log-level", log_level_arg, "Override server log level");
 
@@ -36,6 +41,9 @@ int main(int argc, char** argv) {
     auto config = zfleet::server::LoadConfig(config_path);
     if (!database_path_arg.empty()) {
       config.database_path = database_path_arg;
+    }
+    if (!grpc_listen_arg.empty()) {
+      config.grpc_listen = grpc_listen_arg;
     }
     if (!listen_arg.empty()) {
       config.listen = listen_arg;
@@ -51,6 +59,10 @@ int main(int argc, char** argv) {
 
     zfleet::server::ServerDatabase database(config.database_path);
     database.Initialize();
+    zfleet::server::GrpcControlService grpc_control_service(&database);
+    zfleet::server::GrpcControlServer grpc_control_server(
+        config.grpc_listen, &grpc_control_service);
+    grpc_control_server.Start();
     const zfleet::server::HttpHandler handler(&database);
     zfleet::server::HttpServer server(config.listen, &handler);
 

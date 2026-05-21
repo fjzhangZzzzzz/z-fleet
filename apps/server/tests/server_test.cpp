@@ -1,15 +1,20 @@
 #include "config.h"
 #include "database.h"
+#include "grpc_control_server.h"
+#include "grpc_control_service.h"
 #include "http_handler.h"
 
 #include "test_util.h"
 
 #include "zfleet/protocol/json_codec.h"
+#include "zfleet/protocol/v1/agent_control.grpc.pb.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/beast/http.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <grpcpp/grpcpp.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -109,6 +114,7 @@ TEST_CASE("server config loads listen and database path from toml") {
     REQUIRE(config_stream);
     config_stream << "[server]\n";
     config_stream << "listen = \"127.0.0.1:18080\"\n";
+    config_stream << "grpc_listen = \"127.0.0.1:18081\"\n";
     config_stream << "database_path = \"" << (test_root / "server.db").string()
                   << "\"\n";
     config_stream << "\n[log]\n";
@@ -121,11 +127,75 @@ TEST_CASE("server config loads listen and database path from toml") {
   const auto config = zfleet::server::LoadConfig(config_path);
 
   REQUIRE(config.listen == "127.0.0.1:18080");
+  REQUIRE(config.grpc_listen == "127.0.0.1:18081");
   REQUIRE(config.database_path == test_root / "server.db");
   REQUIRE(config.log.level == zfleet::core::log::Level::kDebug);
   REQUIRE(config.log.file_path == test_root / "server.log");
   REQUIRE_FALSE(config.log.enable_console);
 
+}
+
+TEST_CASE("grpc control stream registers agent and stores heartbeat") {
+  namespace proto = zfleet::protocol::v1;
+
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::GrpcControlService control_service(&database);
+  zfleet::server::GrpcControlServer control_server("127.0.0.1:0",
+                                                   &control_service);
+  control_server.Start();
+
+  auto channel = grpc::CreateChannel(
+      "127.0.0.1:" + std::to_string(control_server.port()),
+      grpc::InsecureChannelCredentials());
+  auto stub = proto::AgentControl::NewStub(channel);
+
+  grpc::ClientContext context;
+  auto stream = stub->Connect(&context);
+
+  proto::AgentEvent registration;
+  registration.set_protocol_version("v1");
+  registration.set_message_id("req-grpc-register");
+  registration.set_correlation_id("corr-grpc-register");
+  registration.set_agent_id("agent-1");
+  registration.set_occurred_at("2026-05-21T10:00:00Z");
+  auto* registration_payload = registration.mutable_register_();
+  registration_payload->set_agent_version("0.1.0");
+  registration_payload->set_hostname("devbox-01");
+  registration_payload->set_os("linux");
+  registration_payload->set_arch("x86_64");
+
+  proto::AgentEvent heartbeat;
+  heartbeat.set_protocol_version("v1");
+  heartbeat.set_message_id("req-grpc-heartbeat");
+  heartbeat.set_correlation_id("corr-grpc-heartbeat");
+  heartbeat.set_agent_id("agent-1");
+  heartbeat.set_occurred_at("2026-05-21T10:00:05Z");
+  heartbeat.mutable_heartbeat()->set_agent_version("0.1.0");
+
+  REQUIRE(stream->Write(registration));
+  REQUIRE(stream->Write(heartbeat));
+  REQUIRE(stream->WritesDone());
+  const auto status = stream->Finish();
+
+  REQUIRE(status.ok());
+  REQUIRE(database.AgentExists("agent-1"));
+  REQUIRE(CountRows(database_path, "heartbeats") == 1);
+  REQUIRE(CountRows(database_path, "audit_events") == 2);
+  REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
+          "2026-05-21T10:00:05Z");
+
+  const auto connection = control_service.FindConnection("agent-1");
+  REQUIRE(connection.has_value());
+  REQUIRE(connection->connected_at.empty() == false);
+  REQUIRE(connection->last_heartbeat_at == "2026-05-21T10:00:05Z");
+  REQUIRE_FALSE(connection->connected);
+  REQUIRE(control_service.IsAgentOnline("agent-1", std::chrono::seconds(30)));
+
+  control_server.Shutdown();
 }
 
 TEST_CASE("server database initializes schema and version") {

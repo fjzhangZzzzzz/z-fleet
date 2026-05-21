@@ -1,6 +1,8 @@
 add_library(zfleet_server_app
   src/config.cpp
   src/database.cpp
+  src/grpc_control_server.cpp
+  src/grpc_control_service.cpp
   src/http_handler.cpp
   src/http_server.cpp
 )
