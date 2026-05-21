@@ -1,0 +1,204 @@
+syntax = "proto3";
+
+package zfleet.protocol.v1;
+
+service AgentControl {
+  rpc Connect(stream AgentEvent) returns (stream ServerCommand);
+}
+
+service AgentData {
+  rpc UploadAssetSnapshot(AssetSnapshotRequest) returns (StatusResponse);
+  rpc UploadLogs(stream LogChunk) returns (StatusResponse);
+  rpc DownloadPackage(PackageRequest) returns (stream PackageChunk);
+}
+
+message AgentEvent {
+  string protocol_version = 1;
+  string message_id = 2;
+  string correlation_id = 3;
+  string agent_id = 4;
+  string occurred_at = 5;
+
+  oneof payload {
+    AgentRegisterEvent register = 10;
+    HeartbeatEvent heartbeat = 11;
+    AssetSnapshotEvent asset_snapshot = 12;
+    TaskRunningEvent task_running = 13;
+    TaskResultEvent task_result = 14;
+    AgentErrorEvent error = 15;
+  }
+}
+
+message ServerCommand {
+  string protocol_version = 1;
+  string message_id = 2;
+  string correlation_id = 3;
+  string agent_id = 4;
+  string occurred_at = 5;
+
+  oneof payload {
+    TaskAssignedCommand task_assigned = 10;
+    CancelTaskCommand cancel_task = 11;
+    ConfigUpdateCommand config_update = 12;
+    PackageUpdateCommand package_update = 13;
+    ServerErrorCommand error = 14;
+  }
+}
+
+message AgentRegisterEvent {
+  string agent_version = 1;
+  string hostname = 2;
+  string os = 3;
+  string arch = 4;
+}
+
+message HeartbeatEvent {
+  string agent_version = 1;
+}
+
+message AssetSnapshotEvent {
+  string hostname = 1;
+  string os = 2;
+  string os_version = 3;
+  string arch = 4;
+  string agent_version = 5;
+}
+
+message TaskRunningEvent {
+  string task_id = 1;
+  TaskType task_type = 2;
+}
+
+message TaskResultEvent {
+  string task_id = 1;
+  TaskType task_type = 2;
+  TaskExecutionStatus status = 3;
+  CollectBasicInventoryResult collect_basic_inventory = 4;
+  AgentError error = 5;
+}
+
+message AgentErrorEvent {
+  ErrorCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message TaskAssignedCommand {
+  string task_id = 1;
+  TaskType task_type = 2;
+  CapabilityLevel capability_level = 3;
+  string created_at = 4;
+  string expires_at = 5;
+  CollectBasicInventoryInput collect_basic_inventory = 6;
+}
+
+message CancelTaskCommand {
+  string task_id = 1;
+  string reason = 2;
+}
+
+message ConfigUpdateCommand {
+  uint32 heartbeat_interval_seconds = 1;
+  uint32 reconnect_initial_delay_seconds = 2;
+  uint32 reconnect_max_delay_seconds = 3;
+}
+
+message PackageUpdateCommand {
+  string component = 1;
+  string version = 2;
+  string package_url = 3;
+  string manifest_sha256 = 4;
+}
+
+message ServerErrorCommand {
+  ErrorCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message AssetSnapshotRequest {
+  AgentEvent envelope = 1;
+  AssetSnapshotEvent snapshot = 2;
+}
+
+message StatusResponse {
+  string protocol_version = 1;
+  string message_id = 2;
+  string correlation_id = 3;
+  string agent_id = 4;
+  string occurred_at = 5;
+  string status = 6;
+  string server_time = 7;
+}
+
+message LogChunk {
+  string protocol_version = 1;
+  string message_id = 2;
+  string correlation_id = 3;
+  string agent_id = 4;
+  string occurred_at = 5;
+  bytes data = 6;
+  bool final_chunk = 7;
+}
+
+message PackageRequest {
+  string protocol_version = 1;
+  string message_id = 2;
+  string agent_id = 3;
+  string occurred_at = 4;
+  string component = 5;
+  string version = 6;
+}
+
+message PackageChunk {
+  string package_id = 1;
+  bytes data = 2;
+  bool final_chunk = 3;
+}
+
+message CollectBasicInventoryInput {}
+
+message CollectBasicInventoryResult {
+  string hostname = 1;
+  string os = 2;
+  string arch = 3;
+  string agent_version = 4;
+}
+
+message AgentError {
+  ErrorCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+enum TaskType {
+  TASK_TYPE_UNSPECIFIED = 0;
+  TASK_TYPE_COLLECT_BASIC_INVENTORY = 1;
+}
+
+enum CapabilityLevel {
+  CAPABILITY_LEVEL_UNSPECIFIED = 0;
+  CAPABILITY_LEVEL_READONLY = 1;
+  CAPABILITY_LEVEL_LOW_RISK_WRITE = 2;
+  CAPABILITY_LEVEL_HIGH_RISK_WRITE = 3;
+  CAPABILITY_LEVEL_SHELL = 4;
+}
+
+enum TaskExecutionStatus {
+  TASK_EXECUTION_STATUS_UNSPECIFIED = 0;
+  TASK_EXECUTION_STATUS_SUCCEEDED = 1;
+  TASK_EXECUTION_STATUS_FAILED = 2;
+  TASK_EXECUTION_STATUS_EXPIRED = 3;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION = 1;
+  ERROR_CODE_AGENT_NOT_REGISTERED = 2;
+  ERROR_CODE_INTERNAL_ERROR = 3;
+  ERROR_CODE_TASK_NOT_FOUND = 4;
+  ERROR_CODE_TASK_ALREADY_FINISHED = 5;
+  ERROR_CODE_TASK_EXPIRED = 6;
+  ERROR_CODE_UNSUPPORTED_TASK_TYPE = 7;
+  ERROR_CODE_CAPABILITY_NOT_ALLOWED = 8;
+}

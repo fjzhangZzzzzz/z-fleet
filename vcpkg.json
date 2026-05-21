@@ -11,6 +11,8 @@
     "cli11",
     "nlohmann-json",
     "openssl",
+    "protobuf",
+    "grpc",
     "zlib",
     "spdlog",
     "sqlite3",
