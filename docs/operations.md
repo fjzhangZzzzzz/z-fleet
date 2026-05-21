@@ -1,7 +1,7 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-20
+最后更新：2026-05-21
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
@@ -24,6 +24,15 @@
 ./scripts/test.sh linux-release
 ```
 
+需要避免构建占满 CPU 时，可限制 CMake 和 vcpkg 构建并发：
+
+```bash
+./scripts/build.sh linux-debug --jobs 4
+ZF_BUILD_JOBS=4 ./scripts/build.sh linux-debug
+```
+
+`--jobs` 优先于 `ZF_BUILD_JOBS`。该限制控制的是并发任务数，不是严格 CPU 百分比。
+
 标准预设：
 
 - `linux-debug`
@@ -35,6 +44,44 @@
 
 ```bash
 ctest --preset linux-debug
+```
+
+## vcpkg
+
+项目使用 `scripts/vcpkg.sh` 作为 vcpkg 入口，统一工具版本、安装目录和 binary cache：
+
+```bash
+./scripts/vcpkg.sh bootstrap
+./scripts/vcpkg.sh list
+./scripts/vcpkg.sh install --jobs 4
+```
+
+目录约定：
+
+- `.tools/vcpkg`：由 `.vcpkg-version` 固定的 vcpkg tool。
+- `build/vcpkg_installed`：项目依赖安装目录。
+- `.cache/vcpkg/archives`：项目 binary cache。
+
+需要执行原生命令时使用 `exec`：
+
+```bash
+./scripts/vcpkg.sh exec search grpc
+./scripts/vcpkg.sh exec help install
+```
+
+单独安装 manifest 依赖时也可限制并发：
+
+```bash
+ZF_BUILD_JOBS=4 ./scripts/vcpkg.sh install
+./scripts/vcpkg.sh install --jobs 2
+```
+
+手动运行 `cmake --preset` 前，需要把项目 vcpkg 环境导入当前 shell：
+
+```bash
+./scripts/vcpkg.sh bootstrap
+eval "$(./scripts/vcpkg.sh env)"
+cmake --preset linux-debug
 ```
 
 ## 本地运行

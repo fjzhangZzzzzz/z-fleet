@@ -1,20 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcpkg.sh"
 
-script_dir="$ZF_SCRIPT_DIR"
-repo_root="$ZF_REPO_ROOT"
-preset="${1:-$(zf_default_preset)}"
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  ./scripts/build.sh [preset] [--jobs <n>]
 
-source "$script_dir/bootstrap-vcpkg.sh"
+Options:
+  --jobs <n>  Limit CMake and vcpkg build concurrency.
 
-cache_dir="$repo_root/.cache/vcpkg/archives"
-mkdir -p "$cache_dir"
+Environment:
+  ZF_BUILD_JOBS=<n>  Default jobs value when --jobs is not specified.
+USAGE
+}
 
-cache_dir="$(zf_to_native_path_if_needed "$cache_dir")"
+preset=""
+jobs="${ZF_BUILD_JOBS:-}"
 
-export VCPKG_BINARY_SOURCES="clear;files,$cache_dir,readwrite"
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --jobs)
+      shift
+      [[ "$#" -gt 0 ]] || zf_fail_arg "missing value for --jobs"
+      jobs="$1"
+      ;;
+    --jobs=*)
+      jobs="${1#--jobs=}"
+      [[ -n "$jobs" ]] || zf_fail_arg "missing value for --jobs"
+      ;;
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      [[ "$#" -le 1 ]] || zf_fail_arg "expected at most one preset"
+      if [[ "$#" -eq 1 ]]; then
+        [[ -z "$preset" ]] || zf_fail_arg "preset specified more than once"
+        preset="$1"
+      fi
+      break
+      ;;
+    -*)
+      zf_fail_arg "unknown option: $1"
+      ;;
+    *)
+      [[ -z "$preset" ]] || zf_fail_arg "preset specified more than once"
+      preset="$1"
+      ;;
+  esac
+  shift
+done
+
+preset="${preset:-$(zf_default_preset)}"
+
+zf_apply_build_jobs "$jobs"
+zf_vcpkg_bootstrap
+zf_vcpkg_setup_project_env
 
 cmake --preset "$preset"
 cmake --build --preset "$preset"

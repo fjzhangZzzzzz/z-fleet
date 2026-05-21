@@ -90,6 +90,26 @@ z-fleet/
 
 Windows 本地构建要求在 Git Bash 中执行脚本，并提前安装 Visual Studio Build Tools、CMake、Ninja 和 Git。
 未指定 preset 时，Linux 默认使用 `linux-debug`，Windows Git Bash 默认使用 `windows-debug`。
+需要限制本地构建并发时，使用 `--jobs` 或 `ZF_BUILD_JOBS`：
+
+```bash
+./scripts/build.sh linux-debug --jobs 4
+ZF_BUILD_JOBS=4 ./scripts/build.sh linux-debug
+```
+
+项目感知的 vcpkg 入口为：
+
+```bash
+./scripts/vcpkg.sh bootstrap
+./scripts/vcpkg.sh list
+./scripts/vcpkg.sh install --jobs 4
+```
+
+脚本固定使用 `.tools/vcpkg`、`build/vcpkg_installed` 和 `.cache/vcpkg/archives`，避免直接运行 vcpkg 默认目录导致状态不一致。需要手动运行 `cmake --preset` 时，先执行：
+
+```bash
+eval "$(./scripts/vcpkg.sh env)"
+```
 
 更多构建、配置、运行和排障说明见 [docs/operations.md](docs/operations.md)。
 
