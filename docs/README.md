@@ -27,6 +27,7 @@
 | [路线图](roadmap.md) | 草案 | v0.1 / v0.2 / v0.3 和长期方向 |
 | [ADR 模板](adr/template.md) | 草案 | ADR 模板 |
 | [ADR 0007](adr/0007-agent-control-channel-grpc-http2.md) | 已接受 | Agent/Server 主控制通道协议决策 |
+| [ADR 0008](adr/0008-server-persistence-and-connection-concurrency.md) | 已接受 | Server 持久化边界与连接并发模型 |
 
 ## 文档状态枚举
 
