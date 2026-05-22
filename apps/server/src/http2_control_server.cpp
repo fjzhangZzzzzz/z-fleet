@@ -14,13 +14,16 @@
 #include <nghttp2/nghttp2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <stdexcept>
 #include <span>
 #include <string_view>
@@ -35,6 +38,7 @@ using tcp = boost::asio::ip::tcp;
 namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
+constexpr std::size_t kMaxConnectionThreads = 128;
 
 #define ZFLEET_NGHTTP2_NV(NAME, VALUE)                                      \
   nghttp2_nv {                                                              \
@@ -67,20 +71,20 @@ struct StreamState {
 };
 
 struct ConnectionContext {
-  tcp::socket socket;
-  ServerDatabase* database;
+  std::shared_ptr<tcp::socket> socket;
+  ServerStore* store;
   const Http2ControlService* service;
   Http2ConnectionRegistry* registry;
   std::string connection_id;
   std::map<std::int32_t, StreamState> streams;
 
-  ConnectionContext(tcp::socket accepted_socket,
-                    ServerDatabase* database_arg,
+  ConnectionContext(std::shared_ptr<tcp::socket> accepted_socket,
+                    ServerStore* store_arg,
                     const Http2ControlService* service_arg,
                     Http2ConnectionRegistry* registry_arg,
                     std::string connection_id_arg)
       : socket(std::move(accepted_socket)),
-        database(database_arg),
+        store(store_arg),
         service(service_arg),
         registry(registry_arg),
         connection_id(std::move(connection_id_arg)) {}
@@ -213,7 +217,12 @@ ssize_t SendCallback(nghttp2_session* /*session*/,
                      int /*flags*/,
                      void* user_data) {
   auto* context = static_cast<ConnectionContext*>(user_data);
-  boost::asio::write(context->socket, boost::asio::buffer(data, length));
+  boost::system::error_code ec;
+  boost::asio::write(*context->socket, boost::asio::buffer(data, length),
+                     boost::asio::transfer_all(), ec);
+  if (ec) {
+    return NGHTTP2_ERR_CALLBACK_FAILURE;
+  }
   return static_cast<ssize_t>(length);
 }
 
@@ -282,7 +291,7 @@ void HandleCommandHeadersEnd(nghttp2_session* session,
   }
 
   const auto assigned_at = zfleet::core::NowUtcRfc3339();
-  const auto task = context->database->ClaimNextTaskForAgent(
+  const auto task = context->store->ClaimNextTaskForAgent(
       *connection->agent_id, assigned_at);
   if (!task.has_value()) {
     SubmitSimpleResponse(session, frame->hd.stream_id, "200");
@@ -404,11 +413,11 @@ struct ServerSession {
   }
 };
 
-void HandleConnection(tcp::socket socket,
-                      ServerDatabase* database,
+void HandleConnection(std::shared_ptr<tcp::socket> socket,
+                      ServerStore* store,
                       const Http2ControlService* service,
                       Http2ConnectionRegistry* registry) {
-  ConnectionContext context(std::move(socket), database, service, registry,
+  ConnectionContext context(std::move(socket), store, service, registry,
                             zfleet::core::GenerateUuid());
   registry->OpenConnection(context.connection_id, zfleet::core::NowUtcRfc3339());
 
@@ -423,7 +432,7 @@ void HandleConnection(tcp::socket socket,
     while (nghttp2_session_want_read(server_session.session) != 0 ||
            nghttp2_session_want_write(server_session.session) != 0) {
       const auto bytes_read =
-          context.socket.read_some(boost::asio::buffer(buffer), ec);
+          context.socket->read_some(boost::asio::buffer(buffer), ec);
       if (ec == boost::asio::error::eof) {
         break;
       }
@@ -451,19 +460,19 @@ void HandleConnection(tcp::socket socket,
 
 Http2ControlServer::Http2ControlServer(
     std::string listen_address,
-    ServerDatabase* database,
+    ServerStore* store,
     const Http2ControlService* service,
     Http2ConnectionRegistry* registry)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(1),
       acceptor_(io_context_),
-      database_(database),
+      store_(store),
       service_(service),
       registry_(registry) {}
 
 void Http2ControlServer::Run() {
-  if (database_ == nullptr) {
-    throw std::invalid_argument("server database must not be null");
+  if (store_ == nullptr) {
+    throw std::invalid_argument("server store must not be null");
   }
   if (service_ == nullptr) {
     throw std::invalid_argument("http2 control service must not be null");
@@ -491,6 +500,24 @@ void Http2ControlServer::Stop() {
   acceptor_.cancel(ec);
   acceptor_.close(ec);
   io_context_.stop();
+
+  std::vector<ConnectionThread> connection_threads;
+  {
+    std::lock_guard lock(connection_threads_mutex_);
+    for (auto& connection_thread : connection_threads_) {
+      if (connection_thread.socket != nullptr) {
+        connection_thread.socket->close(ec);
+      }
+    }
+    connection_threads = std::move(connection_threads_);
+    connection_threads_.clear();
+  }
+
+  for (auto& connection_thread : connection_threads) {
+    if (connection_thread.thread.joinable()) {
+      connection_thread.thread.join();
+    }
+  }
 }
 
 std::uint16_t Http2ControlServer::port() const noexcept {
@@ -507,11 +534,48 @@ void Http2ControlServer::StartAccept() {
           return;
         }
 
-        HandleConnection(std::move(socket), database_, service_, registry_);
+        ReapFinishedConnections();
+        auto socket_ptr = std::make_shared<tcp::socket>(std::move(socket));
+        auto done = std::make_shared<std::atomic_bool>(false);
+        {
+          std::lock_guard lock(connection_threads_mutex_);
+          if (connection_threads_.size() >= kMaxConnectionThreads) {
+            socket_ptr->close(ec);
+            ZFLOG_ERROR(zfleet::core::log::Component("server"),
+                        "http2 control connection rejected: too many active connections");
+          } else {
+            connection_threads_.push_back(ConnectionThread{
+                .thread = std::thread(
+                    [socket = socket_ptr, store = store_, service = service_,
+                     registry = registry_, done]() mutable {
+                      HandleConnection(std::move(socket), store, service,
+                                       registry);
+                      done->store(true);
+                    }),
+                .socket = socket_ptr,
+                .done = done,
+            });
+          }
+        }
         if (acceptor_.is_open()) {
           StartAccept();
         }
       });
+}
+
+void Http2ControlServer::ReapFinishedConnections() {
+  std::lock_guard lock(connection_threads_mutex_);
+  auto connection = connection_threads_.begin();
+  while (connection != connection_threads_.end()) {
+    if (connection->done != nullptr && connection->done->load()) {
+      if (connection->thread.joinable()) {
+        connection->thread.join();
+      }
+      connection = connection_threads_.erase(connection);
+      continue;
+    }
+    ++connection;
+  }
 }
 
 } // namespace zfleet::server

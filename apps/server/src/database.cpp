@@ -3,7 +3,9 @@
 #include "zfleet/protocol/json_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
+#include <sqlite3.h>
 
+#include <mutex>
 #include <stdexcept>
 
 namespace zfleet::server {
@@ -118,6 +120,15 @@ void ExecSchema(SQLite::Database& db) {
   db.exec("PRAGMA user_version = 2");
 }
 
+constexpr int kBusyTimeoutMs = 5000;
+
+SQLite::Database OpenDatabase(const std::filesystem::path& database_path,
+                              const int flags) {
+  SQLite::Database db(database_path.string(), flags);
+  db.exec("PRAGMA busy_timeout=" + std::to_string(kBusyTimeoutMs));
+  return db;
+}
+
 } // namespace
 
 ServerDatabase::ServerDatabase(std::filesystem::path database_path)
@@ -133,13 +144,15 @@ void ServerDatabase::Initialize() {
     std::filesystem::create_directories(parent_path);
   }
 
-  SQLite::Database db(database_path_.string(),
-                      SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
+  std::lock_guard lock(write_mutex_);
+  auto db = OpenDatabase(database_path_,
+                         SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
+  db.exec("PRAGMA journal_mode=WAL");
   ExecSchema(db);
 }
 
 int ServerDatabase::schema_version() const {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READONLY);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
   SQLite::Statement query(db, "PRAGMA user_version");
   if (!query.executeStep()) {
     throw std::runtime_error("failed to read schema version");
@@ -153,7 +166,7 @@ const std::filesystem::path& ServerDatabase::database_path() const noexcept {
 }
 
 bool ServerDatabase::AgentExists(const std::string& agent_id) const {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READONLY);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
   SQLite::Statement query(db, "select 1 from agents where agent_id = ?");
   query.bind(1, agent_id);
   return query.executeStep();
@@ -161,7 +174,8 @@ bool ServerDatabase::AgentExists(const std::string& agent_id) const {
 
 void ServerDatabase::UpsertAgent(
     const zfleet::protocol::RegistrationRequest& request) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
       db,
       R"sql(
@@ -183,7 +197,8 @@ void ServerDatabase::UpsertAgent(
 void ServerDatabase::RecordHeartbeat(
     const zfleet::protocol::HeartbeatRequest& request,
     const std::string& payload_json) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Transaction transaction(db);
 
   SQLite::Statement insert_statement(
@@ -207,7 +222,8 @@ void ServerDatabase::RecordHeartbeat(
 void ServerDatabase::RecordAssetSnapshot(
     const zfleet::protocol::AssetSnapshotRequest& request,
     const std::string& payload_json) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
       db,
       "insert into asset_snapshots (agent_id, occurred_at, payload_json) values (?, ?, ?)");
@@ -218,7 +234,8 @@ void ServerDatabase::RecordAssetSnapshot(
 }
 
 void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
       db,
       R"sql(
@@ -245,7 +262,8 @@ void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event)
 }
 
 void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
       db,
       R"sql(
@@ -281,23 +299,33 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
 
 void ServerDatabase::MarkTaskRunning(
     const zfleet::protocol::TaskRunningRequest& request) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement update(
-      db, "update tasks set state = ?, assigned_at = coalesce(assigned_at, ?) "
-          "where task_id = ?");
+      db,
+      "update tasks set state = ?, assigned_at = coalesce(assigned_at, ?) "
+      "where task_id = ? and state = ?");
   update.bind(
       1,
       std::string(zfleet::protocol::ToString(
           zfleet::protocol::TaskState::running)));
   update.bind(2, request.occurred_at);
   update.bind(3, request.task_id);
+  update.bind(
+      4,
+      std::string(zfleet::protocol::ToString(
+          zfleet::protocol::TaskState::assigned)));
   update.exec();
+  if (sqlite3_changes(db.getHandle()) != 1) {
+    throw std::runtime_error("task running state transition failed");
+  }
 }
 
 std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
     const std::string& agent_id,
     const std::string& assigned_at) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Transaction transaction(db);
   SQLite::Statement select(
       db,
@@ -330,21 +358,29 @@ std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
   const auto task = ParseStoredTask(select);
   SQLite::Statement update(
       db,
-      "update tasks set state = ?, assigned_at = ? where task_id = ?");
+      "update tasks set state = ?, assigned_at = ? "
+      "where task_id = ? and state = ?");
   update.bind(
       1,
       std::string(zfleet::protocol::ToString(
           zfleet::protocol::TaskState::assigned)));
   update.bind(2, assigned_at);
   update.bind(3, task.task_id);
+  update.bind(
+      4,
+      std::string(zfleet::protocol::ToString(
+          zfleet::protocol::TaskState::queued)));
   update.exec();
+  if (sqlite3_changes(db.getHandle()) != 1) {
+    return std::nullopt;
+  }
   transaction.commit();
   return task;
 }
 
-std::optional<ServerDatabase::StoredTask> ServerDatabase::FindTaskById(
+std::optional<StoredTask> ServerDatabase::FindTaskById(
     const std::string& task_id) const {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READONLY);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
   SQLite::Statement query(
       db,
       R"sql(
@@ -381,7 +417,8 @@ void ServerDatabase::RecordTaskResult(
     const zfleet::protocol::TaskResultRequest& request,
     const std::optional<std::string>& result_json,
     const std::optional<std::string>& error_json) {
-  SQLite::Database db(database_path_.string(), SQLite::OPEN_READWRITE);
+  std::lock_guard lock(write_mutex_);
+  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Transaction transaction(db);
 
   SQLite::Statement insert(
@@ -425,11 +462,28 @@ void ServerDatabase::RecordTaskResult(
                 ? zfleet::protocol::TaskState::failed
                 : zfleet::protocol::TaskState::expired;
   SQLite::Statement update(
-      db, "update tasks set state = ?, completed_at = ? where task_id = ?");
+      db,
+      "update tasks set state = ?, completed_at = ? where task_id = ? "
+      "and state not in (?, ?, ?)");
   update.bind(1, std::string(zfleet::protocol::ToString(terminal_state)));
   update.bind(2, request.occurred_at);
   update.bind(3, request.task_id);
+  update.bind(
+      4,
+      std::string(zfleet::protocol::ToString(
+          zfleet::protocol::TaskState::succeeded)));
+  update.bind(
+      5,
+      std::string(zfleet::protocol::ToString(
+          zfleet::protocol::TaskState::failed)));
+  update.bind(
+      6,
+      std::string(zfleet::protocol::ToString(
+          zfleet::protocol::TaskState::expired)));
   update.exec();
+  if (sqlite3_changes(db.getHandle()) != 1) {
+    throw std::runtime_error("task result state transition failed");
+  }
 
   transaction.commit();
 }

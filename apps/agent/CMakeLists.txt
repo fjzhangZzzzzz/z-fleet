@@ -6,6 +6,7 @@ set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
 
 add_library(zfleet_agent_app
   src/config.cpp
+  src/http2_control_client.cpp
   src/runtime.cpp
   src/state.cpp
 )
@@ -17,6 +18,7 @@ target_link_libraries(zfleet_agent_app
     zfleet::core
     zfleet::protocol
     zfleet::platform
+    zfleet::transport
 )
 
 target_include_directories(zfleet_agent_app

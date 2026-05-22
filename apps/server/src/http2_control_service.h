@@ -23,7 +23,7 @@ struct ControlEventResult {
 
 class Http2ControlService {
  public:
-  explicit Http2ControlService(ServerDatabase* database);
+  explicit Http2ControlService(ServerStore* store);
 
   ControlEventResult HandleAgentEvent(
       const zfleet::protocol::v1::AgentEvent& event) const;
@@ -45,7 +45,7 @@ class Http2ControlService {
                         std::string result,
                         std::string payload_json) const;
 
-  ServerDatabase* database_;
+  ServerStore* store_;
 };
 
 std::string_view ToString(ControlEventStatus status) noexcept;

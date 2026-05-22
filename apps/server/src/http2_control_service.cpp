@@ -124,8 +124,8 @@ zfleet::protocol::AuditEventType AuditEventForTaskResult(
 
 } // namespace
 
-Http2ControlService::Http2ControlService(ServerDatabase* database)
-    : database_(database) {}
+Http2ControlService::Http2ControlService(ServerStore* store)
+    : store_(store) {}
 
 ControlEventResult Http2ControlService::HandleAgentEvent(
     const proto::AgentEvent& event) const {
@@ -171,7 +171,7 @@ ControlEventResult Http2ControlService::HandleTaskRunning(
   };
 
   try {
-    const auto stored_task = database_->FindTaskById(request.task_id);
+    const auto stored_task = store_->FindTaskById(request.task_id);
     if (!stored_task.has_value()) {
       return NotFound("task not found");
     }
@@ -184,8 +184,11 @@ ControlEventResult Http2ControlService::HandleTaskRunning(
     if (IsTerminal(stored_task->state)) {
       return InvalidArgument("task already finished");
     }
+    if (stored_task->state != zfleet::protocol::TaskState::assigned) {
+      return InvalidArgument("task is not assigned");
+    }
 
-    database_->MarkTaskRunning(request);
+    store_->MarkTaskRunning(request);
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::task_running, request.request_id,
         request.agent_id, "success",
@@ -261,7 +264,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
   }
 
   try {
-    const auto stored_task = database_->FindTaskById(request.task_id);
+    const auto stored_task = store_->FindTaskById(request.task_id);
     if (!stored_task.has_value()) {
       return NotFound("task not found");
     }
@@ -275,7 +278,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
       return InvalidArgument("task already finished");
     }
 
-    database_->RecordTaskResult(request, result_json, error_json);
+    store_->RecordTaskResult(request, result_json, error_json);
     RecordAuditEvent(
         AuditEventForTaskResult(request.status), request.request_id,
         request.agent_id, "success",
@@ -331,7 +334,7 @@ ControlEventResult Http2ControlService::HandleRegister(
   };
 
   try {
-    database_->UpsertAgent(request);
+    store_->UpsertAgent(request);
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::agent_register, request.request_id,
         request.agent_id, "success",
@@ -365,7 +368,7 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
   };
 
   try {
-    if (!database_->AgentExists(request.agent_id)) {
+    if (!store_->AgentExists(request.agent_id)) {
       RecordAuditEvent(
           zfleet::protocol::AuditEventType::agent_heartbeat,
           request.request_id, request.agent_id, "error",
@@ -378,7 +381,7 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
       return NotFound("agent not registered");
     }
 
-    database_->RecordHeartbeat(
+    store_->RecordHeartbeat(
         request, zfleet::protocol::SerializeHeartbeatRequest(request));
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::agent_heartbeat, request.request_id,
@@ -404,7 +407,7 @@ void Http2ControlService::RecordAuditEvent(
     std::string agent_id,
     std::string result,
     std::string payload_json) const {
-  database_->RecordAuditEvent(zfleet::protocol::AuditEvent{
+  store_->RecordAuditEvent(zfleet::protocol::AuditEvent{
       .audit_id = zfleet::core::GenerateUuid(),
       .occurred_at = zfleet::core::NowUtcRfc3339(),
       .agent_id = std::move(agent_id),

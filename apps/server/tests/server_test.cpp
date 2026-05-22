@@ -228,6 +228,26 @@ TEST_CASE("server database initializes schema and version") {
   REQUIRE(TableExists(database_path, "task_results"));
 }
 
+TEST_CASE("server database claims queued task only once") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedTask(&database, "task-claim-1", "agent-1");
+
+  const auto first_claim = database.ClaimNextTaskForAgent(
+      "agent-1", "2026-05-21T10:00:01Z");
+  const auto second_claim = database.ClaimNextTaskForAgent(
+      "agent-1", "2026-05-21T10:00:02Z");
+
+  REQUIRE(first_claim.has_value());
+  REQUIRE(first_claim->task_id == "task-claim-1");
+  REQUIRE_FALSE(second_claim.has_value());
+  REQUIRE(ReadTaskField(database_path, "task-claim-1", "state") ==
+          "assigned");
+}
+
 TEST_CASE("http2 control service registers agent and stores heartbeat") {
   const zfleet::test::ScopedTestDir test_root("server");
 
@@ -323,6 +343,27 @@ TEST_CASE("http2 control service stores task running and result events") {
           "task.running");
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
           "task.succeeded");
+}
+
+TEST_CASE("http2 control service rejects running event before assignment") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-1");
+  SeedTask(&database, "task-queued-1", "agent-1");
+  const zfleet::server::Http2ControlService service(&database);
+
+  const auto running_result = service.HandleAgentEvent(TaskRunningEvent(
+      "task-running-queued-1", "agent-1", "task-queued-1",
+      "2026-05-21T10:00:02Z"));
+
+  REQUIRE(running_result.status ==
+          zfleet::server::ControlEventStatus::kInvalidArgument);
+  REQUIRE(running_result.message == "task is not assigned");
+  REQUIRE(ReadTaskField(database_path, "task-queued-1", "state") == "queued");
+  REQUIRE(CountRows(database_path, "audit_events") == 0);
 }
 
 TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
