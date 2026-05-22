@@ -1,3 +1,6 @@
+#include "runtime.h"
+#include "state.h"
+
 #include "database.h"
 #include "http2_connection_registry.h"
 #include "http2_control_dispatcher.h"
@@ -19,12 +22,14 @@
 #include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <nghttp2/nghttp2.h>
+#include <sqlite3.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <span>
 #include <stdexcept>
@@ -37,6 +42,9 @@ namespace {
 namespace proto = zfleet::protocol::v1;
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
+
+constexpr int kSqliteReadAttempts = 50;
+constexpr auto kSqliteReadRetryDelay = std::chrono::milliseconds(20);
 
 #define ZFLEET_TEST_NGHTTP2_NV(NAME, VALUE)                                 \
   nghttp2_nv {                                                              \
@@ -181,24 +189,75 @@ struct ClientSession {
   }
 };
 
+SQLite::Database OpenTestDatabase(const std::filesystem::path& database_path,
+                                  const int flags) {
+  SQLite::Database db(database_path.string(), flags);
+  db.exec("PRAGMA busy_timeout=5000");
+  return db;
+}
+
+bool IsRecoverableBusy(const SQLite::Exception& ex) {
+  return ex.getErrorCode() == SQLITE_BUSY ||
+         ex.getErrorCode() == SQLITE_LOCKED;
+}
+
 int CountRows(const std::filesystem::path& database_path,
               const std::string& table_name) {
-  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
-  SQLite::Statement query(db, "select count(*) from " + table_name);
-  query.executeStep();
-  return query.getColumn(0).getInt();
+  for (int attempt = 0; attempt < kSqliteReadAttempts; ++attempt) {
+    try {
+      auto db = OpenTestDatabase(database_path, SQLite::OPEN_READONLY);
+      SQLite::Statement query(db, "select count(*) from " + table_name);
+      query.executeStep();
+      return query.getColumn(0).getInt();
+    } catch (const SQLite::Exception& ex) {
+      if (!IsRecoverableBusy(ex) || attempt + 1 == kSqliteReadAttempts) {
+        throw;
+      }
+      std::this_thread::sleep_for(kSqliteReadRetryDelay);
+    }
+  }
+  throw std::runtime_error("failed to count rows");
 }
 
 std::string ReadSingleTextColumn(const std::filesystem::path& database_path,
                                  const std::string& query_text,
                                  const std::string& parameter) {
-  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
-  SQLite::Statement query(db, query_text);
-  query.bind(1, parameter);
-  if (!query.executeStep()) {
-    return {};
+  for (int attempt = 0; attempt < kSqliteReadAttempts; ++attempt) {
+    try {
+      auto db = OpenTestDatabase(database_path, SQLite::OPEN_READONLY);
+      SQLite::Statement query(db, query_text);
+      query.bind(1, parameter);
+      if (!query.executeStep()) {
+        return {};
+      }
+      return query.getColumn(0).getString();
+    } catch (const SQLite::Exception& ex) {
+      if (!IsRecoverableBusy(ex) || attempt + 1 == kSqliteReadAttempts) {
+        throw;
+      }
+      std::this_thread::sleep_for(kSqliteReadRetryDelay);
+    }
   }
-  return query.getColumn(0).getString();
+  throw std::runtime_error("failed to read text column");
+}
+
+std::string ReadTaskState(const std::filesystem::path& database_path,
+                          const std::string& task_id) {
+  return ReadSingleTextColumn(database_path,
+                              "select state from tasks where task_id = ?",
+                              task_id);
+}
+
+bool WaitForTaskState(const std::filesystem::path& database_path,
+                      const std::string& task_id,
+                      const std::string& expected_state) {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (ReadTaskState(database_path, task_id) == expected_state) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return ReadTaskState(database_path, task_id) == expected_state;
 }
 
 proto::AgentEvent RegisterEvent(std::string message_id,
@@ -568,4 +627,97 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
                                "select state from tasks where task_id = ?",
                                "task-command-1") == "succeeded");
   REQUIRE(CountRows(database_path, "task_results") == 1);
+}
+
+TEST_CASE("agent runtime completes task over http2 control channel") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto test_root = test_dir.path();
+  const auto database_path = test_root / "zfleet-agent-runtime.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+                                            &service, &registry);
+
+  std::exception_ptr server_error;
+  std::thread server_thread([&server, &server_error]() {
+    try {
+      server.Run();
+    } catch (...) {
+      server_error = std::current_exception();
+    }
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  zfleet::agent::AgentConfig config{
+      .control_url =
+          std::string("http://127.0.0.1:") + std::to_string(server.port()),
+      .data_dir = test_root / "agent-data",
+      .state_file = "agent-state.toml",
+      .heartbeat_interval_seconds = 1,
+      .reconnect_initial_delay_seconds = 1,
+      .reconnect_max_delay_seconds = 2,
+  };
+  const auto state_path = zfleet::agent::StatePathFor(config);
+  const auto agent_state = zfleet::agent::LoadOrCreateState(state_path);
+
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-runtime-1",
+      .agent_id = agent_state.agent_id,
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-21T15:00:00Z",
+      .expires_at = "2099-05-21T15:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+
+  zfleet::agent::AgentRuntime runtime(config);
+  std::exception_ptr runtime_error;
+  std::thread runtime_thread([&runtime, &runtime_error]() {
+    try {
+      runtime.Run();
+    } catch (...) {
+      runtime_error = std::current_exception();
+    }
+  });
+
+  struct ThreadCleanup {
+    zfleet::agent::AgentRuntime& runtime;
+    std::thread& runtime_thread;
+    zfleet::server::Http2ControlServer& server;
+    std::thread& server_thread;
+
+    ~ThreadCleanup() {
+      runtime.RequestStop();
+      if (runtime_thread.joinable()) {
+        runtime_thread.join();
+      }
+      server.Stop();
+      if (server_thread.joinable()) {
+        server_thread.join();
+      }
+    }
+  } thread_cleanup{runtime, runtime_thread, server, server_thread};
+
+  const auto task_completed =
+      WaitForTaskState(database_path, "task-runtime-1", "succeeded");
+
+  if (runtime_error != nullptr) {
+    std::rethrow_exception(runtime_error);
+  }
+  if (server_error != nullptr) {
+    std::rethrow_exception(server_error);
+  }
+
+  REQUIRE(ReadSingleTextColumn(
+              database_path,
+              "select agent_id from agents where agent_id = ?",
+              agent_state.agent_id) == agent_state.agent_id);
+  REQUIRE(CountRows(database_path, "heartbeats") >= 1);
+  REQUIRE(CountRows(database_path, "task_results") == 1);
+  REQUIRE(task_completed);
+  REQUIRE(ReadTaskState(database_path, "task-runtime-1") == "succeeded");
 }
