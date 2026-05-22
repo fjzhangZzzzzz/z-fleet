@@ -2,6 +2,7 @@
 #include "state.h"
 
 #include "database.h"
+#include "http2_control_client.h"
 #include "http2_connection_registry.h"
 #include "http2_control_dispatcher.h"
 #include "http2_control_server.h"
@@ -220,6 +221,24 @@ int CountRows(const std::filesystem::path& database_path,
   throw std::runtime_error("failed to count rows");
 }
 
+int CountByQuery(const std::filesystem::path& database_path,
+                 const std::string& query_text) {
+  for (int attempt = 0; attempt < kSqliteReadAttempts; ++attempt) {
+    try {
+      auto db = OpenTestDatabase(database_path, SQLite::OPEN_READONLY);
+      SQLite::Statement query(db, query_text);
+      query.executeStep();
+      return query.getColumn(0).getInt();
+    } catch (const SQLite::Exception& ex) {
+      if (!IsRecoverableBusy(ex) || attempt + 1 == kSqliteReadAttempts) {
+        throw;
+      }
+      std::this_thread::sleep_for(kSqliteReadRetryDelay);
+    }
+  }
+  throw std::runtime_error("failed to count query rows");
+}
+
 std::string ReadSingleTextColumn(const std::filesystem::path& database_path,
                                  const std::string& query_text,
                                  const std::string& parameter) {
@@ -259,6 +278,18 @@ bool WaitForTaskState(const std::filesystem::path& database_path,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   return ReadTaskState(database_path, task_id) == expected_state;
+}
+
+bool WaitForRowCountAtLeast(const std::filesystem::path& database_path,
+                            const std::string& table_name,
+                            int expected_count) {
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (CountRows(database_path, table_name) >= expected_count) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return CountRows(database_path, table_name) >= expected_count;
 }
 
 proto::AgentEvent RegisterEvent(std::string message_id,
@@ -392,22 +423,31 @@ void ReceiveUntilResponseDone(ClientContext* context,
   }
 }
 
-bool HasCompleteFrame(const std::vector<std::uint8_t>& bytes) {
-  if (bytes.size() < 4) {
-    return false;
+std::size_t CountCompleteFrames(const std::vector<std::uint8_t>& bytes) {
+  std::size_t offset = 0;
+  std::size_t count = 0;
+  while (bytes.size() >= offset + 4) {
+    const auto length =
+        (static_cast<std::uint32_t>(bytes[offset]) << 24) |
+        (static_cast<std::uint32_t>(bytes[offset + 1]) << 16) |
+        (static_cast<std::uint32_t>(bytes[offset + 2]) << 8) |
+        static_cast<std::uint32_t>(bytes[offset + 3]);
+    const auto frame_size = 4 + static_cast<std::size_t>(length);
+    if (bytes.size() < offset + frame_size) {
+      break;
+    }
+    offset += frame_size;
+    ++count;
   }
-  const auto length = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                      (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                      (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                      static_cast<std::uint32_t>(bytes[3]);
-  return bytes.size() >= 4 + static_cast<std::size_t>(length);
+  return count;
 }
 
-void ReceiveUntilCommandFrame(ClientContext* context,
-                              nghttp2_session* session) {
+void ReceiveUntilCommandFrames(ClientContext* context,
+                               nghttp2_session* session,
+                               std::size_t expected_frames) {
   std::array<std::uint8_t, 16 * 1024> buffer{};
   boost::system::error_code ec;
-  while (!HasCompleteFrame(context->response_body)) {
+  while (CountCompleteFrames(context->response_body) < expected_frames) {
     const auto bytes_read =
         context->socket.read_some(boost::asio::buffer(buffer), ec);
     if (ec) {
@@ -423,7 +463,8 @@ void ReceiveUntilCommandFrame(ClientContext* context,
 std::vector<std::uint8_t> ExchangeHttp2EventsAndCommand(
     std::uint16_t port,
     std::vector<std::uint8_t> event_body,
-    const std::function<void()>& after_command_stream_opened = {}) {
+    const std::function<void()>& after_command_stream_opened = {},
+    std::size_t expected_command_frames = 1) {
   asio::io_context io_context;
   tcp::resolver resolver(io_context);
   ClientContext context(io_context);
@@ -474,7 +515,7 @@ std::vector<std::uint8_t> ExchangeHttp2EventsAndCommand(
   if (after_command_stream_opened) {
     after_command_stream_opened();
   }
-  ReceiveUntilCommandFrame(&context, session.session);
+  ReceiveUntilCommandFrames(&context, session.session, expected_command_frames);
   REQUIRE(context.response_status == "200");
   return context.response_body;
 }
@@ -576,6 +617,35 @@ TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
               "agent-h2c-1") == "agent-h2c-1");
 }
 
+TEST_CASE("http2 control client exposes rejected command stream status") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto database_path = test_dir.path() / "zfleet-h2c-command-reject.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database, &service,
+                                            &registry);
+
+  std::thread server_thread([&server]() { server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  zfleet::agent::Http2ControlClient client(
+      std::string("http://127.0.0.1:") + std::to_string(server.port()));
+  const auto status = client.StartCommandStream("reject-correlation-1");
+  REQUIRE(status == "404");
+  REQUIRE_FALSE(client.command_stream_open());
+  const auto close_error = client.command_stream_error_code();
+  REQUIRE((!close_error.has_value() || *close_error == NGHTTP2_NO_ERROR));
+
+  client.Close();
+  server.Stop();
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+}
+
 TEST_CASE("http2 control server sends assigned task on command stream") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-command.db";
@@ -660,6 +730,84 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
                                "select state from tasks where task_id = ?",
                                "task-command-1") == "succeeded");
   REQUIRE(CountRows(database_path, "task_results") == 1);
+}
+
+TEST_CASE("http2 control server sends multiple queued tasks on one command stream") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto database_path = test_dir.path() / "zfleet-h2c-command-multi.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.UpsertAgent(zfleet::protocol::RegistrationRequest{
+      .protocol_version = "v1",
+      .request_id = "seed-agent-multi",
+      .agent_id = "agent-command-multi",
+      .occurred_at = "2026-05-21T13:59:00Z",
+      .agent_version = "0.1.0",
+      .hostname = "devbox-01",
+      .os = "linux",
+      .arch = "x86_64",
+  });
+
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+                                            &service, &registry);
+
+  std::thread server_thread([&server]() { server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  const auto registration_frame = EncodeEventFrame(RegisterEvent(
+      "register-command-multi", "agent-command-multi",
+      "2026-05-21T14:00:01Z"));
+  const auto heartbeat_frame = EncodeEventFrame(HeartbeatEvent(
+      "heartbeat-command-multi", "agent-command-multi",
+      "2026-05-21T14:00:02Z"));
+  std::vector<std::uint8_t> request_body;
+  request_body.insert(request_body.end(), registration_frame.begin(),
+                      registration_frame.end());
+  request_body.insert(request_body.end(), heartbeat_frame.begin(),
+                      heartbeat_frame.end());
+
+  const auto command_body = ExchangeHttp2EventsAndCommand(
+      server.port(), std::move(request_body), [&database]() {
+        for (int index = 1; index <= 2; ++index) {
+          database.EnqueueTask(zfleet::protocol::Task{
+              .protocol_version = "v1",
+              .task_id = "task-command-multi-" + std::to_string(index),
+              .agent_id = "agent-command-multi",
+              .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+              .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+              .created_at = "2026-05-21T14:00:00Z",
+              .expires_at = "2099-05-21T14:05:00Z",
+              .input = zfleet::protocol::CollectBasicInventoryInput{},
+          });
+        }
+      }, 2);
+
+  server.Stop();
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+
+  zfleet::transport::FrameDecoder decoder;
+  const auto frames = decoder.Push(command_body);
+  REQUIRE(frames.size() == 2);
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    proto::ServerCommand command;
+    REQUIRE(command.ParseFromArray(frames[index].data(),
+                                   static_cast<int>(frames[index].size())));
+    REQUIRE(command.agent_id() == "agent-command-multi");
+    REQUIRE(command.payload_case() == proto::ServerCommand::kTaskAssigned);
+    REQUIRE(command.task_assigned().task_id() ==
+            "task-command-multi-" + std::to_string(index + 1));
+  }
+  REQUIRE(ReadSingleTextColumn(database_path,
+                               "select state from tasks where task_id = ?",
+                               "task-command-multi-1") == "assigned");
+  REQUIRE(ReadSingleTextColumn(database_path,
+                               "select state from tasks where task_id = ?",
+                               "task-command-multi-2") == "assigned");
 }
 
 TEST_CASE("agent runtime completes task over http2 control channel") {
@@ -753,4 +901,102 @@ TEST_CASE("agent runtime completes task over http2 control channel") {
   REQUIRE(CountRows(database_path, "task_results") == 1);
   REQUIRE(task_completed);
   REQUIRE(ReadTaskState(database_path, "task-runtime-1") == "succeeded");
+}
+
+TEST_CASE("agent runtime reconnects and registers again after server restart") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto test_root = test_dir.path();
+  const auto database_path = test_root / "zfleet-agent-reconnect.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry first_registry;
+  zfleet::server::Http2ControlServer first_server(
+      "127.0.0.1:0", &database, &service, &first_registry);
+
+  std::thread first_server_thread([&first_server]() { first_server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const auto port = first_server.port();
+
+  zfleet::agent::AgentConfig config{
+      .control_url =
+          std::string("http://127.0.0.1:") + std::to_string(port),
+      .data_dir = test_root / "agent-data",
+      .state_file = "agent-state.toml",
+      .heartbeat_interval_seconds = 1,
+      .reconnect_initial_delay_seconds = 1,
+      .reconnect_max_delay_seconds = 2,
+  };
+  const auto state_path = zfleet::agent::StatePathFor(config);
+  const auto agent_state = zfleet::agent::LoadOrCreateState(state_path);
+
+  zfleet::agent::AgentRuntime runtime(config);
+  std::exception_ptr runtime_error;
+  std::thread runtime_thread([&runtime, &runtime_error]() {
+    try {
+      runtime.Run();
+    } catch (...) {
+      runtime_error = std::current_exception();
+    }
+  });
+
+  struct RuntimeCleanup {
+    zfleet::agent::AgentRuntime& runtime;
+    std::thread& runtime_thread;
+
+    ~RuntimeCleanup() {
+      runtime.RequestStop();
+      if (runtime_thread.joinable()) {
+        runtime_thread.join();
+      }
+    }
+  } runtime_cleanup{runtime, runtime_thread};
+
+  REQUIRE(WaitForRowCountAtLeast(database_path, "heartbeats", 1));
+
+  first_server.Stop();
+  if (first_server_thread.joinable()) {
+    first_server_thread.join();
+  }
+
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-reconnect-1",
+      .agent_id = agent_state.agent_id,
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-21T16:00:00Z",
+      .expires_at = "2099-05-21T16:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+
+  zfleet::server::Http2ConnectionRegistry second_registry;
+  zfleet::server::Http2ControlServer second_server(
+      std::string("127.0.0.1:") + std::to_string(port), &database, &service,
+      &second_registry);
+  std::thread second_server_thread([&second_server]() { second_server.Run(); });
+
+  struct ServerCleanup {
+    zfleet::server::Http2ControlServer& server;
+    std::thread& thread;
+
+    ~ServerCleanup() {
+      server.Stop();
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+  } second_server_cleanup{second_server, second_server_thread};
+
+  REQUIRE(WaitForTaskState(database_path, "task-reconnect-1", "succeeded"));
+  REQUIRE(CountRows(database_path, "task_results") == 1);
+  REQUIRE(CountByQuery(
+              database_path,
+              "select count(*) from audit_events where event_type = "
+              "'agent.register'") >= 2);
+
+  if (runtime_error != nullptr) {
+    std::rethrow_exception(runtime_error);
+  }
 }

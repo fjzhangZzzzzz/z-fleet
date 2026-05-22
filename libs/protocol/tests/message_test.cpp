@@ -21,8 +21,6 @@ using zfleet::protocol::Task;
 using zfleet::protocol::TaskCreateRequest;
 using zfleet::protocol::TaskError;
 using zfleet::protocol::TaskExecutionStatus;
-using zfleet::protocol::TaskPollResponse;
-using zfleet::protocol::TaskPollStatus;
 using zfleet::protocol::TaskRunningRequest;
 using zfleet::protocol::TaskResultRequest;
 using zfleet::protocol::TaskState;
@@ -34,7 +32,6 @@ TEST_CASE("protocol metadata and enum conversions are available") {
   REQUIRE(zfleet::protocol::protocol_version() == "v1");
   REQUIRE(zfleet::protocol::ToString(MessageKind::heartbeat) == "heartbeat");
   REQUIRE(zfleet::protocol::ToString(MessageKind::task_create) == "task_create");
-  REQUIRE(zfleet::protocol::ToString(MessageKind::task_poll) == "task_poll");
   REQUIRE(zfleet::protocol::ToString(MessageKind::task_running) == "task_running");
   REQUIRE(zfleet::protocol::ToString(ErrorCode::agent_id_mismatch) ==
           "agent_id_mismatch");
@@ -47,7 +44,6 @@ TEST_CASE("protocol metadata and enum conversions are available") {
   REQUIRE(zfleet::protocol::ToString(TaskType::collect_basic_inventory) ==
           "collect_basic_inventory");
   REQUIRE(zfleet::protocol::ToString(CapabilityLevel::readonly) == "readonly");
-  REQUIRE(zfleet::protocol::ToString(TaskPollStatus::assigned) == "assigned");
   REQUIRE(zfleet::protocol::ToString(TaskExecutionStatus::expired) ==
           "expired");
   REQUIRE(zfleet::protocol::ToString(TaskState::running) == "running");
@@ -63,8 +59,6 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           TaskType::collect_basic_inventory);
   REQUIRE(zfleet::protocol::CapabilityLevelFromString("shell") ==
           CapabilityLevel::shell);
-  REQUIRE(zfleet::protocol::TaskPollStatusFromString("idle") ==
-          TaskPollStatus::idle);
   REQUIRE(zfleet::protocol::TaskExecutionStatusFromString("failed") ==
           TaskExecutionStatus::failed);
   REQUIRE(zfleet::protocol::TaskStateFromString("queued") ==
@@ -253,29 +247,6 @@ TEST_CASE("task create request supports json round trip") {
   REQUIRE(std::get<TaskCreateRequest>(parsed_request).request_id ==
           "task-create-1");
   REQUIRE(std::get<TaskCreateRequest>(parsed_request).task.task_id == "task-1");
-}
-
-TEST_CASE("task poll response omits task when idle") {
-  TaskPollResponse response{
-      .protocol_version = "v1",
-      .request_id = "poll-1",
-      .agent_id = "agent-1",
-      .occurred_at = "2026-05-16T10:00:10Z",
-      .task = std::nullopt,
-      .status = TaskPollStatus::idle,
-      .server_time = "2026-05-16T10:00:10Z",
-  };
-
-  const auto response_json =
-      zfleet::protocol::SerializeTaskPollResponse(response);
-  const auto parsed_response =
-      zfleet::protocol::ParseTaskPollResponse(response_json);
-
-  REQUIRE(response_json.find("\"task\"") == std::string::npos);
-  REQUIRE(std::holds_alternative<TaskPollResponse>(parsed_response));
-  REQUIRE_FALSE(std::get<TaskPollResponse>(parsed_response).task.has_value());
-  REQUIRE(std::get<TaskPollResponse>(parsed_response).status ==
-          TaskPollStatus::idle);
 }
 
 TEST_CASE("task result request supports success and failure shapes") {

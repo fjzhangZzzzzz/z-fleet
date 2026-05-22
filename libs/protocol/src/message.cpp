@@ -16,8 +16,6 @@ std::string_view ToString(MessageKind kind) noexcept {
       return "asset_snapshot";
     case MessageKind::task_create:
       return "task_create";
-    case MessageKind::task_poll:
-      return "task_poll";
     case MessageKind::task_running:
       return "task_running";
     case MessageKind::task_result:
@@ -108,17 +106,6 @@ std::string_view ToString(CapabilityLevel level) noexcept {
       return "high_risk_write";
     case CapabilityLevel::shell:
       return "shell";
-  }
-
-  return "unknown";
-}
-
-std::string_view ToString(TaskPollStatus status) noexcept {
-  switch (status) {
-    case TaskPollStatus::idle:
-      return "idle";
-    case TaskPollStatus::assigned:
-      return "assigned";
   }
 
   return "unknown";
@@ -260,18 +247,6 @@ std::optional<CapabilityLevel> CapabilityLevelFromString(
   }
   if (level == "shell") {
     return CapabilityLevel::shell;
-  }
-
-  return std::nullopt;
-}
-
-std::optional<TaskPollStatus> TaskPollStatusFromString(
-    std::string_view status) noexcept {
-  if (status == "idle") {
-    return TaskPollStatus::idle;
-  }
-  if (status == "assigned") {
-    return TaskPollStatus::assigned;
   }
 
   return std::nullopt;

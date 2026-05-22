@@ -12,6 +12,8 @@
 #include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
 
+#include <nghttp2/nghttp2.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -211,6 +213,12 @@ RuntimeResult AgentRuntime::Run() {
                             std::chrono::seconds(heartbeat_interval);
       while (!stop_requested()) {
         if (!client.command_stream_open()) {
+          const auto error_code = client.command_stream_error_code();
+          if (error_code.has_value() && *error_code != NGHTTP2_NO_ERROR) {
+            throw std::runtime_error("command stream reset: " +
+                                     std::string(nghttp2_http2_strerror(
+                                         *error_code)));
+          }
           throw std::runtime_error("command stream closed");
         }
 

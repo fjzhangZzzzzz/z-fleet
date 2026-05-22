@@ -2,6 +2,8 @@
 
 #include "zfleet/protocol/message.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -31,6 +33,10 @@ class ServerStore {
       const std::string& payload_json) = 0;
   virtual void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) = 0;
   virtual void EnqueueTask(const zfleet::protocol::Task& task) = 0;
+  virtual std::uint64_t TaskQueueVersion() const = 0;
+  virtual std::uint64_t WaitForTaskQueueChange(
+      std::uint64_t last_seen_version,
+      std::chrono::milliseconds timeout) const = 0;
   virtual void MarkTaskRunning(
       const zfleet::protocol::TaskRunningRequest& request) = 0;
   virtual std::optional<zfleet::protocol::Task> ClaimNextTaskForAgent(
@@ -60,6 +66,10 @@ class ServerDatabase final : public ServerStore {
       const std::string& payload_json) override;
   void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) override;
   void EnqueueTask(const zfleet::protocol::Task& task) override;
+  std::uint64_t TaskQueueVersion() const override;
+  std::uint64_t WaitForTaskQueueChange(
+      std::uint64_t last_seen_version,
+      std::chrono::milliseconds timeout) const override;
   void MarkTaskRunning(
       const zfleet::protocol::TaskRunningRequest& request) override;
   std::optional<zfleet::protocol::Task> ClaimNextTaskForAgent(
@@ -74,6 +84,9 @@ class ServerDatabase final : public ServerStore {
  private:
   std::filesystem::path database_path_;
   mutable std::mutex write_mutex_;
+  mutable std::mutex task_queue_mutex_;
+  mutable std::condition_variable task_queue_cv_;
+  std::uint64_t task_queue_version_ = 0;
 };
 
 } // namespace zfleet::server

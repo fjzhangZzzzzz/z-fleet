@@ -252,6 +252,18 @@ bool Http2ControlClient::command_stream_open() const noexcept {
   return response != context_.responses.end() && !response->second.done;
 }
 
+std::optional<std::uint32_t>
+Http2ControlClient::command_stream_error_code() const noexcept {
+  if (!context_.command_stream_id.has_value()) {
+    return std::nullopt;
+  }
+  const auto response = context_.responses.find(*context_.command_stream_id);
+  if (response == context_.responses.end()) {
+    return std::nullopt;
+  }
+  return response->second.close_error_code;
+}
+
 Http2Response Http2ControlClient::SubmitRequest(
     std::string method,
     std::string path,
@@ -315,6 +327,10 @@ void Http2ControlClient::PumpUntilResponseDone(std::int32_t stream_id) {
   while (true) {
     const auto response = context_.responses.find(stream_id);
     if (response != context_.responses.end() && response->second.done) {
+      ThrowIfStreamReset(response->second, "http2 response stream");
+      if (!response->second.headers_received) {
+        throw std::runtime_error("http2 response stream closed before headers");
+      }
       return;
     }
     PumpOnce();
@@ -327,10 +343,25 @@ void Http2ControlClient::PumpUntilHeaders(std::int32_t stream_id) {
     const auto response = context_.responses.find(stream_id);
     if (response != context_.responses.end() &&
         (response->second.headers_received || response->second.done)) {
+      ThrowIfStreamReset(response->second, "command stream");
+      if (response->second.done && !response->second.headers_received) {
+        throw std::runtime_error("command stream closed before headers");
+      }
       return;
     }
     PumpOnce();
     Flush();
+  }
+}
+
+void Http2ControlClient::ThrowIfStreamReset(
+    const ResponseState& response,
+    std::string_view operation) const {
+  if (response.close_error_code.has_value() &&
+      *response.close_error_code != NGHTTP2_NO_ERROR) {
+    throw std::runtime_error(std::string(operation) + " reset: " +
+                             nghttp2_http2_strerror(
+                                 *response.close_error_code));
   }
 }
 
@@ -461,11 +492,12 @@ int Http2ControlClient::OnFrameRecvCallback(nghttp2_session* /*session*/,
 
 int Http2ControlClient::OnStreamCloseCallback(nghttp2_session* /*session*/,
                                               std::int32_t stream_id,
-                                              std::uint32_t /*error_code*/,
+                                              std::uint32_t error_code,
                                               void* user_data) {
   auto* context = static_cast<Context*>(user_data);
   auto response = context->responses.find(stream_id);
   if (response != context->responses.end()) {
+    response->second.close_error_code = error_code;
     response->second.done = true;
   }
   return 0;

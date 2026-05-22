@@ -37,6 +37,7 @@ class Http2ControlClient {
   void PumpFor(std::chrono::milliseconds timeout);
   std::vector<std::uint8_t> DrainCommandBytes();
   bool command_stream_open() const noexcept;
+  std::optional<std::uint32_t> command_stream_error_code() const noexcept;
 
   bool connected() const noexcept;
 
@@ -55,6 +56,7 @@ class Http2ControlClient {
   struct ResponseState {
     std::string status;
     std::vector<std::uint8_t> body;
+    std::optional<std::uint32_t> close_error_code;
     bool headers_received = false;
     bool done = false;
   };
@@ -93,6 +95,8 @@ class Http2ControlClient {
   void Flush();
   void PumpUntilResponseDone(std::int32_t stream_id);
   void PumpUntilHeaders(std::int32_t stream_id);
+  void ThrowIfStreamReset(const ResponseState& response,
+                          std::string_view operation) const;
   bool PumpOnce();
 
   static ssize_t SendCallback(nghttp2_session* session,

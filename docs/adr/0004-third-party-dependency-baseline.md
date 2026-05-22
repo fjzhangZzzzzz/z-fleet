@@ -26,7 +26,7 @@ v0.1 需要一个最小端到端闭环：Agent 身份、本地主动连接、Ser
 | 配置解析 | `tomlplusplus` |
 | 测试 | `catch2` |
 
-Agent/Server 主控制通道由 [ADR 0007：Agent 控制通道采用 HTTP/2 长连接与 protobuf-lite](0007-agent-control-channel-http2-protobuf-lite.md) 定义。旧 HTTP/1 REST 控制路径已移除，不再以 WebSocket 或 gRPC 作为默认演进方向。
+Agent/Server 主控制通道由 [ADR 0007：Agent 控制通道采用 HTTP/2 长连接与 protobuf-lite](0007-agent-control-channel-http2-protobuf-lite.md) 定义；控制协议演进边界以 ADR 0007 为准。
 
 ## 备选方案
 

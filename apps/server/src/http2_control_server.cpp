@@ -40,6 +40,7 @@ namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
 constexpr std::size_t kMaxConnectionThreads = 128;
+constexpr auto kTaskQueueWait = std::chrono::milliseconds(50);
 
 #define ZFLEET_NGHTTP2_NV(NAME, VALUE)                                      \
   nghttp2_nv {                                                              \
@@ -81,6 +82,7 @@ struct ConnectionContext {
   Http2ConnectionRegistry* registry;
   std::string connection_id;
   std::map<std::int32_t, StreamState> streams;
+  std::uint64_t task_queue_version = 0;
 
   ConnectionContext(std::shared_ptr<tcp::socket> accepted_socket,
                     ServerStore* store_arg,
@@ -323,39 +325,44 @@ void HandleCommandHeadersEnd(nghttp2_session* session,
   SubmitCommandHeaders(session, frame->hd.stream_id, stream);
 }
 
-void TrySubmitQueuedCommand(nghttp2_session* session,
+bool TrySubmitQueuedCommand(nghttp2_session* session,
                             std::int32_t stream_id,
                             ConnectionContext* context,
                             StreamState* stream) {
   if (stream == nullptr || !stream->command_stream ||
       stream->command_data_in_flight || !stream->response_body.empty()) {
-    return;
+    return false;
   }
 
   const auto connection = context->registry->FindByConnection(
       context->connection_id);
   if (!connection.has_value() || !connection->agent_id.has_value() ||
       connection->disconnected_at.has_value()) {
-    return;
+    return false;
   }
 
   const auto assigned_at = zfleet::core::NowUtcRfc3339();
   const auto task = context->store->ClaimNextTaskForAgent(
       *connection->agent_id, assigned_at);
   if (!task.has_value()) {
-    return;
+    return false;
   }
 
   stream->response_body = EncodeCommandFrame(*task, stream->correlation_id);
   stream->response_offset = 0;
   SubmitCommandData(session, stream_id, stream);
+  return true;
 }
 
-void TrySubmitQueuedCommands(nghttp2_session* session,
+bool TrySubmitQueuedCommands(nghttp2_session* session,
                              ConnectionContext* context) {
+  bool submitted = false;
   for (auto& [stream_id, stream] : context->streams) {
-    TrySubmitQueuedCommand(session, stream_id, context, &stream);
+    submitted =
+        TrySubmitQueuedCommand(session, stream_id, context, &stream) ||
+        submitted;
   }
+  return submitted;
 }
 
 void FinalizeSentCommandData(ConnectionContext* context) {
@@ -367,6 +374,14 @@ void FinalizeSentCommandData(ConnectionContext* context) {
       stream.response_offset = 0;
       stream.command_data_in_flight = false;
     }
+  }
+}
+
+void FlushQueuedCommands(nghttp2_session* session,
+                         ConnectionContext* context) {
+  while (TrySubmitQueuedCommands(session, context)) {
+    CheckNghttp2(nghttp2_session_send(session), "send http2 bytes");
+    FinalizeSentCommandData(context);
   }
 }
 
@@ -486,6 +501,7 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
                       Http2ConnectionRegistry* registry) {
   ConnectionContext context(std::move(socket), store, service, registry,
                             zfleet::core::GenerateUuid());
+  context.task_queue_version = store->TaskQueueVersion();
   registry->OpenConnection(context.connection_id, zfleet::core::NowUtcRfc3339());
 
   try {
@@ -504,11 +520,12 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
           context.socket->read_some(boost::asio::buffer(buffer), ec);
       if (ec == boost::asio::error::would_block ||
           ec == boost::asio::error::try_again) {
-        TrySubmitQueuedCommands(server_session.session, &context);
-        CheckNghttp2(nghttp2_session_send(server_session.session),
-                     "send http2 bytes");
-        FinalizeSentCommandData(&context);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const auto next_task_queue_version = context.store->WaitForTaskQueueChange(
+            context.task_queue_version, kTaskQueueWait);
+        if (next_task_queue_version != context.task_queue_version) {
+          context.task_queue_version = next_task_queue_version;
+          FlushQueuedCommands(server_session.session, &context);
+        }
         ec.clear();
         continue;
       }
@@ -521,10 +538,10 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
       const auto rv = nghttp2_session_mem_recv(server_session.session,
                                                buffer.data(), bytes_read);
       CheckNghttp2(static_cast<int>(rv), "receive http2 bytes");
-      TrySubmitQueuedCommands(server_session.session, &context);
+      context.task_queue_version = context.store->TaskQueueVersion();
+      FlushQueuedCommands(server_session.session, &context);
       CheckNghttp2(nghttp2_session_send(server_session.session),
                    "send http2 bytes");
-      FinalizeSentCommandData(&context);
     }
   } catch (const std::exception& ex) {
     ZFLOG_ERROR(zfleet::core::log::Component("server").With(

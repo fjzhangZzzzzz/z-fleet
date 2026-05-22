@@ -12,7 +12,6 @@ enum class MessageKind {
   heartbeat,
   asset_snapshot,
   task_create,
-  task_poll,
   task_running,
   task_result,
 };
@@ -56,11 +55,6 @@ enum class CapabilityLevel {
   low_risk_write,
   high_risk_write,
   shell,
-};
-
-enum class TaskPollStatus {
-  idle,
-  assigned,
 };
 
 enum class TaskExecutionStatus {
@@ -168,16 +162,6 @@ struct TaskCreateRequest {
   Task task;
 };
 
-struct TaskPollResponse {
-  std::string protocol_version;
-  std::string request_id;
-  std::string agent_id;
-  std::string occurred_at;
-  std::optional<Task> task;
-  TaskPollStatus status;
-  std::string server_time;
-};
-
 struct TaskError {
   ErrorCode error_code;
   std::string message;
@@ -211,7 +195,6 @@ std::string_view ToString(ErrorCode code) noexcept;
 std::string_view ToString(AuditEventType type) noexcept;
 std::string_view ToString(TaskType type) noexcept;
 std::string_view ToString(CapabilityLevel level) noexcept;
-std::string_view ToString(TaskPollStatus status) noexcept;
 std::string_view ToString(TaskExecutionStatus status) noexcept;
 std::string_view ToString(TaskState state) noexcept;
 
@@ -221,8 +204,6 @@ std::optional<AuditEventType> AuditEventTypeFromString(
 std::optional<TaskType> TaskTypeFromString(std::string_view type) noexcept;
 std::optional<CapabilityLevel> CapabilityLevelFromString(
     std::string_view level) noexcept;
-std::optional<TaskPollStatus> TaskPollStatusFromString(
-    std::string_view status) noexcept;
 std::optional<TaskExecutionStatus> TaskExecutionStatusFromString(
     std::string_view status) noexcept;
 std::optional<TaskState> TaskStateFromString(std::string_view state) noexcept;

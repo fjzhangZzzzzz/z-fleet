@@ -262,39 +262,62 @@ void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event)
 }
 
 void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
-  std::lock_guard lock(write_mutex_);
-  SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
-  SQLite::Statement statement(
-      db,
-      R"sql(
-        insert into tasks (
-          task_id,
-          protocol_version,
-          agent_id,
-          task_type,
-          capability_level,
-          created_at,
-          expires_at,
-          input_json,
-          state,
-          assigned_at,
-          completed_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      )sql");
-  statement.bind(1, task.task_id);
-  statement.bind(2, task.protocol_version);
-  statement.bind(3, task.agent_id);
-  statement.bind(4, std::string(zfleet::protocol::ToString(task.task_type)));
-  statement.bind(
-      5, std::string(zfleet::protocol::ToString(task.capability_level)));
-  statement.bind(6, task.created_at);
-  statement.bind(7, task.expires_at);
-  statement.bind(8, zfleet::protocol::SerializeTaskInput(task.input));
-  statement.bind(9, std::string(zfleet::protocol::ToString(
-                        zfleet::protocol::TaskState::queued)));
-  statement.bind(10);
-  statement.bind(11);
-  statement.exec();
+  {
+    std::lock_guard lock(write_mutex_);
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
+    SQLite::Statement statement(
+        db,
+        R"sql(
+          insert into tasks (
+            task_id,
+            protocol_version,
+            agent_id,
+            task_type,
+            capability_level,
+            created_at,
+            expires_at,
+            input_json,
+            state,
+            assigned_at,
+            completed_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )sql");
+    statement.bind(1, task.task_id);
+    statement.bind(2, task.protocol_version);
+    statement.bind(3, task.agent_id);
+    statement.bind(4, std::string(zfleet::protocol::ToString(task.task_type)));
+    statement.bind(
+        5, std::string(zfleet::protocol::ToString(task.capability_level)));
+    statement.bind(6, task.created_at);
+    statement.bind(7, task.expires_at);
+    statement.bind(8, zfleet::protocol::SerializeTaskInput(task.input));
+    statement.bind(9, std::string(zfleet::protocol::ToString(
+                          zfleet::protocol::TaskState::queued)));
+    statement.bind(10);
+    statement.bind(11);
+    statement.exec();
+  }
+
+  {
+    std::lock_guard lock(task_queue_mutex_);
+    ++task_queue_version_;
+  }
+  task_queue_cv_.notify_all();
+}
+
+std::uint64_t ServerDatabase::TaskQueueVersion() const {
+  std::lock_guard lock(task_queue_mutex_);
+  return task_queue_version_;
+}
+
+std::uint64_t ServerDatabase::WaitForTaskQueueChange(
+    std::uint64_t last_seen_version,
+    std::chrono::milliseconds timeout) const {
+  std::unique_lock lock(task_queue_mutex_);
+  task_queue_cv_.wait_for(lock, timeout, [&]() {
+    return task_queue_version_ != last_seen_version;
+  });
+  return task_queue_version_;
 }
 
 void ServerDatabase::MarkTaskRunning(

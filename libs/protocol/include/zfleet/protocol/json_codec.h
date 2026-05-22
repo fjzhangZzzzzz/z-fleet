@@ -78,10 +78,6 @@ std::string SerializeTaskCreateRequest(const TaskCreateRequest& request);
 JsonDecodeResult<TaskCreateRequest> ParseTaskCreateRequest(
     std::string_view json_text);
 
-std::string SerializeTaskPollResponse(const TaskPollResponse& response);
-JsonDecodeResult<TaskPollResponse> ParseTaskPollResponse(
-    std::string_view json_text);
-
 std::string SerializeTaskError(const TaskError& error);
 JsonDecodeResult<TaskError> ParseTaskError(std::string_view json_text);
 

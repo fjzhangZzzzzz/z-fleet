@@ -28,8 +28,6 @@ void to_json(nlohmann::json& j, const Task& task);
 void from_json(const nlohmann::json& j, Task& task);
 void to_json(nlohmann::json& j, const TaskCreateRequest& request);
 void from_json(const nlohmann::json& j, TaskCreateRequest& request);
-void to_json(nlohmann::json& j, const TaskPollResponse& response);
-void from_json(const nlohmann::json& j, TaskPollResponse& response);
 void to_json(nlohmann::json& j, const TaskError& error);
 void from_json(const nlohmann::json& j, TaskError& error);
 void to_json(nlohmann::json& j, const TaskRunningRequest& request);
@@ -87,15 +85,6 @@ CapabilityLevel parse_capability_level(const std::string& level) {
   const auto parsed = CapabilityLevelFromString(level);
   if (!parsed.has_value()) {
     throw std::invalid_argument("unknown capability_level: " + level);
-  }
-
-  return *parsed;
-}
-
-TaskPollStatus parse_task_poll_status(const std::string& status) {
-  const auto parsed = TaskPollStatusFromString(status);
-  if (!parsed.has_value()) {
-    throw std::invalid_argument("unknown task poll status: " + status);
   }
 
   return *parsed;
@@ -441,36 +430,6 @@ void from_json(const json& j, TaskCreateRequest& request) {
   request.task = required<Task>(j, "task");
 }
 
-void to_json(json& j, const TaskPollResponse& response) {
-  j = {
-      {"protocol_version", response.protocol_version},
-      {"request_id", response.request_id},
-      {"agent_id", response.agent_id},
-      {"occurred_at", response.occurred_at},
-      {"status", ToString(response.status)},
-      {"server_time", response.server_time},
-  };
-
-  if (response.task.has_value()) {
-    j["task"] = *response.task;
-  }
-}
-
-void from_json(const json& j, TaskPollResponse& response) {
-  response.protocol_version = required<std::string>(j, "protocol_version");
-  response.request_id = required<std::string>(j, "request_id");
-  response.agent_id = required<std::string>(j, "agent_id");
-  response.occurred_at = required<std::string>(j, "occurred_at");
-  if (j.contains("task") && !j.at("task").is_null()) {
-    response.task = j.at("task").get<Task>();
-  } else {
-    response.task.reset();
-  }
-  response.status =
-      parse_task_poll_status(required<std::string>(j, "status"));
-  response.server_time = required<std::string>(j, "server_time");
-}
-
 void to_json(json& j, const TaskError& error) {
   j = {
       {"error_code", ToString(error.error_code)},
@@ -652,17 +611,6 @@ JsonDecodeResult<TaskCreateRequest> ParseTaskCreateRequest(
   return ParseJson<TaskCreateRequest>(
       json_text, [](const json& j) { return j.get<TaskCreateRequest>(); },
       ExtractTaskCreateContext);
-}
-
-std::string SerializeTaskPollResponse(const TaskPollResponse& response) {
-  return DumpJson(json(response));
-}
-
-JsonDecodeResult<TaskPollResponse> ParseTaskPollResponse(
-    std::string_view json_text) {
-  return ParseJson<TaskPollResponse>(
-      json_text, [](const json& j) { return j.get<TaskPollResponse>(); },
-      ExtractRequestContext);
 }
 
 std::string SerializeTaskError(const TaskError& error) {
