@@ -1,5 +1,6 @@
 #pragma once
 
+#include "database.h"
 #include "http2_connection_registry.h"
 #include "http2_control_service.h"
 
@@ -14,6 +15,7 @@ namespace zfleet::server {
 class Http2ControlServer {
  public:
   Http2ControlServer(std::string listen_address,
+                     ServerDatabase* database,
                      const Http2ControlService* service,
                      Http2ConnectionRegistry* registry);
 
@@ -27,6 +29,7 @@ class Http2ControlServer {
   boost::asio::ip::tcp::endpoint endpoint_;
   boost::asio::io_context io_context_;
   boost::asio::ip::tcp::acceptor acceptor_;
+  ServerDatabase* database_;
   const Http2ControlService* service_;
   Http2ConnectionRegistry* registry_;
 };

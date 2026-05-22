@@ -53,6 +53,7 @@ struct ClientBody {
 struct ClientContext {
   tcp::socket socket;
   std::string response_status;
+  std::vector<std::uint8_t> response_body;
   bool response_done = false;
 
   explicit ClientContext(asio::io_context& io_context) : socket(io_context) {}
@@ -121,12 +122,25 @@ int ClientHeaderCallback(nghttp2_session* /*session*/,
 int ClientFrameRecvCallback(nghttp2_session* /*session*/,
                             const nghttp2_frame* frame,
                             void* user_data) {
-  if (frame->hd.type == NGHTTP2_HEADERS &&
-      frame->headers.cat == NGHTTP2_HCAT_RESPONSE &&
+  if (((frame->hd.type == NGHTTP2_HEADERS &&
+        frame->headers.cat == NGHTTP2_HCAT_RESPONSE) ||
+       frame->hd.type == NGHTTP2_DATA) &&
       (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
     auto* context = static_cast<ClientContext*>(user_data);
     context->response_done = true;
   }
+  return 0;
+}
+
+int ClientDataChunkRecvCallback(nghttp2_session* /*session*/,
+                                std::uint8_t /*flags*/,
+                                std::int32_t /*stream_id*/,
+                                const std::uint8_t* data,
+                                std::size_t length,
+                                void* user_data) {
+  auto* context = static_cast<ClientContext*>(user_data);
+  context->response_body.insert(context->response_body.end(), data,
+                                data + length);
   return 0;
 }
 
@@ -140,6 +154,8 @@ struct ClientCallbacks {
                                                 ClientSendCallback);
     nghttp2_session_callbacks_set_on_header_callback(callbacks,
                                                      ClientHeaderCallback);
+    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
+        callbacks, ClientDataChunkRecvCallback);
     nghttp2_session_callbacks_set_on_frame_recv_callback(
         callbacks, ClientFrameRecvCallback);
   }
@@ -263,6 +279,78 @@ void PostHttp2Events(std::uint16_t port, std::vector<std::uint8_t> body) {
   REQUIRE(context.response_status == "200");
 }
 
+void ReceiveUntilResponseDone(ClientContext* context,
+                              nghttp2_session* session) {
+  std::array<std::uint8_t, 16 * 1024> buffer{};
+  boost::system::error_code ec;
+  while (!context->response_done) {
+    const auto bytes_read =
+        context->socket.read_some(boost::asio::buffer(buffer), ec);
+    if (ec) {
+      throw boost::system::system_error(ec);
+    }
+    const auto rv = nghttp2_session_mem_recv(session, buffer.data(),
+                                             bytes_read);
+    CheckNghttp2(static_cast<int>(rv), "receive response bytes");
+    CheckNghttp2(nghttp2_session_send(session), "send pending bytes");
+  }
+}
+
+std::vector<std::uint8_t> ExchangeHttp2EventsAndCommand(
+    std::uint16_t port,
+    std::vector<std::uint8_t> event_body) {
+  asio::io_context io_context;
+  tcp::resolver resolver(io_context);
+  ClientContext context(io_context);
+  const auto endpoints = resolver.resolve("127.0.0.1", std::to_string(port));
+  asio::connect(context.socket, endpoints);
+
+  ClientCallbacks callbacks;
+  ClientSession session(callbacks, &context);
+  ClientBody request_body{.bytes = std::move(event_body), .offset = 0};
+  nghttp2_data_provider provider;
+  provider.source.ptr = &request_body;
+  provider.read_callback = ClientReadCallback;
+
+  std::array<nghttp2_nv, 5> event_headers{
+      ZFLEET_TEST_NGHTTP2_NV(":method", "POST"),
+      ZFLEET_TEST_NGHTTP2_NV(":scheme", "http"),
+      ZFLEET_TEST_NGHTTP2_NV(":authority", "127.0.0.1"),
+      ZFLEET_TEST_NGHTTP2_NV(":path", "/v1/control/events"),
+      ZFLEET_TEST_NGHTTP2_NV("content-type", "application/x-protobuf"),
+  };
+  CheckNghttp2(nghttp2_submit_request(session.session, nullptr,
+                                      event_headers.data(),
+                                      event_headers.size(), &provider,
+                                      nullptr),
+               "submit event request");
+  CheckNghttp2(nghttp2_session_send(session.session), "send event request");
+  ReceiveUntilResponseDone(&context, session.session);
+  REQUIRE(context.response_status == "200");
+
+  context.response_status.clear();
+  context.response_body.clear();
+  context.response_done = false;
+
+  std::array<nghttp2_nv, 6> command_headers{
+      ZFLEET_TEST_NGHTTP2_NV(":method", "GET"),
+      ZFLEET_TEST_NGHTTP2_NV(":scheme", "http"),
+      ZFLEET_TEST_NGHTTP2_NV(":authority", "127.0.0.1"),
+      ZFLEET_TEST_NGHTTP2_NV(":path", "/v1/control/commands"),
+      ZFLEET_TEST_NGHTTP2_NV("accept", "application/x-protobuf"),
+      ZFLEET_TEST_NGHTTP2_NV("x-zfleet-correlation-id", "cmd-correlation-1"),
+  };
+  CheckNghttp2(nghttp2_submit_request(session.session, nullptr,
+                                      command_headers.data(),
+                                      command_headers.size(), nullptr,
+                                      nullptr),
+               "submit command request");
+  CheckNghttp2(nghttp2_session_send(session.session), "send command request");
+  ReceiveUntilResponseDone(&context, session.session);
+  REQUIRE(context.response_status == "200");
+  return context.response_body;
+}
+
 } // namespace
 
 TEST_CASE("integration scaffold links core platform and protocol modules") {
@@ -329,7 +417,7 @@ TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
   database.Initialize();
   zfleet::server::Http2ControlService service(&database);
   zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &service,
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database, &service,
                                             &registry);
 
   std::thread server_thread([&server]() { server.Run(); });
@@ -358,4 +446,76 @@ TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
               database_path,
               "select agent_id from agents where agent_id = ?",
               "agent-h2c-1") == "agent-h2c-1");
+}
+
+TEST_CASE("http2 control server sends assigned task on command stream") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto database_path = test_dir.path() / "zfleet-h2c-command.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.UpsertAgent(zfleet::protocol::RegistrationRequest{
+      .protocol_version = "v1",
+      .request_id = "seed-agent",
+      .agent_id = "agent-command-1",
+      .occurred_at = "2026-05-21T13:59:00Z",
+      .agent_version = "0.1.0",
+      .hostname = "devbox-01",
+      .os = "linux",
+      .arch = "x86_64",
+  });
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-command-1",
+      .agent_id = "agent-command-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-21T14:00:00Z",
+      .expires_at = "2099-05-21T14:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+                                            &service, &registry);
+
+  std::thread server_thread([&server]() { server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  const auto registration_frame = EncodeEventFrame(RegisterEvent(
+      "register-command-1", "agent-command-1", "2026-05-21T14:00:01Z"));
+  const auto heartbeat_frame = EncodeEventFrame(HeartbeatEvent(
+      "heartbeat-command-1", "agent-command-1", "2026-05-21T14:00:02Z"));
+  std::vector<std::uint8_t> request_body;
+  request_body.insert(request_body.end(), registration_frame.begin(),
+                      registration_frame.end());
+  request_body.insert(request_body.end(), heartbeat_frame.begin(),
+                      heartbeat_frame.end());
+
+  const auto command_body = ExchangeHttp2EventsAndCommand(
+      server.port(), std::move(request_body));
+
+  server.Stop();
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+
+  zfleet::transport::FrameDecoder decoder;
+  const auto frames = decoder.Push(command_body);
+  REQUIRE(frames.size() == 1);
+  proto::ServerCommand command;
+  REQUIRE(command.ParseFromArray(frames[0].data(),
+                                 static_cast<int>(frames[0].size())));
+  REQUIRE(command.agent_id() == "agent-command-1");
+  REQUIRE(command.correlation_id() == "cmd-correlation-1");
+  REQUIRE(command.payload_case() == proto::ServerCommand::kTaskAssigned);
+  REQUIRE(command.task_assigned().task_id() == "task-command-1");
+  REQUIRE(command.task_assigned().task_type() ==
+          proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  REQUIRE(command.task_assigned().capability_level() ==
+          proto::CAPABILITY_LEVEL_READONLY);
+  REQUIRE(ReadSingleTextColumn(database_path,
+                               "select state from tasks where task_id = ?",
+                               "task-command-1") == "assigned");
 }

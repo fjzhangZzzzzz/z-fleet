@@ -5,26 +5,34 @@
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
+#include "zfleet/protocol/message.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
 
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/write.hpp>
 #include <nghttp2/nghttp2.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <span>
 #include <string_view>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace zfleet::server {
 namespace {
 
 using tcp = boost::asio::ip::tcp;
+namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
 
@@ -51,22 +59,28 @@ tcp::endpoint ParseListenAddress(const std::string& listen_address) {
 struct StreamState {
   std::string method;
   std::string path;
+  std::string correlation_id;
   std::unique_ptr<Http2ControlDispatcher> dispatcher;
+  std::vector<std::uint8_t> response_body;
+  std::size_t response_offset = 0;
   bool has_error = false;
 };
 
 struct ConnectionContext {
   tcp::socket socket;
+  ServerDatabase* database;
   const Http2ControlService* service;
   Http2ConnectionRegistry* registry;
   std::string connection_id;
   std::map<std::int32_t, StreamState> streams;
 
   ConnectionContext(tcp::socket accepted_socket,
+                    ServerDatabase* database_arg,
                     const Http2ControlService* service_arg,
                     Http2ConnectionRegistry* registry_arg,
                     std::string connection_id_arg)
       : socket(std::move(accepted_socket)),
+        database(database_arg),
         service(service_arg),
         registry(registry_arg),
         connection_id(std::move(connection_id_arg)) {}
@@ -87,6 +101,57 @@ StreamState* FindStream(ConnectionContext* context, std::int32_t stream_id) {
   return &stream->second;
 }
 
+proto::TaskType ToProtoTaskType(zfleet::protocol::TaskType type) {
+  switch (type) {
+    case zfleet::protocol::TaskType::collect_basic_inventory:
+      return proto::TASK_TYPE_COLLECT_BASIC_INVENTORY;
+  }
+  return proto::TASK_TYPE_UNSPECIFIED;
+}
+
+proto::CapabilityLevel ToProtoCapabilityLevel(
+    zfleet::protocol::CapabilityLevel level) {
+  switch (level) {
+    case zfleet::protocol::CapabilityLevel::readonly:
+      return proto::CAPABILITY_LEVEL_READONLY;
+    case zfleet::protocol::CapabilityLevel::low_risk_write:
+      return proto::CAPABILITY_LEVEL_LOW_RISK_WRITE;
+    case zfleet::protocol::CapabilityLevel::high_risk_write:
+      return proto::CAPABILITY_LEVEL_HIGH_RISK_WRITE;
+    case zfleet::protocol::CapabilityLevel::shell:
+      return proto::CAPABILITY_LEVEL_SHELL;
+  }
+  return proto::CAPABILITY_LEVEL_UNSPECIFIED;
+}
+
+std::vector<std::uint8_t> EncodeCommandFrame(
+    const zfleet::protocol::Task& task,
+    std::string_view correlation_id) {
+  proto::ServerCommand command;
+  command.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
+  command.set_message_id(zfleet::core::GenerateUuid());
+  command.set_correlation_id(std::string(correlation_id));
+  command.set_agent_id(task.agent_id);
+  command.set_occurred_at(zfleet::core::NowUtcRfc3339());
+  auto* assigned = command.mutable_task_assigned();
+  assigned->set_task_id(task.task_id);
+  assigned->set_task_type(ToProtoTaskType(task.task_type));
+  assigned->set_capability_level(ToProtoCapabilityLevel(task.capability_level));
+  assigned->set_created_at(task.created_at);
+  assigned->set_expires_at(task.expires_at);
+  if (std::holds_alternative<zfleet::protocol::CollectBasicInventoryInput>(
+          task.input)) {
+    assigned->mutable_collect_basic_inventory();
+  }
+
+  std::string bytes;
+  if (!command.SerializeToString(&bytes)) {
+    throw std::runtime_error("serialize server command failed");
+  }
+  return zfleet::transport::EncodeFrame(std::span<const std::uint8_t>{
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+}
+
 void SubmitSimpleResponse(nghttp2_session* session,
                           std::int32_t stream_id,
                           std::string_view status) {
@@ -104,6 +169,42 @@ void SubmitSimpleResponse(nghttp2_session* session,
   CheckNghttp2(nghttp2_submit_response(session, stream_id, headers.data(),
                                        headers.size(), nullptr),
                "submit http2 response");
+}
+
+ssize_t ResponseReadCallback(nghttp2_session* /*session*/,
+                             std::int32_t /*stream_id*/,
+                             std::uint8_t* buffer,
+                             std::size_t length,
+                             std::uint32_t* data_flags,
+                             nghttp2_data_source* source,
+                             void* /*user_data*/) {
+  auto* stream = static_cast<StreamState*>(source->ptr);
+  const auto remaining = stream->response_body.size() - stream->response_offset;
+  const auto bytes_to_copy = std::min(length, remaining);
+  if (bytes_to_copy > 0) {
+    std::memcpy(buffer, stream->response_body.data() + stream->response_offset,
+                bytes_to_copy);
+    stream->response_offset += bytes_to_copy;
+  }
+  if (stream->response_offset == stream->response_body.size()) {
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+  }
+  return static_cast<ssize_t>(bytes_to_copy);
+}
+
+void SubmitCommandResponse(nghttp2_session* session,
+                           std::int32_t stream_id,
+                           StreamState* stream) {
+  std::array<nghttp2_nv, 2> headers{
+      ZFLEET_NGHTTP2_NV(":status", "200"),
+      ZFLEET_NGHTTP2_NV("content-type", "application/x-protobuf"),
+  };
+  nghttp2_data_provider provider;
+  provider.source.ptr = stream;
+  provider.read_callback = ResponseReadCallback;
+  CheckNghttp2(nghttp2_submit_response(session, stream_id, headers.data(),
+                                       headers.size(), &provider),
+               "submit command response");
 }
 
 ssize_t SendCallback(nghttp2_session* /*session*/,
@@ -156,8 +257,41 @@ int OnHeaderCallback(nghttp2_session* /*session*/,
     stream->method = header_value;
   } else if (header_name == ":path") {
     stream->path = header_value;
+  } else if (header_name == "x-zfleet-correlation-id") {
+    stream->correlation_id = header_value;
   }
   return 0;
+}
+
+void HandleCommandHeadersEnd(nghttp2_session* session,
+                             const nghttp2_frame* frame,
+                             ConnectionContext* context,
+                             StreamState* stream) {
+  if (stream == nullptr || stream->method != "GET" ||
+      stream->path != zfleet::transport::kControlCommandsPath) {
+    SubmitSimpleResponse(session, frame->hd.stream_id, "400");
+    return;
+  }
+
+  const auto connection = context->registry->FindByConnection(
+      context->connection_id);
+  if (!connection.has_value() || !connection->agent_id.has_value() ||
+      connection->disconnected_at.has_value()) {
+    SubmitSimpleResponse(session, frame->hd.stream_id, "404");
+    return;
+  }
+
+  const auto assigned_at = zfleet::core::NowUtcRfc3339();
+  const auto task = context->database->ClaimNextTaskForAgent(
+      *connection->agent_id, assigned_at);
+  if (!task.has_value()) {
+    SubmitSimpleResponse(session, frame->hd.stream_id, "200");
+    return;
+  }
+
+  stream->response_body = EncodeCommandFrame(*task, stream->correlation_id);
+  stream->response_offset = 0;
+  SubmitCommandResponse(session, frame->hd.stream_id, stream);
 }
 
 int OnDataChunkRecvCallback(nghttp2_session* /*session*/,
@@ -200,6 +334,10 @@ int OnFrameRecvCallback(nghttp2_session* session,
       (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
     auto* context = static_cast<ConnectionContext*>(user_data);
     auto* stream = FindStream(context, frame->hd.stream_id);
+    if (stream != nullptr && stream->method == "GET") {
+      HandleCommandHeadersEnd(session, frame, context, stream);
+      return 0;
+    }
     SubmitSimpleResponse(session, frame->hd.stream_id,
                          stream != nullptr && !stream->has_error ? "200"
                                                                   : "400");
@@ -267,9 +405,10 @@ struct ServerSession {
 };
 
 void HandleConnection(tcp::socket socket,
+                      ServerDatabase* database,
                       const Http2ControlService* service,
                       Http2ConnectionRegistry* registry) {
-  ConnectionContext context(std::move(socket), service, registry,
+  ConnectionContext context(std::move(socket), database, service, registry,
                             zfleet::core::GenerateUuid());
   registry->OpenConnection(context.connection_id, zfleet::core::NowUtcRfc3339());
 
@@ -312,15 +451,20 @@ void HandleConnection(tcp::socket socket,
 
 Http2ControlServer::Http2ControlServer(
     std::string listen_address,
+    ServerDatabase* database,
     const Http2ControlService* service,
     Http2ConnectionRegistry* registry)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(1),
       acceptor_(io_context_),
+      database_(database),
       service_(service),
       registry_(registry) {}
 
 void Http2ControlServer::Run() {
+  if (database_ == nullptr) {
+    throw std::invalid_argument("server database must not be null");
+  }
   if (service_ == nullptr) {
     throw std::invalid_argument("http2 control service must not be null");
   }
@@ -363,7 +507,7 @@ void Http2ControlServer::StartAccept() {
           return;
         }
 
-        HandleConnection(std::move(socket), service_, registry_);
+        HandleConnection(std::move(socket), database_, service_, registry_);
         if (acceptor_.is_open()) {
           StartAccept();
         }

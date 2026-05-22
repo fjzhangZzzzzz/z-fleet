@@ -56,6 +56,7 @@ int main(int argc, char** argv) {
     const zfleet::server::Http2ControlService control_service(&database);
     zfleet::server::Http2ConnectionRegistry connection_registry;
     zfleet::server::Http2ControlServer control_server(config.control_listen,
+                                                      &database,
                                                       &control_service,
                                                       &connection_registry);
 
