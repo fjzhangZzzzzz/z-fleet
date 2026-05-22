@@ -33,6 +33,10 @@ class Http2ControlService {
       const zfleet::protocol::v1::AgentEvent& event) const;
   ControlEventResult HandleHeartbeat(
       const zfleet::protocol::v1::AgentEvent& event) const;
+  ControlEventResult HandleTaskRunning(
+      const zfleet::protocol::v1::AgentEvent& event) const;
+  ControlEventResult HandleTaskResult(
+      const zfleet::protocol::v1::AgentEvent& event) const;
   ControlEventResult ValidateEnvelope(
       const zfleet::protocol::v1::AgentEvent& event) const;
   void RecordAuditEvent(zfleet::protocol::AuditEventType event_type,

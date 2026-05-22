@@ -229,6 +229,42 @@ proto::AgentEvent HeartbeatEvent(std::string message_id,
   return event;
 }
 
+proto::AgentEvent TaskRunningEvent(std::string message_id,
+                                   std::string agent_id,
+                                   std::string task_id,
+                                   std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_task_running();
+  payload->set_task_id(std::move(task_id));
+  payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  return event;
+}
+
+proto::AgentEvent TaskSucceededEvent(std::string message_id,
+                                     std::string agent_id,
+                                     std::string task_id,
+                                     std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_task_result();
+  payload->set_task_id(std::move(task_id));
+  payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  payload->set_status(proto::TASK_EXECUTION_STATUS_SUCCEEDED);
+  auto* inventory = payload->mutable_collect_basic_inventory();
+  inventory->set_hostname("devbox-01");
+  inventory->set_os("linux");
+  inventory->set_arch("x86_64");
+  inventory->set_agent_version("0.1.0");
+  return event;
+}
+
 std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
   std::string bytes;
   REQUIRE(event.SerializeToString(&bytes));
@@ -496,6 +532,19 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
   const auto command_body = ExchangeHttp2EventsAndCommand(
       server.port(), std::move(request_body));
 
+  const auto running_frame = EncodeEventFrame(TaskRunningEvent(
+      "running-command-1", "agent-command-1", "task-command-1",
+      "2026-05-21T14:00:03Z"));
+  const auto result_frame = EncodeEventFrame(TaskSucceededEvent(
+      "result-command-1", "agent-command-1", "task-command-1",
+      "2026-05-21T14:00:04Z"));
+  std::vector<std::uint8_t> result_body;
+  result_body.insert(result_body.end(), running_frame.begin(),
+                     running_frame.end());
+  result_body.insert(result_body.end(), result_frame.begin(),
+                     result_frame.end());
+  PostHttp2Events(server.port(), std::move(result_body));
+
   server.Stop();
   if (server_thread.joinable()) {
     server_thread.join();
@@ -517,5 +566,6 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
           proto::CAPABILITY_LEVEL_READONLY);
   REQUIRE(ReadSingleTextColumn(database_path,
                                "select state from tasks where task_id = ?",
-                               "task-command-1") == "assigned");
+                               "task-command-1") == "succeeded");
+  REQUIRE(CountRows(database_path, "task_results") == 1);
 }

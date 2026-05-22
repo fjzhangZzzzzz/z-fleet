@@ -67,6 +67,19 @@ std::string ReadAuditField(const std::filesystem::path& database_path,
   return query.getColumn(0).getString();
 }
 
+std::string ReadTaskField(const std::filesystem::path& database_path,
+                          const std::string& task_id,
+                          const std::string& column_name) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db, "select " + column_name + " from tasks where task_id = ?");
+  query.bind(1, task_id);
+  if (!query.executeStep()) {
+    return {};
+  }
+  return query.getColumn(0).getString();
+}
+
 proto::AgentEvent RegisterEvent(std::string message_id,
                                 std::string agent_id,
                                 std::string occurred_at) {
@@ -93,6 +106,71 @@ proto::AgentEvent HeartbeatEvent(std::string message_id,
   event.set_occurred_at(std::move(occurred_at));
   event.mutable_heartbeat()->set_agent_version("0.1.0");
   return event;
+}
+
+proto::AgentEvent TaskRunningEvent(std::string message_id,
+                                   std::string agent_id,
+                                   std::string task_id,
+                                   std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_task_running();
+  payload->set_task_id(std::move(task_id));
+  payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  return event;
+}
+
+proto::AgentEvent TaskSucceededEvent(std::string message_id,
+                                     std::string agent_id,
+                                     std::string task_id,
+                                     std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_task_result();
+  payload->set_task_id(std::move(task_id));
+  payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  payload->set_status(proto::TASK_EXECUTION_STATUS_SUCCEEDED);
+  auto* inventory = payload->mutable_collect_basic_inventory();
+  inventory->set_hostname("devbox-01");
+  inventory->set_os("linux");
+  inventory->set_arch("x86_64");
+  inventory->set_agent_version("0.1.0");
+  return event;
+}
+
+void SeedAgent(zfleet::server::ServerDatabase* database,
+               std::string agent_id) {
+  database->UpsertAgent(zfleet::protocol::RegistrationRequest{
+      .protocol_version = "v1",
+      .request_id = "seed-agent",
+      .agent_id = std::move(agent_id),
+      .occurred_at = "2026-05-21T09:00:00Z",
+      .agent_version = "0.1.0",
+      .hostname = "devbox-01",
+      .os = "linux",
+      .arch = "x86_64",
+  });
+}
+
+void SeedTask(zfleet::server::ServerDatabase* database,
+              std::string task_id,
+              std::string agent_id) {
+  database->EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = std::move(task_id),
+      .agent_id = std::move(agent_id),
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-21T10:00:00Z",
+      .expires_at = "2099-05-21T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
 }
 
 std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
@@ -212,6 +290,39 @@ TEST_CASE("http2 control service rejects invalid and unregistered events") {
               database_path, "http2-unregistered-heartbeat", "payload_json")
               .find("\"error_code\":\"agent_not_registered\"") !=
           std::string::npos);
+}
+
+TEST_CASE("http2 control service stores task running and result events") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-1");
+  SeedTask(&database, "task-1", "agent-1");
+  REQUIRE(database.ClaimNextTaskForAgent("agent-1",
+                                         "2026-05-21T10:00:01Z")
+              .has_value());
+  const zfleet::server::Http2ControlService service(&database);
+
+  const auto running_result = service.HandleAgentEvent(TaskRunningEvent(
+      "task-running-1", "agent-1", "task-1", "2026-05-21T10:00:02Z"));
+  const auto result_result = service.HandleAgentEvent(TaskSucceededEvent(
+      "task-result-1", "agent-1", "task-1", "2026-05-21T10:00:03Z"));
+
+  REQUIRE(running_result.status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(running_result.message == "running");
+  REQUIRE(result_result.status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(result_result.message == "accepted");
+  REQUIRE(ReadTaskField(database_path, "task-1", "state") == "succeeded");
+  REQUIRE(ReadTaskField(database_path, "task-1", "completed_at") ==
+          "2026-05-21T10:00:03Z");
+  REQUIRE(CountRows(database_path, "task_results") == 1);
+  REQUIRE(ReadAuditField(database_path, "task-running-1", "event_type") ==
+          "task.running");
+  REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
+          "task.succeeded");
 }
 
 TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
