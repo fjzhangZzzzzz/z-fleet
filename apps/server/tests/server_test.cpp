@@ -1,18 +1,24 @@
 #include "config.h"
 #include "database.h"
+#include "http2_control_dispatcher.h"
+#include "http2_control_service.h"
 #include "http_handler.h"
 
 #include "test_util.h"
 
 #include "zfleet/protocol/json_codec.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/transport/frame_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/beast/http.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -184,6 +190,167 @@ TEST_CASE("register request is accepted and persists agent") {
           "agent.register");
   REQUIRE(ReadAuditField(database_path, "req-register", "payload_json")
               .find("\"status\":\"accepted\"") != std::string::npos);
+
+}
+
+TEST_CASE("http2 control service registers agent and stores heartbeat") {
+  namespace proto = zfleet::protocol::v1;
+
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::Http2ControlService service(&database);
+
+  proto::AgentEvent registration;
+  registration.set_protocol_version("v1");
+  registration.set_message_id("http2-register");
+  registration.set_agent_id("agent-1");
+  registration.set_occurred_at("2026-05-21T10:00:00Z");
+  auto* register_payload = registration.mutable_register_();
+  register_payload->set_agent_version("0.1.0");
+  register_payload->set_hostname("devbox-01");
+  register_payload->set_os("linux");
+  register_payload->set_arch("x86_64");
+
+  const auto register_result = service.HandleAgentEvent(registration);
+
+  proto::AgentEvent heartbeat;
+  heartbeat.set_protocol_version("v1");
+  heartbeat.set_message_id("http2-heartbeat");
+  heartbeat.set_agent_id("agent-1");
+  heartbeat.set_occurred_at("2026-05-21T10:00:05Z");
+  heartbeat.mutable_heartbeat()->set_agent_version("0.1.0");
+
+  const auto heartbeat_result = service.HandleAgentEvent(heartbeat);
+
+  REQUIRE(register_result.status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(register_result.message == "accepted");
+  REQUIRE(heartbeat_result.status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(heartbeat_result.message == "ok");
+  REQUIRE(database.AgentExists("agent-1"));
+  REQUIRE(CountRows(database_path, "heartbeats") == 1);
+  REQUIRE(CountRows(database_path, "audit_events") == 2);
+  REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
+          "2026-05-21T10:00:05Z");
+  REQUIRE(ReadAuditField(database_path, "http2-register", "event_type") ==
+          "agent.register");
+  REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "event_type") ==
+          "agent.heartbeat");
+  REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "payload_json")
+              .find("\"status\":\"ok\"") != std::string::npos);
+
+}
+
+TEST_CASE("http2 control service rejects invalid and unregistered events") {
+  namespace proto = zfleet::protocol::v1;
+
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const zfleet::server::Http2ControlService service(&database);
+
+  proto::AgentEvent missing_payload;
+  missing_payload.set_protocol_version("v1");
+  missing_payload.set_message_id("http2-missing-payload");
+  missing_payload.set_agent_id("agent-1");
+  missing_payload.set_occurred_at("2026-05-21T10:00:00Z");
+
+  const auto missing_payload_result = service.HandleAgentEvent(missing_payload);
+
+  proto::AgentEvent heartbeat;
+  heartbeat.set_protocol_version("v1");
+  heartbeat.set_message_id("http2-unregistered-heartbeat");
+  heartbeat.set_agent_id("agent-1");
+  heartbeat.set_occurred_at("2026-05-21T10:00:05Z");
+  heartbeat.mutable_heartbeat()->set_agent_version("0.1.0");
+
+  const auto heartbeat_result = service.HandleAgentEvent(heartbeat);
+
+  REQUIRE(missing_payload_result.status ==
+          zfleet::server::ControlEventStatus::kInvalidArgument);
+  REQUIRE(missing_payload_result.message == "event payload must be set");
+  REQUIRE(heartbeat_result.status ==
+          zfleet::server::ControlEventStatus::kNotFound);
+  REQUIRE(heartbeat_result.message == "agent not registered");
+  REQUIRE(CountRows(database_path, "heartbeats") == 0);
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
+  REQUIRE(ReadAuditField(
+              database_path, "http2-unregistered-heartbeat", "payload_json")
+              .find("\"error_code\":\"agent_not_registered\"") !=
+          std::string::npos);
+
+}
+
+TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
+  namespace proto = zfleet::protocol::v1;
+
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ControlDispatcher dispatcher(&service);
+
+  proto::AgentEvent registration;
+  registration.set_protocol_version("v1");
+  registration.set_message_id("framed-register");
+  registration.set_agent_id("agent-1");
+  registration.set_occurred_at("2026-05-21T11:00:00Z");
+  auto* register_payload = registration.mutable_register_();
+  register_payload->set_agent_version("0.1.0");
+  register_payload->set_hostname("devbox-01");
+  register_payload->set_os("linux");
+  register_payload->set_arch("x86_64");
+
+  proto::AgentEvent heartbeat;
+  heartbeat.set_protocol_version("v1");
+  heartbeat.set_message_id("framed-heartbeat");
+  heartbeat.set_agent_id("agent-1");
+  heartbeat.set_occurred_at("2026-05-21T11:00:05Z");
+  heartbeat.mutable_heartbeat()->set_agent_version("0.1.0");
+
+  std::string registration_bytes;
+  std::string heartbeat_bytes;
+  REQUIRE(registration.SerializeToString(&registration_bytes));
+  REQUIRE(heartbeat.SerializeToString(&heartbeat_bytes));
+
+  const auto registration_frame = zfleet::transport::EncodeFrame(
+      std::span<const std::uint8_t>{
+          reinterpret_cast<const std::uint8_t*>(registration_bytes.data()),
+          registration_bytes.size()});
+  const auto heartbeat_frame = zfleet::transport::EncodeFrame(
+      std::span<const std::uint8_t>{
+          reinterpret_cast<const std::uint8_t*>(heartbeat_bytes.data()),
+          heartbeat_bytes.size()});
+
+  std::vector<std::uint8_t> stream_bytes;
+  stream_bytes.insert(stream_bytes.end(), registration_frame.begin(),
+                      registration_frame.end());
+  stream_bytes.insert(stream_bytes.end(), heartbeat_frame.begin(),
+                      heartbeat_frame.end());
+
+  const auto partial_results = dispatcher.PushEventBytes(
+      std::span<const std::uint8_t>{stream_bytes.data(), 7});
+  const auto complete_results = dispatcher.PushEventBytes(
+      std::span<const std::uint8_t>{stream_bytes.data() + 7,
+                                    stream_bytes.size() - 7});
+
+  REQUIRE(partial_results.empty());
+  REQUIRE(complete_results.size() == 2);
+  REQUIRE(complete_results[0].status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(complete_results[1].status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(CountRows(database_path, "heartbeats") == 1);
+  REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
+          "2026-05-21T11:00:05Z");
 
 }
 
