@@ -1,4 +1,3 @@
-#include "app.h"
 #include "config.h"
 #include "runtime.h"
 
@@ -25,12 +24,10 @@ void HandleStopSignal(int /*signal*/) {
 int main(int argc, char** argv) {
   CLI::App app{"z-fleet agent"};
 
-  bool run_once = false;
   std::string config_path_arg;
   std::string control_url_arg;
   std::string data_dir_arg;
   std::string log_level_arg;
-  app.add_flag("--once", run_once, "Run one diagnostic REST cycle and exit");
   app.add_option("--config", config_path_arg, "Path to agent config file");
   app.add_option("--control-url", control_url_arg,
                  "Override server HTTP/2 control URL");
@@ -56,34 +53,30 @@ int main(int argc, char** argv) {
     }
 
     zfleet::core::log::Init(config.log);
-    if (run_once) {
-      zfleet::agent::RunOnce(config);
-    } else {
-      std::signal(SIGINT, HandleStopSignal);
-      std::signal(SIGTERM, HandleStopSignal);
-      zfleet::agent::AgentRuntime runtime(config);
-      std::thread signal_monitor([&runtime]() {
-        while (!runtime.stop_requested()) {
-          if (g_stop_requested != 0) {
-            runtime.RequestStop();
-            return;
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::signal(SIGINT, HandleStopSignal);
+    std::signal(SIGTERM, HandleStopSignal);
+    zfleet::agent::AgentRuntime runtime(config);
+    std::thread signal_monitor([&runtime]() {
+      while (!runtime.stop_requested()) {
+        if (g_stop_requested != 0) {
+          runtime.RequestStop();
+          return;
         }
-      });
-      try {
-        runtime.Run();
-        runtime.RequestStop();
-        if (signal_monitor.joinable()) {
-          signal_monitor.join();
-        }
-      } catch (...) {
-        runtime.RequestStop();
-        if (signal_monitor.joinable()) {
-          signal_monitor.join();
-        }
-        throw;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
+    });
+    try {
+      runtime.Run();
+      runtime.RequestStop();
+      if (signal_monitor.joinable()) {
+        signal_monitor.join();
+      }
+    } catch (...) {
+      runtime.RequestStop();
+      if (signal_monitor.joinable()) {
+        signal_monitor.join();
+      }
+      throw;
     }
     zfleet::core::log::Shutdown();
     return 0;

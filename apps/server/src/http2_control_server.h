@@ -1,17 +1,21 @@
 #pragma once
 
-#include "http_handler.h"
+#include "http2_connection_registry.h"
+#include "http2_control_service.h"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include <cstdint>
 #include <string>
 
 namespace zfleet::server {
 
-class HttpServer {
+class Http2ControlServer {
  public:
-  HttpServer(std::string listen_address, const HttpHandler* handler);
+  Http2ControlServer(std::string listen_address,
+                     const Http2ControlService* service,
+                     Http2ConnectionRegistry* registry);
 
   void Run();
   void Stop();
@@ -23,7 +27,8 @@ class HttpServer {
   boost::asio::ip::tcp::endpoint endpoint_;
   boost::asio::io_context io_context_;
   boost::asio::ip::tcp::acceptor acceptor_;
-  const HttpHandler* handler_;
+  const Http2ControlService* service_;
+  Http2ConnectionRegistry* registry_;
 };
 
 } // namespace zfleet::server

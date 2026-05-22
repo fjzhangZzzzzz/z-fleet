@@ -50,12 +50,6 @@ ServerConfig LoadConfig(
     return config;
   }
 
-  if (const auto* node = server->get("listen"); node != nullptr) {
-    if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.listen = *value;
-    }
-  }
-
   if (const auto* node = server->get("control_listen"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_listen = *value;

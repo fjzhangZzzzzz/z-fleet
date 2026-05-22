@@ -10,7 +10,6 @@
 namespace zfleet::agent {
 
 struct AgentConfig {
-  std::string server_url = "http://127.0.0.1:8080";
   std::string control_url = "http://127.0.0.1:8081";
   std::filesystem::path data_dir = "data/agent";
   std::string state_file = "state.toml";

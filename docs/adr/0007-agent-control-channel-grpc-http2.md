@@ -6,7 +6,7 @@
 
 ## 背景
 
-Agent 当前以一次性 REST 请求完成注册、心跳、资产上报和任务轮询。该模型已经能验证最小协议，但不适合作为长期运行形态：
+Agent 曾以一次性 REST 请求完成注册、心跳、资产上报和任务轮询。该模型已经被移除，原因是它不适合作为长期运行形态：
 
 - Agent 进程执行一轮后退出，无法表达持续在线、离线重连和任务实时下发；
 - 周期轮询会增加任务延迟，并把在线状态、心跳和任务获取混在短连接请求中；
@@ -32,7 +32,7 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
 - Agent 断线后负责指数退避重连；Server 必须容忍 Agent 离线、重复注册和连接重建；
 - 在线状态不能只依赖 TCP 连接存在，应结合控制流 heartbeat 和 Server 侧超时判断；
 - 大 payload 或可并发的数据流使用独立 HTTP/2 stream，例如安装包下载、日志上传、资产快照批量上报；
-- `RunOnce` 仅作为本地诊断、测试或兼容过渡入口，不作为正式 Agent runtime 模型。
+- 不保留基于 HTTP/1 REST 的 `RunOnce` 控制路径；
 
 落地时可以调整 endpoint 和 message 名称，但不得偏离以下方向：
 
@@ -45,7 +45,7 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
 
 ## 备选方案
 
-- **继续 REST polling**：实现简单，便于调试，但任务延迟、连接开销、在线状态和离线恢复模型都不够清晰，已拒绝作为长期主模型。REST 可保留为诊断、兼容或过渡接口。
+- **继续 REST polling**：实现简单，便于调试，但任务延迟、连接开销、在线状态和离线恢复模型都不够清晰，已拒绝并移除。
 - **gRPC over HTTP/2**：协议和工具链成熟，但对本项目过重；静态链接和构建成本明显超过轻量 Agent 目标，已拒绝。
 - **WebSocket / WSS**：全双工语义简单，适合浏览器实时通信或轻量控制通道；但多路复用、流控、schema 和错误语义需要大量应用层约定。作为特殊网络环境备选可以接受，但不作为主控制协议。
 - **HTTP/2 + MessagePack**：编码轻量，但 schema 约束弱，版本演进、安全校验和跨语言生成都需要更多手写约定，暂不采用。
@@ -59,7 +59,7 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
 
 - 正向：保留 HTTP/2 长连接、多 stream、流控和 TLS 边界，同时避免 gRPC 体积和构建成本。
 - 正向：protobuf-lite 提供稳定 schema、跨语言能力和较好的版本演进，不需要运行时反射。
-- 正向：Agent 可按 `asio + openssl + nghttp2 + protobuf-lite` 收敛依赖；Server 可继续用 Beast 承载 REST/web 管理接口。
+- 正向：Agent 可按 `asio + openssl + nghttp2 + protobuf-lite` 收敛依赖；Server 控制面不再依赖 HTTP/1 REST 框架。
 - 负向：需要自行定义 frame、应用错误码、重连、ack 和部分可观测性字段；这些必须集中在 `libs/transport` 和 `libs/protocol`，不得散落到业务代码。
 - 负向：浏览器直接调用不如 WebSocket 方便，但本项目主通信对象是 Agent/Server，不以浏览器实时通道为目标。
 - 后续工作：协议文档应新增 HTTP/2 endpoint、frame 和 protobuf message 定义；Agent 应重构为持续运行 runtime；Server 应增加 HTTP/2 control listener；运维文档应补充 Agent 启动、停止、断线重连、证书配置和排障流程。
@@ -73,7 +73,7 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
 
 2. **运行模型**
    - Agent 默认持续运行并维护 HTTP/2 session。
-   - `--once` 只用于诊断和测试，不应成为 service 管理脚本的默认入口。
+   - 不保留 HTTP/1 REST `--once` 诊断入口，诊断能力应基于 HTTP/2 控制协议实现。
    - 主 loop 必须支持 SIGINT/SIGTERM 优雅退出。
 
 3. **重连模型**
@@ -91,6 +91,6 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
    - token、证书、trace id 等上下文通过 HTTP/2 header 或明确字段传递，不混入日志文本解析。
 
 6. **兼容与迁移**
-   - 当前 REST API 可作为过渡、诊断或测试接口保留一段时间。
-   - 新功能默认优先设计为 HTTP/2 control message；除非有明确兼容理由，不再扩展 REST polling 作为主控制面。
+   - 旧 HTTP/1 REST 控制 API 不作为兼容目标保留。
+   - 新功能默认优先设计为 HTTP/2 control message；不得扩展 REST polling 作为主控制面。
    - 文档、测试和运维脚本必须围绕 HTTP/2 长连接 runtime 演进，避免实现方向重新偏回短连接轮询。

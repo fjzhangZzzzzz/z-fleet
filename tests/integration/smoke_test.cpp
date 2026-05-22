@@ -1,51 +1,169 @@
-#include "app.h"
-#include "config.h"
 #include "database.h"
-#include "http_handler.h"
-#include "http_server.h"
+#include "http2_connection_registry.h"
+#include "http2_control_dispatcher.h"
+#include "http2_control_server.h"
+#include "http2_control_service.h"
 
 #include "test_util.h"
 
-#include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/version.h"
 #include "zfleet/platform/system.h"
 #include "zfleet/protocol/message.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/transport/frame_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http.hpp>
+#include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <nghttp2/nghttp2.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
-#include <exception>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <span>
+#include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
+namespace proto = zfleet::protocol::v1;
 namespace asio = boost::asio;
-namespace fs = std::filesystem;
-namespace http = boost::beast::http;
 using tcp = asio::ip::tcp;
 
-std::uint16_t AllocateLoopbackPort() {
-  asio::io_context io_context;
-  tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0));
-  return acceptor.local_endpoint().port();
+#define ZFLEET_TEST_NGHTTP2_NV(NAME, VALUE)                                 \
+  nghttp2_nv {                                                              \
+    reinterpret_cast<std::uint8_t*>(const_cast<char*>(NAME)),               \
+        reinterpret_cast<std::uint8_t*>(const_cast<char*>(VALUE)),          \
+        sizeof(NAME) - 1, sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE           \
+  }
+
+struct ClientBody {
+  std::vector<std::uint8_t> bytes;
+  std::size_t offset = 0;
+};
+
+struct ClientContext {
+  tcp::socket socket;
+  std::string response_status;
+  bool response_done = false;
+
+  explicit ClientContext(asio::io_context& io_context) : socket(io_context) {}
+};
+
+void CheckNghttp2(int rv, std::string_view operation) {
+  if (rv < 0) {
+    throw std::runtime_error(std::string(operation) + " failed: " +
+                             nghttp2_strerror(rv));
+  }
 }
 
-bool TableExists(const std::filesystem::path& database_path,
-                 const std::string& table_name) {
-  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
-  SQLite::Statement query(
-      db,
-      "select name from sqlite_master where type = 'table' and name = ?");
-  query.bind(1, table_name);
-  return query.executeStep();
+ssize_t ClientSendCallback(nghttp2_session* /*session*/,
+                           const std::uint8_t* data,
+                           std::size_t length,
+                           int /*flags*/,
+                           void* user_data) {
+  auto* context = static_cast<ClientContext*>(user_data);
+  boost::asio::write(context->socket, boost::asio::buffer(data, length));
+  return static_cast<ssize_t>(length);
 }
+
+ssize_t ClientReadCallback(nghttp2_session* /*session*/,
+                           std::int32_t /*stream_id*/,
+                           std::uint8_t* buffer,
+                           std::size_t length,
+                           std::uint32_t* data_flags,
+                           nghttp2_data_source* source,
+                           void* /*user_data*/) {
+  auto* body = static_cast<ClientBody*>(source->ptr);
+  const auto remaining = body->bytes.size() - body->offset;
+  const auto bytes_to_copy = std::min(length, remaining);
+  if (bytes_to_copy > 0) {
+    std::memcpy(buffer, body->bytes.data() + body->offset, bytes_to_copy);
+    body->offset += bytes_to_copy;
+  }
+  if (body->offset == body->bytes.size()) {
+    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+  }
+  return static_cast<ssize_t>(bytes_to_copy);
+}
+
+int ClientHeaderCallback(nghttp2_session* /*session*/,
+                         const nghttp2_frame* frame,
+                         const std::uint8_t* name,
+                         std::size_t name_length,
+                         const std::uint8_t* value,
+                         std::size_t value_length,
+                         std::uint8_t /*flags*/,
+                         void* user_data) {
+  if (frame->hd.type != NGHTTP2_HEADERS ||
+      frame->headers.cat != NGHTTP2_HCAT_RESPONSE) {
+    return 0;
+  }
+
+  const std::string_view header_name(reinterpret_cast<const char*>(name),
+                                     name_length);
+  if (header_name == ":status") {
+    auto* context = static_cast<ClientContext*>(user_data);
+    context->response_status.assign(reinterpret_cast<const char*>(value),
+                                    value_length);
+  }
+  return 0;
+}
+
+int ClientFrameRecvCallback(nghttp2_session* /*session*/,
+                            const nghttp2_frame* frame,
+                            void* user_data) {
+  if (frame->hd.type == NGHTTP2_HEADERS &&
+      frame->headers.cat == NGHTTP2_HCAT_RESPONSE &&
+      (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
+    auto* context = static_cast<ClientContext*>(user_data);
+    context->response_done = true;
+  }
+  return 0;
+}
+
+struct ClientCallbacks {
+  nghttp2_session_callbacks* callbacks = nullptr;
+
+  ClientCallbacks() {
+    CheckNghttp2(nghttp2_session_callbacks_new(&callbacks),
+                 "create client callbacks");
+    nghttp2_session_callbacks_set_send_callback(callbacks,
+                                                ClientSendCallback);
+    nghttp2_session_callbacks_set_on_header_callback(callbacks,
+                                                     ClientHeaderCallback);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(
+        callbacks, ClientFrameRecvCallback);
+  }
+
+  ~ClientCallbacks() {
+    nghttp2_session_callbacks_del(callbacks);
+  }
+};
+
+struct ClientSession {
+  nghttp2_session* session = nullptr;
+
+  ClientSession(const ClientCallbacks& callbacks, ClientContext* context) {
+    CheckNghttp2(
+        nghttp2_session_client_new(&session, callbacks.callbacks, context),
+        "create client session");
+    CheckNghttp2(nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, nullptr, 0),
+                 "submit client settings");
+  }
+
+  ~ClientSession() {
+    nghttp2_session_del(session);
+  }
+};
 
 int CountRows(const std::filesystem::path& database_path,
               const std::string& table_name) {
@@ -67,61 +185,83 @@ std::string ReadSingleTextColumn(const std::filesystem::path& database_path,
   return query.getColumn(0).getString();
 }
 
-std::string ReadSingleTextColumnNoParam(const std::filesystem::path& database_path,
-                                        const std::string& query_text) {
-  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
-  SQLite::Statement query(db, query_text);
-  if (!query.executeStep()) {
-    return {};
-  }
-  return query.getColumn(0).getString();
+proto::AgentEvent RegisterEvent(std::string message_id,
+                                std::string agent_id,
+                                std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_register_();
+  payload->set_agent_version("0.1.0");
+  payload->set_hostname("devbox-01");
+  payload->set_os("linux");
+  payload->set_arch("x86_64");
+  return event;
 }
 
-http::response<http::string_body> PostJson(std::uint16_t port,
-                                           std::string_view target,
-                                           std::string body) {
+proto::AgentEvent HeartbeatEvent(std::string message_id,
+                                 std::string agent_id,
+                                 std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  event.mutable_heartbeat()->set_agent_version("0.1.0");
+  return event;
+}
+
+std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
+  std::string bytes;
+  REQUIRE(event.SerializeToString(&bytes));
+  return zfleet::transport::EncodeFrame(std::span<const std::uint8_t>{
+      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+}
+
+void PostHttp2Events(std::uint16_t port, std::vector<std::uint8_t> body) {
   asio::io_context io_context;
   tcp::resolver resolver(io_context);
-  tcp::socket socket(io_context);
+  ClientContext context(io_context);
   const auto endpoints = resolver.resolve("127.0.0.1", std::to_string(port));
-  asio::connect(socket, endpoints);
+  asio::connect(context.socket, endpoints);
 
-  http::request<http::string_body> request{http::verb::post,
-                                           std::string(target), 11};
-  request.set(http::field::host, "127.0.0.1");
-  request.set(http::field::content_type, "application/json");
-  request.body() = std::move(body);
-  request.prepare_payload();
-  http::write(socket, request);
+  ClientCallbacks callbacks;
+  ClientSession session(callbacks, &context);
+  ClientBody request_body{.bytes = std::move(body), .offset = 0};
+  nghttp2_data_provider provider;
+  provider.source.ptr = &request_body;
+  provider.read_callback = ClientReadCallback;
 
-  boost::beast::flat_buffer buffer;
-  http::response<http::string_body> response;
-  http::read(socket, buffer, response);
-  return response;
-}
+  std::array<nghttp2_nv, 5> headers{
+      ZFLEET_TEST_NGHTTP2_NV(":method", "POST"),
+      ZFLEET_TEST_NGHTTP2_NV(":scheme", "http"),
+      ZFLEET_TEST_NGHTTP2_NV(":authority", "127.0.0.1"),
+      ZFLEET_TEST_NGHTTP2_NV(":path", "/v1/control/events"),
+      ZFLEET_TEST_NGHTTP2_NV("content-type", "application/x-protobuf"),
+  };
+  CheckNghttp2(nghttp2_submit_request(session.session, nullptr, headers.data(),
+                                      headers.size(), &provider, nullptr),
+               "submit event request");
+  CheckNghttp2(nghttp2_session_send(session.session), "send event request");
 
-struct RunningServer {
-  zfleet::server::ServerDatabase database;
-  zfleet::server::HttpHandler handler;
-  zfleet::server::HttpServer server;
-  std::thread thread;
-
-  explicit RunningServer(const std::filesystem::path& database_path)
-      : database(database_path),
-        handler(&database),
-        server("127.0.0.1:0", &handler) {
-    database.Initialize();
-    thread = std::thread([this]() { server.Run(); });
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-
-  ~RunningServer() {
-    server.Stop();
-    if (thread.joinable()) {
-      thread.join();
+  std::array<std::uint8_t, 16 * 1024> buffer{};
+  boost::system::error_code ec;
+  while (!context.response_done) {
+    const auto bytes_read =
+        context.socket.read_some(boost::asio::buffer(buffer), ec);
+    if (ec) {
+      throw boost::system::system_error(ec);
     }
+    const auto rv =
+        nghttp2_session_mem_recv(session.session, buffer.data(), bytes_read);
+    CheckNghttp2(static_cast<int>(rv), "receive response bytes");
+    CheckNghttp2(nghttp2_session_send(session.session), "send pending bytes");
   }
-};
+
+  REQUIRE(context.response_status == "200");
+}
 
 } // namespace
 
@@ -133,138 +273,89 @@ TEST_CASE("integration scaffold links core platform and protocol modules") {
   REQUIRE_FALSE(zfleet::core::NowUtcRfc3339().empty());
 }
 
-TEST_CASE("server startup initializes schema for integration flow") {
+TEST_CASE("http2 control dispatcher persists register and heartbeat end to end") {
   const zfleet::test::ScopedTestDir test_dir("integration");
-  const auto test_root = test_dir.path();
-  const auto database_path = test_root / "zfleet.db";
+  const auto database_path = test_dir.path() / "zfleet.db";
 
-  {
-    RunningServer server(database_path);
-    REQUIRE(TableExists(database_path, "agents"));
-    REQUIRE(TableExists(database_path, "heartbeats"));
-    REQUIRE(TableExists(database_path, "asset_snapshots"));
-  }
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  registry.OpenConnection("conn-1", "2026-05-21T12:00:00Z");
+  zfleet::server::Http2ControlDispatcher dispatcher(
+      &service, &registry, "conn-1");
+
+  const auto registration_frame = EncodeEventFrame(RegisterEvent(
+      "register-integration-1", "agent-integration-1",
+      "2026-05-21T12:00:00Z"));
+  const auto heartbeat_frame = EncodeEventFrame(HeartbeatEvent(
+      "heartbeat-integration-1", "agent-integration-1",
+      "2026-05-21T12:00:05Z"));
+
+  std::vector<std::uint8_t> stream_bytes;
+  stream_bytes.insert(stream_bytes.end(), registration_frame.begin(),
+                      registration_frame.end());
+  stream_bytes.insert(stream_bytes.end(), heartbeat_frame.begin(),
+                      heartbeat_frame.end());
+
+  const auto results = dispatcher.PushEventBytes(stream_bytes);
+
+  REQUIRE(results.size() == 2);
+  REQUIRE(results[0].status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(results[1].status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(CountRows(database_path, "agents") == 1);
+  REQUIRE(CountRows(database_path, "heartbeats") == 1);
+  REQUIRE(CountRows(database_path, "audit_events") == 2);
+  REQUIRE(ReadSingleTextColumn(
+              database_path,
+              "select agent_id from agents where agent_id = ?",
+              "agent-integration-1") == "agent-integration-1");
+  REQUIRE(ReadSingleTextColumn(
+              database_path,
+              "select agent_id from heartbeats where agent_id = ?",
+              "agent-integration-1") == "agent-integration-1");
+
+  const auto connection = registry.FindByAgent("agent-integration-1");
+  REQUIRE(connection.has_value());
+  REQUIRE(connection->connection_id == "conn-1");
+  REQUIRE(connection->last_heartbeat_at == "2026-05-21T12:00:05Z");
 }
 
-TEST_CASE("agent run once registers heartbeats and uploads assets end to end") {
+TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
   const zfleet::test::ScopedTestDir test_dir("integration");
-  const auto test_root = test_dir.path();
-  const auto database_path = test_root / "zfleet.db";
-  const auto agent_data_dir = test_root / "agent-data";
+  const auto database_path = test_dir.path() / "zfleet-h2c.db";
 
-  {
-    RunningServer server(database_path);
-    const zfleet::agent::AgentConfig config{
-        .server_url =
-            "http://127.0.0.1:" + std::to_string(server.server.port()),
-        .data_dir = agent_data_dir,
-        .state_file = "state.toml",
-        .log =
-            {
-                .level = zfleet::core::log::Level::kError,
-                .enable_console = false,
-                .file_path = test_root / "agent.log",
-            },
-    };
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server("127.0.0.1:0", &service,
+                                            &registry);
 
-    const auto result = zfleet::agent::RunOnce(config);
+  std::thread server_thread([&server]() { server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    REQUIRE_FALSE(result.agent_id.empty());
-    REQUIRE(fs::exists(agent_data_dir / "state.toml"));
-    REQUIRE(CountRows(database_path, "agents") == 1);
-    REQUIRE(CountRows(database_path, "heartbeats") == 1);
-    REQUIRE(CountRows(database_path, "asset_snapshots") == 1);
-    REQUIRE(ReadSingleTextColumn(database_path,
-                                 "select agent_id from agents where agent_id = ?",
-                                 result.agent_id) == result.agent_id);
-    REQUIRE(ReadSingleTextColumn(
-                database_path,
-                "select agent_id from heartbeats where agent_id = ?",
-                result.agent_id) == result.agent_id);
-    REQUIRE(ReadSingleTextColumn(
-                database_path,
-                "select agent_id from asset_snapshots where agent_id = ?",
-                result.agent_id) == result.agent_id);
+  const auto registration_frame = EncodeEventFrame(RegisterEvent(
+      "register-h2c-1", "agent-h2c-1", "2026-05-21T13:00:00Z"));
+  const auto heartbeat_frame = EncodeEventFrame(HeartbeatEvent(
+      "heartbeat-h2c-1", "agent-h2c-1", "2026-05-21T13:00:05Z"));
+  std::vector<std::uint8_t> request_body;
+  request_body.insert(request_body.end(), registration_frame.begin(),
+                      registration_frame.end());
+  request_body.insert(request_body.end(), heartbeat_frame.begin(),
+                      heartbeat_frame.end());
+
+  PostHttp2Events(server.port(), std::move(request_body));
+
+  server.Stop();
+  if (server_thread.joinable()) {
+    server_thread.join();
   }
 
-}
-
-TEST_CASE("agent run once polls task and uploads result end to end") {
-  const zfleet::test::ScopedTestDir test_dir("integration");
-  const auto test_root = test_dir.path();
-  const auto database_path = test_root / "zfleet-tasks.db";
-  const auto agent_data_dir = test_root / "agent-task-data";
-
-  {
-    RunningServer server(database_path);
-    const auto seeded_agent_id = "agent-task-1";
-    server.database.UpsertAgent(zfleet::protocol::RegistrationRequest{
-        .protocol_version = "v1",
-        .request_id = "seed-agent",
-        .agent_id = seeded_agent_id,
-        .occurred_at = "2026-05-17T10:00:00Z",
-        .agent_version = "0.1.0",
-        .hostname = "devbox-01",
-        .os = "linux",
-        .arch = "x86_64",
-    });
-    const auto create_response = PostJson(
-        server.server.port(), "/v1/tasks",
-        R"json({
-          "protocol_version": "v1",
-          "request_id": "task-create-integration-1",
-          "occurred_at": "2026-05-17T10:00:01Z",
-          "task": {
-            "protocol_version": "v1",
-            "task_id": "task-integration-1",
-            "agent_id": "agent-task-1",
-            "task_type": "collect_basic_inventory",
-            "capability_level": "readonly",
-            "created_at": "2026-05-17T10:00:01Z",
-            "expires_at": "2099-05-17T10:05:00Z",
-            "input": {}
-          }
-        })json");
-    REQUIRE(create_response.result() == http::status::ok);
-
-    zfleet::test::WriteTextFile(
-        agent_data_dir / "state.toml",
-        std::string("[state]\nagent_id = \"") + seeded_agent_id + "\"\n");
-
-    const zfleet::agent::AgentConfig config{
-        .server_url =
-            "http://127.0.0.1:" + std::to_string(server.server.port()),
-        .data_dir = agent_data_dir,
-        .state_file = "state.toml",
-        .log =
-            {
-                .level = zfleet::core::log::Level::kError,
-                .enable_console = false,
-                .file_path = test_root / "agent-task.log",
-            },
-    };
-
-    const auto result = zfleet::agent::RunOnce(config);
-
-    REQUIRE(result.agent_id == seeded_agent_id);
-    REQUIRE(result.completed_task_id == std::optional<std::string>{"task-integration-1"});
-    REQUIRE(CountRows(database_path, "task_results") == 1);
-    REQUIRE(ReadSingleTextColumn(
-                database_path,
-                "select state from tasks where task_id = ?",
-                "task-integration-1") == "succeeded");
-    REQUIRE(ReadSingleTextColumn(
-                database_path,
-                "select task_type from task_results where task_id = ?",
-                "task-integration-1") == "collect_basic_inventory");
-    REQUIRE(CountRows(database_path, "task_results") == 1);
-    REQUIRE(ReadSingleTextColumnNoParam(
-                database_path,
-                "select count(*) from audit_events where event_type = 'task.running'") ==
-            "1");
-    REQUIRE(ReadSingleTextColumnNoParam(
-                database_path,
-                "select event_type from audit_events where event_type like 'task.%' order by rowid desc limit 1") ==
-            "task.succeeded");
-  }
+  REQUIRE(CountRows(database_path, "agents") == 1);
+  REQUIRE(CountRows(database_path, "heartbeats") == 1);
+  REQUIRE(ReadSingleTextColumn(
+              database_path,
+              "select agent_id from agents where agent_id = ?",
+              "agent-h2c-1") == "agent-h2c-1");
 }

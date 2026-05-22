@@ -29,8 +29,8 @@ RuntimeResult AgentRuntime::Run() {
        {"data_dir", config_.data_dir.string()}});
 
   ZFLOG_ERROR(logger,
-              "HTTP/2 control runtime is not implemented yet; use --once for "
-              "diagnostics until P7 transport is wired");
+              "HTTP/2 control runtime is not implemented yet; P7 transport is "
+              "being wired");
   throw std::runtime_error("HTTP/2 control runtime is not implemented yet");
 }
 

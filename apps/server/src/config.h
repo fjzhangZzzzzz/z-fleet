@@ -9,7 +9,6 @@
 namespace zfleet::server {
 
 struct ServerConfig {
-  std::string listen = "127.0.0.1:8080";
   std::string control_listen = "127.0.0.1:8081";
   std::filesystem::path database_path = "data/zfleet.db";
   zfleet::core::log::Config log{

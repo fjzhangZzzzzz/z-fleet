@@ -3,16 +3,15 @@ add_library(zfleet_server_app
   src/database.cpp
   src/http2_connection_registry.cpp
   src/http2_control_dispatcher.cpp
+  src/http2_control_server.cpp
   src/http2_control_service.cpp
-  src/http_handler.cpp
-  src/http_server.cpp
 )
 
 set(ZFLEET_SERVER_VERSION "${PROJECT_VERSION}")
 
+find_package(Boost REQUIRED COMPONENTS system)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(SQLiteCpp CONFIG REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system)
 find_package(tomlplusplus CONFIG REQUIRED)
 
 target_link_libraries(zfleet_server_app

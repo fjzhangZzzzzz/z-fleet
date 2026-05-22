@@ -60,12 +60,6 @@ AgentConfig LoadConfig(
     return config;
   }
 
-  if (const auto* node = agent->get("server_url"); node != nullptr) {
-    if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.server_url = *value;
-    }
-  }
-
   if (const auto* node = agent->get("control_url"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_url = *value;
