@@ -11,6 +11,17 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND ZFLEET_GOLD_LINKER)
   add_link_options(-fuse-ld=gold)
 endif()
 
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(
+    $<$<CONFIG:Release>:-Os>
+    $<$<CONFIG:Release>:-ffunction-sections>
+    $<$<CONFIG:Release>:-fdata-sections>
+  )
+  add_link_options(
+    $<$<CONFIG:Release>:-Wl,--gc-sections>
+  )
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)
@@ -21,6 +32,7 @@ add_subdirectory(libs/platform)
 add_subdirectory(libs/core)
 add_subdirectory(libs/crypto)
 add_subdirectory(libs/protocol)
+add_subdirectory(libs/transport)
 add_subdirectory(libs/package)
 
 add_subdirectory(apps/agent)

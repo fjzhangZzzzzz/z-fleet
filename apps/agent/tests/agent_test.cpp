@@ -19,6 +19,10 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
     REQUIRE(config_stream);
     config_stream << "[agent]\n";
     config_stream << "server_url = \"http://127.0.0.1:18080\"\n";
+    config_stream << "control_url = \"http://127.0.0.1:18081\"\n";
+    config_stream << "heartbeat_interval_seconds = 5\n";
+    config_stream << "reconnect_initial_delay_seconds = 1\n";
+    config_stream << "reconnect_max_delay_seconds = 3\n";
     config_stream << "data_dir = \"" << (test_root / "data").string() << "\"\n";
     config_stream << "state_file = \"agent-state.toml\"\n";
     config_stream << "\n[log]\n";
@@ -32,6 +36,10 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
   const auto state_path = zfleet::agent::StatePathFor(config);
 
   REQUIRE(config.server_url == "http://127.0.0.1:18080");
+  REQUIRE(config.control_url == "http://127.0.0.1:18081");
+  REQUIRE(config.heartbeat_interval_seconds == 5);
+  REQUIRE(config.reconnect_initial_delay_seconds == 1);
+  REQUIRE(config.reconnect_max_delay_seconds == 3);
   REQUIRE(config.log.level == zfleet::core::log::Level::kError);
   REQUIRE(config.log.file_path == test_root / "agent.log");
   REQUIRE_FALSE(config.log.enable_console);

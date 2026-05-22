@@ -2,15 +2,7 @@ syntax = "proto3";
 
 package zfleet.protocol.v1;
 
-service AgentControl {
-  rpc Connect(stream AgentEvent) returns (stream ServerCommand);
-}
-
-service AgentData {
-  rpc UploadAssetSnapshot(AssetSnapshotRequest) returns (StatusResponse);
-  rpc UploadLogs(stream LogChunk) returns (StatusResponse);
-  rpc DownloadPackage(PackageRequest) returns (stream PackageChunk);
-}
+option optimize_for = LITE_RUNTIME;
 
 message AgentEvent {
   string protocol_version = 1;

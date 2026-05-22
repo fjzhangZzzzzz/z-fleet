@@ -1,6 +1,5 @@
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
 
 set(ZFLEET_PROTOCOL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(ZFLEET_PROTOCOL_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -9,14 +8,10 @@ set(ZFLEET_PROTOCOL_PROTO_FILES
 )
 set(ZFLEET_PROTOCOL_GENERATED_SOURCES
   "${ZFLEET_PROTOCOL_GENERATED_DIR}/zfleet/protocol/v1/agent_control.pb.cc"
-  "${ZFLEET_PROTOCOL_GENERATED_DIR}/zfleet/protocol/v1/agent_control.grpc.pb.cc"
 )
 set(ZFLEET_PROTOCOL_GENERATED_HEADERS
   "${ZFLEET_PROTOCOL_GENERATED_DIR}/zfleet/protocol/v1/agent_control.pb.h"
-  "${ZFLEET_PROTOCOL_GENERATED_DIR}/zfleet/protocol/v1/agent_control.grpc.pb.h"
 )
-
-get_target_property(ZFLEET_GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
 
 add_custom_command(
   OUTPUT
@@ -26,13 +21,10 @@ add_custom_command(
   COMMAND protobuf::protoc
     --proto_path=${ZFLEET_PROTOCOL_PROTO_DIR}
     --cpp_out=${ZFLEET_PROTOCOL_GENERATED_DIR}
-    --grpc_out=${ZFLEET_PROTOCOL_GENERATED_DIR}
-    --plugin=protoc-gen-grpc=${ZFLEET_GRPC_CPP_PLUGIN}
     ${ZFLEET_PROTOCOL_PROTO_FILES}
   DEPENDS
     ${ZFLEET_PROTOCOL_PROTO_FILES}
     protobuf::protoc
-    gRPC::grpc_cpp_plugin
   VERBATIM
 )
 
@@ -52,8 +44,7 @@ target_include_directories(zfleet_protocol
 
 target_link_libraries(zfleet_protocol
   PUBLIC
-    protobuf::libprotobuf
-    gRPC::grpc++
+    protobuf::libprotobuf-lite
   PRIVATE
     nlohmann_json::nlohmann_json
 )
@@ -65,8 +56,8 @@ if(BUILD_TESTING)
   include(Catch)
 
   add_executable(zfleet_protocol_tests
-    tests/grpc_protocol_test.cpp
     tests/message_test.cpp
+    tests/protobuf_protocol_test.cpp
   )
 
   target_link_libraries(zfleet_protocol_tests

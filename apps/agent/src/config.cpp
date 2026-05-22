@@ -66,11 +66,38 @@ AgentConfig LoadConfig(
     }
   }
 
+  if (const auto* node = agent->get("control_url"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.control_url = *value;
+    }
+  }
+
   config.data_dir = resolve_data_dir(*agent);
 
   if (const auto node = agent->get("state_file"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.state_file = *value;
+    }
+  }
+
+  if (const auto* node = agent->get("heartbeat_interval_seconds");
+      node != nullptr) {
+    if (const auto value = node->value<std::uint32_t>(); value.has_value()) {
+      config.heartbeat_interval_seconds = *value;
+    }
+  }
+
+  if (const auto* node = agent->get("reconnect_initial_delay_seconds");
+      node != nullptr) {
+    if (const auto value = node->value<std::uint32_t>(); value.has_value()) {
+      config.reconnect_initial_delay_seconds = *value;
+    }
+  }
+
+  if (const auto* node = agent->get("reconnect_max_delay_seconds");
+      node != nullptr) {
+    if (const auto value = node->value<std::uint32_t>(); value.has_value()) {
+      config.reconnect_max_delay_seconds = *value;
     }
   }
 

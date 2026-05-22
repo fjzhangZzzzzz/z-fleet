@@ -65,7 +65,7 @@ ctest --preset linux-debug
 需要执行原生命令时使用 `exec`：
 
 ```bash
-./scripts/vcpkg.sh exec search grpc
+./scripts/vcpkg.sh exec search nghttp2
 ./scripts/vcpkg.sh exec help install
 ```
 

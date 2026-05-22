@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <exception>
 #include <filesystem>
 #include <thread>
 
@@ -29,6 +30,12 @@ namespace asio = boost::asio;
 namespace fs = std::filesystem;
 namespace http = boost::beast::http;
 using tcp = asio::ip::tcp;
+
+std::uint16_t AllocateLoopbackPort() {
+  asio::io_context io_context;
+  tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0));
+  return acceptor.local_endpoint().port();
+}
 
 bool TableExists(const std::filesystem::path& database_path,
                  const std::string& table_name) {

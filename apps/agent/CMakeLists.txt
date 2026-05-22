@@ -7,6 +7,7 @@ set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
 add_library(zfleet_agent_app
   src/app.cpp
   src/config.cpp
+  src/runtime.cpp
   src/state.cpp
 )
 
@@ -41,6 +42,26 @@ target_link_libraries(zfleet_agent
 )
 
 target_compile_features(zfleet_agent PRIVATE cxx_std_20)
+
+set(ZFLEET_AGENT_RELEASE_MAX_BYTES 20971520 CACHE STRING
+  "Maximum allowed stripped release size for zfleet_agent in bytes"
+)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  if(CMAKE_STRIP)
+    add_custom_command(TARGET zfleet_agent POST_BUILD
+      COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:zfleet_agent>
+      COMMAND ${CMAKE_COMMAND}
+        -DZFLEET_FILE=$<TARGET_FILE:zfleet_agent>
+        -DZFLEET_MAX_BYTES=${ZFLEET_AGENT_RELEASE_MAX_BYTES}
+        -P ${CMAKE_SOURCE_DIR}/cmake/check_file_size.cmake
+      COMMENT "Stripping and checking zfleet_agent release size"
+      VERBATIM
+    )
+  else()
+    message(WARNING "CMAKE_STRIP is not available; zfleet_agent release size check will be skipped")
+  endif()
+endif()
 
 if(BUILD_TESTING)
   find_package(Catch2 CONFIG REQUIRED)

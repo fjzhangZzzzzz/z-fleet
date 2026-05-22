@@ -1,9 +1,7 @@
-#include "zfleet/protocol/v1/agent_control.grpc.pb.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <memory>
 #include <string>
 
 namespace {
@@ -12,7 +10,7 @@ namespace proto = zfleet::protocol::v1;
 
 } // namespace
 
-TEST_CASE("agent control event supports protobuf round trip") {
+TEST_CASE("agent control event supports protobuf-lite round trip") {
   proto::AgentEvent event;
   event.set_protocol_version("v1");
   event.set_message_id("msg-1");
@@ -37,9 +35,27 @@ TEST_CASE("agent control event supports protobuf round trip") {
   REQUIRE(parsed.register_().hostname() == "devbox-01");
 }
 
-TEST_CASE("agent control service exposes bidirectional streaming method") {
-  std::unique_ptr<proto::AgentControl::StubInterface> stub;
-  REQUIRE(stub == nullptr);
+TEST_CASE("server command supports protobuf-lite enum names") {
+  proto::ServerCommand command;
+  command.set_protocol_version("v1");
+  command.set_message_id("cmd-1");
+  command.set_correlation_id("msg-1");
+  command.set_agent_id("agent-1");
+  command.set_occurred_at("2026-05-21T10:00:01Z");
+
+  auto* task = command.mutable_task_assigned();
+  task->set_task_id("task-1");
+  task->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  task->set_capability_level(proto::CAPABILITY_LEVEL_READONLY);
+
+  std::string bytes;
+  REQUIRE(command.SerializeToString(&bytes));
+
+  proto::ServerCommand parsed;
+  REQUIRE(parsed.ParseFromString(bytes));
+  REQUIRE(parsed.payload_case() == proto::ServerCommand::kTaskAssigned);
+  REQUIRE(parsed.task_assigned().task_type() ==
+          proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
   REQUIRE(proto::TaskType_Name(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY) ==
           "TASK_TYPE_COLLECT_BASIC_INVENTORY");
 }

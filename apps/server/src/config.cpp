@@ -56,9 +56,9 @@ ServerConfig LoadConfig(
     }
   }
 
-  if (const auto* node = server->get("grpc_listen"); node != nullptr) {
+  if (const auto* node = server->get("control_listen"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.grpc_listen = *value;
+      config.control_listen = *value;
     }
   }
 
