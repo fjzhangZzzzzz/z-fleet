@@ -19,5 +19,5 @@
 ## 影响
 
 - 注册、心跳、资产上报和任务轮询统一走 Agent 的出站请求。
-- 长期主控制通道由 [ADR 0007：Agent 控制通道采用 HTTP/2 长连接与 protobuf-lite](0007-agent-control-channel-grpc-http2.md) 定义，但仍必须由 Agent 主动发起。
+- 长期主控制通道由 [ADR 0007：Agent 控制通道采用 HTTP/2 长连接与 protobuf-lite](0007-agent-control-channel-http2-protobuf-lite.md) 定义，但仍必须由 Agent 主动发起。
 - Server 侧任务流程必须容忍 Agent 离线和轮询延迟。

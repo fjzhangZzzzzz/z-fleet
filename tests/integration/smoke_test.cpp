@@ -31,6 +31,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -391,9 +392,38 @@ void ReceiveUntilResponseDone(ClientContext* context,
   }
 }
 
+bool HasCompleteFrame(const std::vector<std::uint8_t>& bytes) {
+  if (bytes.size() < 4) {
+    return false;
+  }
+  const auto length = (static_cast<std::uint32_t>(bytes[0]) << 24) |
+                      (static_cast<std::uint32_t>(bytes[1]) << 16) |
+                      (static_cast<std::uint32_t>(bytes[2]) << 8) |
+                      static_cast<std::uint32_t>(bytes[3]);
+  return bytes.size() >= 4 + static_cast<std::size_t>(length);
+}
+
+void ReceiveUntilCommandFrame(ClientContext* context,
+                              nghttp2_session* session) {
+  std::array<std::uint8_t, 16 * 1024> buffer{};
+  boost::system::error_code ec;
+  while (!HasCompleteFrame(context->response_body)) {
+    const auto bytes_read =
+        context->socket.read_some(boost::asio::buffer(buffer), ec);
+    if (ec) {
+      throw boost::system::system_error(ec);
+    }
+    const auto rv = nghttp2_session_mem_recv(session, buffer.data(),
+                                             bytes_read);
+    CheckNghttp2(static_cast<int>(rv), "receive command bytes");
+    CheckNghttp2(nghttp2_session_send(session), "send pending bytes");
+  }
+}
+
 std::vector<std::uint8_t> ExchangeHttp2EventsAndCommand(
     std::uint16_t port,
-    std::vector<std::uint8_t> event_body) {
+    std::vector<std::uint8_t> event_body,
+    const std::function<void()>& after_command_stream_opened = {}) {
   asio::io_context io_context;
   tcp::resolver resolver(io_context);
   ClientContext context(io_context);
@@ -441,7 +471,10 @@ std::vector<std::uint8_t> ExchangeHttp2EventsAndCommand(
                                       nullptr),
                "submit command request");
   CheckNghttp2(nghttp2_session_send(session.session), "send command request");
-  ReceiveUntilResponseDone(&context, session.session);
+  if (after_command_stream_opened) {
+    after_command_stream_opened();
+  }
+  ReceiveUntilCommandFrame(&context, session.session);
   REQUIRE(context.response_status == "200");
   return context.response_body;
 }
@@ -559,17 +592,6 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
       .os = "linux",
       .arch = "x86_64",
   });
-  database.EnqueueTask(zfleet::protocol::Task{
-      .protocol_version = "v1",
-      .task_id = "task-command-1",
-      .agent_id = "agent-command-1",
-      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
-      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
-      .created_at = "2026-05-21T14:00:00Z",
-      .expires_at = "2099-05-21T14:05:00Z",
-      .input = zfleet::protocol::CollectBasicInventoryInput{},
-  });
-
   zfleet::server::Http2ControlService service(&database);
   zfleet::server::Http2ConnectionRegistry registry;
   zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
@@ -589,7 +611,18 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
                       heartbeat_frame.end());
 
   const auto command_body = ExchangeHttp2EventsAndCommand(
-      server.port(), std::move(request_body));
+      server.port(), std::move(request_body), [&database]() {
+        database.EnqueueTask(zfleet::protocol::Task{
+            .protocol_version = "v1",
+            .task_id = "task-command-1",
+            .agent_id = "agent-command-1",
+            .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+            .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+            .created_at = "2026-05-21T14:00:00Z",
+            .expires_at = "2099-05-21T14:05:00Z",
+            .input = zfleet::protocol::CollectBasicInventoryInput{},
+        });
+      });
 
   const auto running_frame = EncodeEventFrame(TaskRunningEvent(
       "running-command-1", "agent-command-1", "task-command-1",

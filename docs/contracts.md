@@ -267,21 +267,38 @@ v0.1 固定事件类型：
 
 v0.2 目标是在不引入任意 shell 或高风险写入的前提下，建立最小只读任务闭环。
 
-v0.2 初始接口：
+v0.2 Agent/Server 控制面使用 [ADR 0007](adr/0007-agent-control-channel-http2-protobuf-lite.md)
+定义的 HTTP/2 长连接与 protobuf-lite frame。正式控制面接口为：
 
 ```text
 POST /v1/tasks
-GET  /v1/agents/{agent_id}/tasks/poll
-POST /v1/tasks/{task_id}/running
-POST /v1/tasks/{task_id}/result
+POST /v1/control/events
+GET  /v1/control/commands
 ```
+
+HTTP/2 控制面约束：
+
+- `POST /v1/control/events` 接收 Agent 上传的 length-prefixed `AgentEvent`
+  protobuf frame，`content-type` 必须为 `application/x-protobuf`。
+- `GET /v1/control/commands` 返回 Server 下发的 length-prefixed
+  `ServerCommand` protobuf frame，`accept` 必须为 `application/x-protobuf`。
+- `GET /v1/control/commands` 是长期 stream。Server 在当前无任务时保持 stream
+  打开，不返回“空任务”响应；后续任务入队后通过同一 stream 下发
+  `ServerCommand.task_assigned` frame。
+- Agent 通过 `AgentEvent.register` 和 `AgentEvent.heartbeat` 建立并维持在线状态。
+- Agent 开始执行任务时通过 `AgentEvent.task_running` 上报。
+- Agent 完成、失败或过期任务时通过 `AgentEvent.task_result` 上报。
+- 旧 HTTP/1 REST 控制接口
+  `GET /v1/agents/{agent_id}/tasks/poll`、
+  `POST /v1/tasks/{task_id}/running` 和
+  `POST /v1/tasks/{task_id}/result` 已废弃，不作为正式控制面路径。
 
 约束：
 
-- `tasks/poll` 只返回能力等级为 `readonly` 的任务。
 - `POST /v1/tasks` 用于创建最小只读任务；v0.2 不涉及复杂调度策略。
 - Agent 在任一时刻只要求串行执行一个任务；v0.2 不要求并发任务调度。
-- Server 可以返回空任务结果，表示当前无可执行任务。
+- Server 只通过 command stream 下发能力等级为 `readonly` 的任务。
+- 无可执行任务时 Server 保持 command stream 打开。
 - 任务下发、领取、开始、完成、失败和过期都必须产生审计事件。
 - v0.2 不定义取消、暂停、恢复和任务优先级抢占。
 
@@ -318,7 +335,8 @@ v0.2 先固定一个最小只读任务类型：
 
 ### 任务对象
 
-Server 下发任务时使用以下结构：
+Server 持久化和任务创建请求中的任务对象使用以下结构；下发时映射到
+`ServerCommand.task_assigned` protobuf payload：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
@@ -334,7 +352,7 @@ Server 下发任务时使用以下结构：
 约束：
 
 - `task_id` 在全局范围内必须唯一。
-- `agent_id` 必须与轮询路径参数一致。
+- `agent_id` 必须与 command stream 绑定的 Agent 身份一致。
 - `expires_at` 必须晚于 `created_at`。
 - `input` 的字段由 `task_type` 决定；接收方必须忽略未知可选字段。
 
@@ -353,57 +371,40 @@ Server 下发任务时使用以下结构：
 }
 ```
 
-### 任务轮询响应
+### Command Stream 下发
 
-Agent 轮询响应分为“有任务”和“无任务”两种。
+`GET /v1/control/commands` 成功后返回 HTTP `200` 响应头并保持 stream 打开。
+当 Server 为该 Agent 领取到 queued 任务时，下发一个
+`ServerCommand.task_assigned` frame。
 
-字段：
+`ServerCommand` envelope 字段：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `protocol_version` | `string` | yes | 当前固定为 `v1` |
-| `request_id` | `string` | yes | 本次轮询请求 ID |
+| `message_id` | `string` | yes | Server 生成的命令消息 ID |
+| `correlation_id` | `string` | no | 关联请求或 trace ID |
 | `agent_id` | `string` | yes | Agent 稳定身份 |
-| `occurred_at` | `string` | yes | Server 生成响应时间 |
-| `task` | `object` | no | 有任务时返回任务对象；无任务时省略 |
-| `status` | `string` | yes | `assigned` 或 `idle` |
-| `server_time` | `string` | yes | Server 当前时间 |
+| `occurred_at` | `string` | yes | Server 生成命令时间 |
+| `task_assigned` | `object` | yes | 任务下发 payload |
 
-无任务示例：
+`task_assigned` 字段：
 
-```json
-{
-  "protocol_version": "v1",
-  "request_id": "poll-req-1",
-  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
-  "occurred_at": "2026-05-16T10:00:10Z",
-  "status": "idle",
-  "server_time": "2026-05-16T10:00:10Z"
-}
-```
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `task_id` | `string` | yes | 任务唯一 ID |
+| `task_type` | enum | yes | 当前为 `TASK_TYPE_COLLECT_BASIC_INVENTORY` |
+| `capability_level` | enum | yes | 当前为 `CAPABILITY_LEVEL_READONLY` |
+| `created_at` | `string` | yes | Server 创建任务时间 |
+| `expires_at` | `string` | yes | 任务过期时间 |
+| `collect_basic_inventory` | message | no | 对应任务类型的输入 payload，当前为空 message |
 
-有任务示例：
+说明：
 
-```json
-{
-  "protocol_version": "v1",
-  "request_id": "poll-req-2",
-  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
-  "occurred_at": "2026-05-16T10:00:20Z",
-  "status": "assigned",
-  "task": {
-    "protocol_version": "v1",
-    "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
-    "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
-    "task_type": "collect_basic_inventory",
-    "capability_level": "readonly",
-    "created_at": "2026-05-16T10:00:00Z",
-    "expires_at": "2026-05-16T10:05:00Z",
-    "input": {}
-  },
-  "server_time": "2026-05-16T10:00:20Z"
-}
-```
+- frame 使用 4 字节大端长度前缀加 protobuf payload。
+- 没有任务时不发送 idle frame，stream 持续保持打开。
+- Agent 收到 `task_assigned` 后，先上报 `AgentEvent.task_running`，再执行任务并上报
+  `AgentEvent.task_result`。
 
 ### 任务创建请求
 
@@ -438,7 +439,8 @@ Server 通过以下结构接收最小任务创建请求：
 
 ### 任务开始执行上报
 
-Agent 在本地开始执行任务前，通过以下结构向 Server 上报 `running` 状态：
+Agent 在本地开始执行任务前，通过 `POST /v1/control/events` 发送
+`AgentEvent.task_running` frame，向 Server 上报 `running` 状态。payload 字段为：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
@@ -449,22 +451,10 @@ Agent 在本地开始执行任务前，通过以下结构向 Server 上报 `runn
 | `task_type` | `string` | yes | 任务类型 |
 | `occurred_at` | `string` | yes | Agent 开始执行任务的时间 |
 
-示例：
-
-```json
-{
-  "protocol_version": "v1",
-  "request_id": "task-running-1",
-  "task_id": "3ea33f7a-bde7-4d1c-9cc7-1a0a0e15f501",
-  "agent_id": "ab3f327d-7e9c-4ef2-8d7b-92ba0dbe1c59",
-  "task_type": "collect_basic_inventory",
-  "occurred_at": "2026-05-17T10:00:10Z"
-}
-```
-
 ### 任务结果回传
 
-Agent 完成或失败后，通过结果接口回传统一结构。
+Agent 完成或失败后，通过 `POST /v1/control/events` 发送
+`AgentEvent.task_result` frame 回传统一结构。
 
 字段：
 
@@ -482,7 +472,7 @@ Agent 完成或失败后，通过结果接口回传统一结构。
 
 约束：
 
-- `task_id` 必须与路径参数一致。
+- `task_id` 必须与已下发的任务一致。
 - `agent_id` 必须与任务归属一致。
 - `task_type` 必须与原始任务类型一致。
 - `result` 和 `error` 不能同时为空；至少一方应与 `status` 对应。
@@ -596,6 +586,9 @@ v0.2 任务相关审计事件建议至少包含以下字段：
 
 约束：
 
+- `task.running` 对应 Server 接受 `AgentEvent.task_running`，表示 Agent 已开始执行。
+- `task.succeeded`、`task.failed` 和 `task.expired` 对应 Server 接受
+  `AgentEvent.task_result` 后按结果状态写入的审计事件。
 - `task_id` 应成为任务相关审计的首要检索键之一。
 - 审计中不得存放敏感密钥、凭据原文或高基数大体积原始输出。
 - 若任务结果体较大，应只保存摘要和关键字段，而不是无上限原文。

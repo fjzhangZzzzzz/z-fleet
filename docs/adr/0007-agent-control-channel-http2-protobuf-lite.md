@@ -23,9 +23,9 @@ Agent 与 Server 的长期主控制通道采用 **HTTP/2 长连接 + protobuf-li
 
 - Agent 主动建立到 Server 的出站 HTTP/2 TLS 连接；
 - 主运行形态使用长期 HTTP/2 session，而不是短连接 REST polling；
-- 控制面使用两个长期 stream：
+- 控制面使用两个 HTTP/2 stream 类型：
   - `POST /v1/control/events`：Agent 上传 `AgentEvent` frame；
-  - `GET /v1/control/commands`：Server 下发 `ServerCommand` frame；
+  - `GET /v1/control/commands`：Server 通过长期 stream 下发 `ServerCommand` frame；
 - protobuf 只定义 message，不定义 gRPC service；
 - `.proto` 必须使用 `option optimize_for = LITE_RUNTIME;`，C++ 链接 `protobuf::libprotobuf-lite`；
 - frame 使用 length-prefixed protobuf payload，应用层负责 message envelope、错误码、重连和幂等；

@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace zfleet::agent {
@@ -156,6 +158,7 @@ void Http2ControlClient::Connect() {
   auto endpoints = boost::asio::ip::tcp::resolver(io_context_).resolve(
       endpoint_.host, std::to_string(endpoint_.port));
   boost::asio::connect(context_.socket, endpoints);
+  context_.socket.non_blocking(true);
   session_.emplace(callbacks_, &context_);
   Flush();
 }
@@ -165,8 +168,8 @@ void Http2ControlClient::Close() noexcept {
   boost::system::error_code ec;
   context_.socket.close(ec);
   context_.request_body.reset();
-  context_.active_stream_id.reset();
-  context_.response = ResponseState{};
+  context_.responses.clear();
+  context_.command_stream_id.reset();
 }
 
 bool Http2ControlClient::connected() const noexcept {
@@ -180,12 +183,73 @@ Http2Response Http2ControlClient::PostEvents(std::span<const std::uint8_t> body)
       std::vector<std::uint8_t>(body.begin(), body.end()));
 }
 
-Http2Response Http2ControlClient::GetCommands(std::string_view correlation_id) {
-  return SubmitRequest(
-      "GET", "/v1/control/commands",
-      {{"accept", "application/x-protobuf"},
-       {"x-zfleet-correlation-id", std::string(correlation_id)}},
-      {});
+std::string Http2ControlClient::StartCommandStream(
+    std::string_view correlation_id) {
+  EnsureConnected();
+  if (context_.command_stream_id.has_value()) {
+    const auto response = context_.responses.find(*context_.command_stream_id);
+    if (response != context_.responses.end() && !response->second.done) {
+      return response->second.status;
+    }
+  }
+
+  std::vector<std::pair<std::string, std::string>> extra_headers{
+      {"accept", "application/x-protobuf"},
+      {"x-zfleet-correlation-id", std::string(correlation_id)},
+  };
+
+  std::vector<nghttp2_nv> headers;
+  headers.reserve(4 + extra_headers.size());
+  headers.push_back(MakeHeader(":method", "GET"));
+  headers.push_back(MakeHeader(":scheme", "http"));
+  headers.push_back(MakeHeader(":authority", endpoint_.authority));
+  headers.push_back(MakeHeader(":path", "/v1/control/commands"));
+  for (const auto& [name, value] : extra_headers) {
+    headers.push_back(MakeHeader(name, value));
+  }
+
+  const auto stream_id = nghttp2_submit_request(
+      session_->session, nullptr, headers.data(), headers.size(), nullptr,
+      nullptr);
+  CheckNghttp2(stream_id, "submit command stream request");
+  context_.responses.insert_or_assign(stream_id, ResponseState{});
+  context_.command_stream_id = stream_id;
+
+  Flush();
+  PumpUntilHeaders(stream_id);
+  return context_.responses.at(stream_id).status;
+}
+
+void Http2ControlClient::PumpFor(std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const bool received = PumpOnce();
+    Flush();
+    if (!received) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+}
+
+std::vector<std::uint8_t> Http2ControlClient::DrainCommandBytes() {
+  if (!context_.command_stream_id.has_value()) {
+    return {};
+  }
+  auto response = context_.responses.find(*context_.command_stream_id);
+  if (response == context_.responses.end()) {
+    return {};
+  }
+  std::vector<std::uint8_t> bytes = std::move(response->second.body);
+  response->second.body.clear();
+  return bytes;
+}
+
+bool Http2ControlClient::command_stream_open() const noexcept {
+  if (!context_.command_stream_id.has_value()) {
+    return false;
+  }
+  const auto response = context_.responses.find(*context_.command_stream_id);
+  return response != context_.responses.end() && !response->second.done;
 }
 
 Http2Response Http2ControlClient::SubmitRequest(
@@ -195,7 +259,6 @@ Http2Response Http2ControlClient::SubmitRequest(
     std::vector<std::uint8_t> body) {
   EnsureConnected();
 
-  context_.response = ResponseState{};
   context_.request_body = RequestBody{.bytes = std::move(body), .offset = 0};
 
   std::vector<nghttp2_nv> headers;
@@ -220,18 +283,21 @@ Http2Response Http2ControlClient::SubmitRequest(
       session_->session, nullptr, headers.data(), headers.size(), provider_ptr,
       nullptr);
   CheckNghttp2(stream_id, "submit http2 request");
-  context_.active_stream_id = stream_id;
+  context_.responses.insert_or_assign(stream_id, ResponseState{});
 
   Flush();
-  PumpUntilResponseDone();
+  PumpUntilResponseDone(stream_id);
+
+  auto response_state = context_.responses.find(stream_id);
+  Check(response_state != context_.responses.end(),
+        "http2 response state missing");
 
   Http2Response response{
-      .status = std::move(context_.response.status),
-      .body = std::move(context_.response.body),
+      .status = std::move(response_state->second.status),
+      .body = std::move(response_state->second.body),
   };
-  context_.response = ResponseState{};
+  context_.responses.erase(response_state);
   context_.request_body.reset();
-  context_.active_stream_id.reset();
   return response;
 }
 
@@ -245,23 +311,49 @@ void Http2ControlClient::Flush() {
   CheckNghttp2(nghttp2_session_send(session_->session), "send http2 bytes");
 }
 
-void Http2ControlClient::PumpUntilResponseDone() {
-  std::array<std::uint8_t, kReadBufferBytes> buffer{};
-  boost::system::error_code ec;
-  while (!context_.response.done) {
-    const auto bytes_read =
-        context_.socket.read_some(boost::asio::buffer(buffer), ec);
-    if (ec == boost::asio::error::eof) {
-      throw std::runtime_error("http2 control connection closed");
+void Http2ControlClient::PumpUntilResponseDone(std::int32_t stream_id) {
+  while (true) {
+    const auto response = context_.responses.find(stream_id);
+    if (response != context_.responses.end() && response->second.done) {
+      return;
     }
-    if (ec) {
-      throw boost::system::system_error(ec);
-    }
-    const auto rv = nghttp2_session_mem_recv(session_->session, buffer.data(),
-                                             bytes_read);
-    CheckNghttp2(static_cast<int>(rv), "receive http2 bytes");
+    PumpOnce();
     Flush();
   }
+}
+
+void Http2ControlClient::PumpUntilHeaders(std::int32_t stream_id) {
+  while (true) {
+    const auto response = context_.responses.find(stream_id);
+    if (response != context_.responses.end() &&
+        (response->second.headers_received || response->second.done)) {
+      return;
+    }
+    PumpOnce();
+    Flush();
+  }
+}
+
+bool Http2ControlClient::PumpOnce() {
+  std::array<std::uint8_t, kReadBufferBytes> buffer{};
+  boost::system::error_code ec;
+  const auto bytes_read =
+      context_.socket.read_some(boost::asio::buffer(buffer), ec);
+  if (ec == boost::asio::error::would_block ||
+      ec == boost::asio::error::try_again) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    return false;
+  }
+  if (ec == boost::asio::error::eof) {
+    throw std::runtime_error("http2 control connection closed");
+  }
+  if (ec) {
+    throw boost::system::system_error(ec);
+  }
+  const auto rv = nghttp2_session_mem_recv(session_->session, buffer.data(),
+                                           bytes_read);
+  CheckNghttp2(static_cast<int>(rv), "receive http2 bytes");
+  return bytes_read > 0;
 }
 
 ssize_t Http2ControlClient::SendCallback(nghttp2_session* /*session*/,
@@ -308,18 +400,21 @@ int Http2ControlClient::OnHeaderCallback(nghttp2_session* /*session*/,
                                          std::uint8_t /*flags*/,
                                          void* user_data) {
   auto* context = static_cast<Context*>(user_data);
-  if (!context->active_stream_id.has_value() ||
-      frame->hd.stream_id != *context->active_stream_id ||
-      frame->hd.type != NGHTTP2_HEADERS ||
+  if (frame->hd.type != NGHTTP2_HEADERS ||
       frame->headers.cat != NGHTTP2_HCAT_RESPONSE) {
+    return 0;
+  }
+  auto response = context->responses.find(frame->hd.stream_id);
+  if (response == context->responses.end()) {
     return 0;
   }
 
   const std::string_view header_name(reinterpret_cast<const char*>(name),
                                      name_length);
   if (header_name == ":status") {
-    context->response.status.assign(reinterpret_cast<const char*>(value),
-                                    value_length);
+    response->second.status.assign(reinterpret_cast<const char*>(value),
+                                   value_length);
+    response->second.headers_received = true;
   }
   return 0;
 }
@@ -332,13 +427,13 @@ int Http2ControlClient::OnDataChunkRecvCallback(
     std::size_t length,
     void* user_data) {
   auto* context = static_cast<Context*>(user_data);
-  if (!context->active_stream_id.has_value() ||
-      stream_id != *context->active_stream_id) {
+  auto response = context->responses.find(stream_id);
+  if (response == context->responses.end()) {
     return 0;
   }
 
-  context->response.body.insert(context->response.body.end(), data,
-                                data + length);
+  response->second.body.insert(response->second.body.end(), data,
+                               data + length);
   return 0;
 }
 
@@ -346,16 +441,20 @@ int Http2ControlClient::OnFrameRecvCallback(nghttp2_session* /*session*/,
                                             const nghttp2_frame* frame,
                                             void* user_data) {
   auto* context = static_cast<Context*>(user_data);
-  if (!context->active_stream_id.has_value() ||
-      frame->hd.stream_id != *context->active_stream_id) {
+  auto response = context->responses.find(frame->hd.stream_id);
+  if (response == context->responses.end()) {
     return 0;
   }
 
+  if (frame->hd.type == NGHTTP2_HEADERS &&
+      frame->headers.cat == NGHTTP2_HCAT_RESPONSE) {
+    response->second.headers_received = true;
+  }
   if (((frame->hd.type == NGHTTP2_HEADERS &&
         frame->headers.cat == NGHTTP2_HCAT_RESPONSE) ||
        frame->hd.type == NGHTTP2_DATA) &&
       (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
-    context->response.done = true;
+    response->second.done = true;
   }
   return 0;
 }
@@ -365,9 +464,9 @@ int Http2ControlClient::OnStreamCloseCallback(nghttp2_session* /*session*/,
                                               std::uint32_t /*error_code*/,
                                               void* user_data) {
   auto* context = static_cast<Context*>(user_data);
-  if (context->active_stream_id.has_value() &&
-      stream_id == *context->active_stream_id) {
-    context->response.done = true;
+  auto response = context->responses.find(stream_id);
+  if (response != context->responses.end()) {
+    response->second.done = true;
   }
   return 0;
 }

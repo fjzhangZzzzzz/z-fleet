@@ -27,7 +27,7 @@ namespace zfleet::agent {
 namespace {
 
 constexpr std::chrono::milliseconds kStopPollInterval{50};
-constexpr std::chrono::seconds kCommandPollInterval{1};
+constexpr std::chrono::milliseconds kCommandPumpInterval{50};
 
 namespace proto = zfleet::protocol::v1;
 
@@ -108,15 +108,9 @@ std::vector<std::uint8_t> BuildEnvelopeBody(
   return body;
 }
 
-proto::ServerCommand ParseCommandFrame(std::span<const std::uint8_t> body) {
-  zfleet::transport::FrameDecoder decoder;
-  const auto frames = decoder.Push(body);
-  if (frames.empty()) {
-    throw std::runtime_error("command response did not contain a protobuf frame");
-  }
+proto::ServerCommand ParseCommandFrame(std::span<const std::uint8_t> frame) {
   proto::ServerCommand command;
-  if (!command.ParseFromArray(frames.front().data(),
-                              static_cast<int>(frames.front().size()))) {
+  if (!command.ParseFromArray(frame.data(), static_cast<int>(frame.size()))) {
     throw std::runtime_error("failed to parse server command");
   }
   return command;
@@ -183,14 +177,16 @@ RuntimeResult AgentRuntime::Run() {
         {BuildTaskRunningEvent(state.agent_id, task)});
     const auto running_response = client.PostEvents(running_body);
     if (running_response.status != "200") {
-      throw std::runtime_error("task running event was rejected");
+      throw std::runtime_error("task running event was rejected with status " +
+                               running_response.status);
     }
 
     const auto result_body = BuildEnvelopeBody(
         {BuildTaskSucceededEvent(state.agent_id, task)});
     const auto task_response = client.PostEvents(result_body);
     if (task_response.status != "200") {
-      throw std::runtime_error("task result event was rejected");
+      throw std::runtime_error("task result event was rejected with status " +
+                               task_response.status);
     }
   };
 
@@ -203,17 +199,30 @@ RuntimeResult AgentRuntime::Run() {
       ZFLOG_INFO(logger, "sending register and initial heartbeat");
       send_connection_bootstrap();
       ZFLOG_INFO(logger, "bootstrap event batch accepted");
+      const auto command_status =
+          client.StartCommandStream(zfleet::core::GenerateUuid());
+      if (command_status != "200") {
+        throw std::runtime_error("command stream was rejected");
+      }
+      ZFLOG_INFO(logger, "command stream opened");
 
+      zfleet::transport::FrameDecoder command_decoder;
       auto next_heartbeat = std::chrono::steady_clock::now() +
                             std::chrono::seconds(heartbeat_interval);
       while (!stop_requested()) {
-        const auto command_response =
-            client.GetCommands(zfleet::core::GenerateUuid());
-        if (command_response.status != "200") {
-          throw std::runtime_error("command request was rejected");
+        if (!client.command_stream_open()) {
+          throw std::runtime_error("command stream closed");
         }
-        if (!command_response.body.empty()) {
-          handle_command(ParseCommandFrame(command_response.body));
+
+        client.PumpFor(kCommandPumpInterval);
+        const auto command_bytes = client.DrainCommandBytes();
+        if (!command_bytes.empty()) {
+          const auto frames = command_decoder.Push(
+              std::span<const std::uint8_t>{command_bytes.data(),
+                                            command_bytes.size()});
+          for (const auto& frame : frames) {
+            handle_command(ParseCommandFrame(frame));
+          }
         }
 
         if (stop_requested()) {
@@ -224,10 +233,6 @@ RuntimeResult AgentRuntime::Run() {
         if (now >= next_heartbeat) {
           send_heartbeat();
           next_heartbeat = now + std::chrono::seconds(heartbeat_interval);
-        }
-
-        if (!SleepUntilStop(kCommandPollInterval.count())) {
-          break;
         }
       }
 

@@ -4,6 +4,8 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include <cstdint>
+#include <chrono>
+#include <map>
 #include <nghttp2/nghttp2.h>
 #include <optional>
 #include <utility>
@@ -31,7 +33,10 @@ class Http2ControlClient {
   void Close() noexcept;
 
   Http2Response PostEvents(std::span<const std::uint8_t> body);
-  Http2Response GetCommands(std::string_view correlation_id);
+  std::string StartCommandStream(std::string_view correlation_id);
+  void PumpFor(std::chrono::milliseconds timeout);
+  std::vector<std::uint8_t> DrainCommandBytes();
+  bool command_stream_open() const noexcept;
 
   bool connected() const noexcept;
 
@@ -50,14 +55,15 @@ class Http2ControlClient {
   struct ResponseState {
     std::string status;
     std::vector<std::uint8_t> body;
+    bool headers_received = false;
     bool done = false;
   };
 
   struct Context {
     boost::asio::ip::tcp::socket socket;
     std::optional<RequestBody> request_body;
-    ResponseState response;
-    std::optional<std::int32_t> active_stream_id;
+    std::map<std::int32_t, ResponseState> responses;
+    std::optional<std::int32_t> command_stream_id;
 
     explicit Context(boost::asio::io_context& io_context)
         : socket(io_context) {}
@@ -85,7 +91,9 @@ class Http2ControlClient {
                                   extra_headers,
                               std::vector<std::uint8_t> body);
   void Flush();
-  void PumpUntilResponseDone();
+  void PumpUntilResponseDone(std::int32_t stream_id);
+  void PumpUntilHeaders(std::int32_t stream_id);
+  bool PumpOnce();
 
   static ssize_t SendCallback(nghttp2_session* session,
                               const std::uint8_t* data,
