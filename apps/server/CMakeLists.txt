@@ -1,6 +1,7 @@
 add_library(zfleet_server_app
   src/config.cpp
   src/database.cpp
+  src/http2_connection_registry.cpp
   src/http2_control_dispatcher.cpp
   src/http2_control_service.cpp
   src/http_handler.cpp

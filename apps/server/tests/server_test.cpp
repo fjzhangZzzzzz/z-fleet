@@ -1,5 +1,6 @@
 #include "config.h"
 #include "database.h"
+#include "http2_connection_registry.h"
 #include "http2_control_dispatcher.h"
 #include "http2_control_service.h"
 #include "http_handler.h"
@@ -287,6 +288,39 @@ TEST_CASE("http2 control service rejects invalid and unregistered events") {
 
 }
 
+TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
+  zfleet::server::Http2ConnectionRegistry registry;
+
+  registry.OpenConnection("conn-1", "2026-05-21T10:00:00Z");
+  registry.BindAgent("conn-1", "agent-1", "2026-05-21T10:00:01Z");
+  registry.RecordHeartbeat("conn-1", "agent-1", "2026-05-21T10:00:05Z");
+
+  REQUIRE(registry.ActiveConnectionCount() == 1);
+  const auto first_connection = registry.FindByAgent("agent-1");
+  REQUIRE(first_connection.has_value());
+  REQUIRE(first_connection->connection_id == "conn-1");
+  REQUIRE(first_connection->last_heartbeat_at == "2026-05-21T10:00:05Z");
+  REQUIRE(registry.IsAgentOnline("agent-1", "2026-05-21T10:00:04Z"));
+  REQUIRE_FALSE(registry.IsAgentOnline("agent-1", "2026-05-21T10:00:06Z"));
+
+  registry.OpenConnection("conn-2", "2026-05-21T10:00:10Z");
+  registry.BindAgent("conn-2", "agent-1", "2026-05-21T10:00:11Z");
+
+  const auto old_connection = registry.FindByConnection("conn-1");
+  const auto current_connection = registry.FindByAgent("agent-1");
+  REQUIRE(old_connection.has_value());
+  REQUIRE(old_connection->disconnected_at == "2026-05-21T10:00:11Z");
+  REQUIRE(current_connection.has_value());
+  REQUIRE(current_connection->connection_id == "conn-2");
+  REQUIRE(registry.ActiveConnectionCount() == 1);
+
+  registry.CloseConnection("conn-2", "2026-05-21T10:00:20Z");
+
+  REQUIRE_FALSE(registry.FindByAgent("agent-1").has_value());
+  REQUIRE(registry.ActiveConnectionCount() == 0);
+
+}
+
 TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
   namespace proto = zfleet::protocol::v1;
 
@@ -296,7 +330,10 @@ TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
   zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ControlDispatcher dispatcher(&service);
+  zfleet::server::Http2ConnectionRegistry registry;
+  registry.OpenConnection("conn-1", "2026-05-21T11:00:00Z");
+  zfleet::server::Http2ControlDispatcher dispatcher(
+      &service, &registry, "conn-1");
 
   proto::AgentEvent registration;
   registration.set_protocol_version("v1");
@@ -351,6 +388,11 @@ TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
   REQUIRE(CountRows(database_path, "heartbeats") == 1);
   REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
           "2026-05-21T11:00:05Z");
+  const auto connection = registry.FindByAgent("agent-1");
+  REQUIRE(connection.has_value());
+  REQUIRE(connection->connection_id == "conn-1");
+  REQUIRE(connection->last_heartbeat_at == "2026-05-21T11:00:05Z");
+  REQUIRE(registry.IsAgentOnline("agent-1", "2026-05-21T11:00:04Z"));
 
 }
 

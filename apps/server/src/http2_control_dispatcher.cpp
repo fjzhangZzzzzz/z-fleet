@@ -17,8 +17,17 @@ ControlEventResult InvalidArgument(std::string message) {
 
 } // namespace
 
-Http2ControlDispatcher::Http2ControlDispatcher(Http2ControlService* service)
-    : service_(service) {}
+Http2ControlDispatcher::Http2ControlDispatcher(
+    const Http2ControlService* service)
+    : service_(service), registry_(nullptr) {}
+
+Http2ControlDispatcher::Http2ControlDispatcher(
+    const Http2ControlService* service,
+    Http2ConnectionRegistry* registry,
+    std::string connection_id)
+    : service_(service),
+      registry_(registry),
+      connection_id_(std::move(connection_id)) {}
 
 std::vector<ControlEventResult> Http2ControlDispatcher::PushEventBytes(
     std::span<const std::uint8_t> bytes) {
@@ -37,9 +46,33 @@ std::vector<ControlEventResult> Http2ControlDispatcher::PushEventBytes(
       results.push_back(InvalidArgument("invalid protobuf agent event"));
       continue;
     }
-    results.push_back(service_->HandleAgentEvent(event));
+    auto result = service_->HandleAgentEvent(event);
+    if (result.status == ControlEventStatus::kAccepted) {
+      RecordAcceptedEvent(event);
+    }
+    results.push_back(std::move(result));
   }
   return results;
+}
+
+void Http2ControlDispatcher::RecordAcceptedEvent(
+    const zfleet::protocol::v1::AgentEvent& event) const {
+  if (registry_ == nullptr || connection_id_.empty()) {
+    return;
+  }
+
+  switch (event.payload_case()) {
+    case zfleet::protocol::v1::AgentEvent::kRegister:
+      registry_->BindAgent(connection_id_, event.agent_id(),
+                           event.occurred_at());
+      return;
+    case zfleet::protocol::v1::AgentEvent::kHeartbeat:
+      registry_->RecordHeartbeat(connection_id_, event.agent_id(),
+                                 event.occurred_at());
+      return;
+    default:
+      return;
+  }
 }
 
 } // namespace zfleet::server
