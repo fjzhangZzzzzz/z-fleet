@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -39,7 +40,6 @@ using tcp = boost::asio::ip::tcp;
 namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
-constexpr std::size_t kMaxConnectionThreads = 128;
 constexpr auto kTaskQueueShutdownPoll = std::chrono::seconds(1);
 
 #define ZFLEET_NGHTTP2_NV(NAME, VALUE)                                      \
@@ -80,6 +80,7 @@ struct ConnectionContext {
   ServerStore* store;
   const Http2ControlService* service;
   Http2ConnectionRegistry* registry;
+  Http2ControlWorkerPool* worker_pool;
   std::string connection_id;
   std::map<std::int32_t, StreamState> streams;
   std::atomic_uint64_t task_queue_version = 0;
@@ -88,11 +89,13 @@ struct ConnectionContext {
                     ServerStore* store_arg,
                     const Http2ControlService* service_arg,
                     Http2ConnectionRegistry* registry_arg,
+                    Http2ControlWorkerPool* worker_pool_arg,
                     std::string connection_id_arg)
       : socket(std::move(accepted_socket)),
         store(store_arg),
         service(service_arg),
         registry(registry_arg),
+        worker_pool(worker_pool_arg),
         connection_id(std::move(connection_id_arg)) {}
 };
 
@@ -407,8 +410,13 @@ int OnDataChunkRecvCallback(nghttp2_session* /*session*/,
     stream->dispatcher = std::make_unique<Http2ControlDispatcher>(
         context->service, context->registry, context->connection_id);
   }
-  const auto results = stream->dispatcher->PushEventBytes(
-      std::span<const std::uint8_t>{data, length});
+  std::vector<std::uint8_t> bytes(data, data + length);
+  const auto results = context->worker_pool
+                           ->Submit([dispatcher = stream->dispatcher.get(),
+                                     bytes = std::move(bytes)]() {
+                             return dispatcher->PushEventBytes(bytes);
+                           })
+                           .get();
   for (const auto& result : results) {
     if (result.status != ControlEventStatus::kAccepted) {
       stream->has_error = true;
@@ -498,8 +506,10 @@ struct ServerSession {
 void HandleConnection(std::shared_ptr<tcp::socket> socket,
                       ServerStore* store,
                       const Http2ControlService* service,
-                      Http2ConnectionRegistry* registry) {
+                      Http2ConnectionRegistry* registry,
+                      Http2ControlWorkerPool* worker_pool) {
   ConnectionContext context(std::move(socket), store, service, registry,
+                            worker_pool,
                             zfleet::core::GenerateUuid());
   context.task_queue_version.store(store->TaskQueueVersion());
   registry->OpenConnection(context.connection_id, zfleet::core::NowUtcRfc3339());
@@ -581,17 +591,95 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
 
 } // namespace
 
+Http2ControlWorkerPool::Http2ControlWorkerPool(std::size_t thread_count) {
+  if (thread_count == 0) {
+    thread_count = 1;
+  }
+  threads_.reserve(thread_count);
+  for (std::size_t index = 0; index < thread_count; ++index) {
+    threads_.emplace_back(&Http2ControlWorkerPool::RunWorker, this);
+  }
+}
+
+Http2ControlWorkerPool::~Http2ControlWorkerPool() {
+  Stop();
+}
+
+std::future<std::vector<ControlEventResult>> Http2ControlWorkerPool::Submit(
+    std::function<std::vector<ControlEventResult>()> task) {
+  auto promise =
+      std::make_shared<std::promise<std::vector<ControlEventResult>>>();
+  auto result = promise->get_future();
+  {
+    std::lock_guard lock(mutex_);
+    if (stopping_) {
+      throw std::runtime_error("http2 control worker pool is stopped");
+    }
+    tasks_.push_back([promise, task = std::move(task)]() mutable {
+      try {
+        promise->set_value(task());
+      } catch (...) {
+        promise->set_exception(std::current_exception());
+      }
+    });
+  }
+  cv_.notify_one();
+  return result;
+}
+
+void Http2ControlWorkerPool::Stop() {
+  {
+    std::lock_guard lock(mutex_);
+    if (stopping_) {
+      return;
+    }
+    stopping_ = true;
+  }
+  cv_.notify_all();
+  for (auto& thread : threads_) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+}
+
+void Http2ControlWorkerPool::RunWorker() {
+  while (true) {
+    std::function<void()> task;
+    {
+      std::unique_lock lock(mutex_);
+      cv_.wait(lock, [&]() { return stopping_ || !tasks_.empty(); });
+      if (tasks_.empty()) {
+        if (stopping_) {
+          return;
+        }
+        continue;
+      }
+      task = std::move(tasks_.front());
+      tasks_.pop_front();
+    }
+    task();
+  }
+}
+
 Http2ControlServer::Http2ControlServer(
     std::string listen_address,
     ServerStore* store,
     const Http2ControlService* service,
-    Http2ConnectionRegistry* registry)
+    Http2ConnectionRegistry* registry,
+    Http2ControlServerOptions options)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(1),
       acceptor_(io_context_),
       store_(store),
       service_(service),
-      registry_(registry) {}
+      registry_(registry),
+      options_(options),
+      worker_pool_(options_.worker_threads) {}
+
+Http2ControlServer::~Http2ControlServer() {
+  Stop();
+}
 
 void Http2ControlServer::Run() {
   if (store_ == nullptr) {
@@ -641,6 +729,8 @@ void Http2ControlServer::Stop() {
       connection_thread.thread.join();
     }
   }
+
+  worker_pool_.Stop();
 }
 
 std::uint16_t Http2ControlServer::port() const noexcept {
@@ -662,7 +752,7 @@ void Http2ControlServer::StartAccept() {
         auto done = std::make_shared<std::atomic_bool>(false);
         {
           std::lock_guard lock(connection_threads_mutex_);
-          if (connection_threads_.size() >= kMaxConnectionThreads) {
+          if (connection_threads_.size() >= options_.max_connections) {
             socket_ptr->close(ec);
             ZFLOG_ERROR(zfleet::core::log::Component("server"),
                         "http2 control connection rejected: too many active connections");
@@ -670,9 +760,10 @@ void Http2ControlServer::StartAccept() {
             connection_threads_.push_back(ConnectionThread{
                 .thread = std::thread(
                     [socket = socket_ptr, store = store_, service = service_,
-                     registry = registry_, done]() mutable {
+                     registry = registry_, worker_pool = &worker_pool_,
+                     done]() mutable {
                       HandleConnection(std::move(socket), store, service,
-                                       registry);
+                                       registry, worker_pool);
                       done->store(true);
                     }),
                 .socket = socket_ptr,

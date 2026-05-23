@@ -5,10 +5,18 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+#include <type_traits>
+
+namespace SQLite {
+class Database;
+}
 
 namespace zfleet::server {
 
@@ -53,8 +61,10 @@ class ServerStore {
 class ServerDatabase final : public ServerStore {
  public:
   explicit ServerDatabase(std::filesystem::path database_path);
+  ~ServerDatabase() override;
 
   void Initialize();
+  void Stop();
   int schema_version() const;
   const std::filesystem::path& database_path() const noexcept;
   bool AgentExists(const std::string& agent_id) const override;
@@ -82,11 +92,27 @@ class ServerDatabase final : public ServerStore {
                         const std::optional<std::string>& error_blob) override;
 
  private:
+  struct WriteTask {
+    std::function<void(SQLite::Database&)> run;
+    std::function<void(std::exception_ptr)> fail;
+  };
+
+  void RunWriteActor();
+  void StopWriteActor();
+
+  template <typename Func>
+  auto SubmitWrite(Func&& func) -> std::invoke_result_t<Func, SQLite::Database&>;
+
   std::filesystem::path database_path_;
-  mutable std::mutex write_mutex_;
+  mutable std::mutex write_actor_mutex_;
+  mutable std::condition_variable write_actor_cv_;
+  std::deque<WriteTask> write_queue_;
+  bool write_actor_stopping_ = false;
+  std::thread write_actor_thread_;
   mutable std::mutex task_queue_mutex_;
   mutable std::condition_variable task_queue_cv_;
   std::uint64_t task_queue_version_ = 0;
+  bool task_queue_closed_ = false;
 };
 
 } // namespace zfleet::server

@@ -2,6 +2,7 @@
 #include "database.h"
 #include "http2_connection_registry.h"
 #include "http2_control_dispatcher.h"
+#include "http2_control_server.h"
 #include "http2_control_service.h"
 
 #include "test_util.h"
@@ -12,12 +13,15 @@
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -382,6 +386,97 @@ TEST_CASE("server database claims queued task only once") {
   REQUIRE_FALSE(second_claim.has_value());
   REQUIRE(ReadTaskField(database_path, "task-claim-1", "state") ==
           "assigned");
+}
+
+TEST_CASE("server database serializes concurrent task claims through write actor") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedTask(&database, "task-concurrent-claim-1", "agent-1");
+
+  constexpr int kClaimers = 16;
+  std::atomic_bool start{false};
+  std::vector<std::future<std::optional<zfleet::protocol::Task>>> claims;
+  claims.reserve(kClaimers);
+  for (int i = 0; i < kClaimers; ++i) {
+    claims.push_back(std::async(std::launch::async, [&database, &start, i]() {
+      while (!start.load()) {
+        std::this_thread::yield();
+      }
+      return database.ClaimNextTaskForAgent(
+          "agent-1", "2026-05-21T10:00:" + std::to_string(10 + i) + "Z");
+    }));
+  }
+
+  start.store(true);
+  int claimed_count = 0;
+  for (auto& claim : claims) {
+    const auto task = claim.get();
+    if (task.has_value()) {
+      ++claimed_count;
+      REQUIRE(task->task_id == "task-concurrent-claim-1");
+    }
+  }
+
+  REQUIRE(claimed_count == 1);
+  REQUIRE(ReadTaskField(database_path, "task-concurrent-claim-1", "state") ==
+          "assigned");
+}
+
+TEST_CASE("server database stop closes write actor and wakes task queue waiters") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const auto version = database.TaskQueueVersion();
+
+  auto waiter = std::async(std::launch::async, [&database, version]() {
+    return database.WaitForTaskQueueChange(version, std::chrono::seconds(30));
+  });
+
+  database.Stop();
+
+  REQUIRE(waiter.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+  REQUIRE(waiter.get() == version);
+  REQUIRE_THROWS_AS(
+      database.EnqueueTask(zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-after-stop",
+          .agent_id = "agent-1",
+          .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+          .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+          .created_at = "2026-05-21T10:00:00Z",
+          .expires_at = "2099-05-21T10:05:00Z",
+          .input = zfleet::protocol::CollectBasicInventoryInput{},
+      }),
+      std::runtime_error);
+}
+
+TEST_CASE("http2 control worker pool runs tasks and rejects submissions after stop") {
+  zfleet::server::Http2ControlWorkerPool worker_pool(2);
+
+  auto result = worker_pool.Submit([]() {
+    return std::vector<zfleet::server::ControlEventResult>{
+        zfleet::server::ControlEventResult{
+            .status = zfleet::server::ControlEventStatus::kAccepted,
+            .message = "ok",
+        }};
+  });
+
+  const auto events = result.get();
+  REQUIRE(events.size() == 1);
+  REQUIRE(events[0].status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(events[0].message == "ok");
+
+  worker_pool.Stop();
+  REQUIRE_THROWS_AS(
+      worker_pool.Submit([]() {
+        return std::vector<zfleet::server::ControlEventResult>{};
+      }),
+      std::runtime_error);
 }
 
 TEST_CASE("http2 control service registers agent and accepts heartbeat") {

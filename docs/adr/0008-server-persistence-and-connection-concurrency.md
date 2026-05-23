@@ -23,8 +23,10 @@ Server 当前使用 SQLite 作为默认持久化后端，控制面采用 HTTP/2 
 - `ClaimNextTaskForAgent` 这类“查询并修改”的操作必须保持原子业务语义，避免多个连接或线程重复领取同一任务。
 - 引入 Server 领域持久化接口，例如 `ServerStore` 或 `ControlStore`。HTTP/2 service、dispatcher 和连接处理层只能依赖领域接口，不直接依赖 `SQLiteCpp`、SQL 语句或数据库文件路径。
 - 当前不以“零改动切换 PostgreSQL”为目标，但以“不修改业务编排层切换持久化实现”为目标。切换 PostgreSQL 时允许新增依赖、配置、迁移脚本和 store 实现，不应修改协议处理、控制事件编排和任务状态业务判断。
-- Server 当前可保留“accept 异步 + 每连接一个阻塞线程”的 v0.x 实现，但必须增加连接数量上限、清晰的停止流程和可靠的线程 `join`。
-- 中期演进目标是少量 Asio I/O 线程、有限业务 worker pool，以及 SQLite 单写队列或数据库连接池。是否切换 PostgreSQL 由部署规模、审计数据量和运维要求决定，而不是作为 v0.x 前置条件。
+- Server 当前可保留“accept 异步 + 每连接一个阻塞线程”的 v0.x 过渡实现，但目标连接模型是少量 Asio I/O 线程、有限业务 worker pool、连接数量上限、清晰的停止流程和可靠的线程 `join`。
+- SQLite 写入应收敛到 db actor（单写队列）。业务线程通过 `ServerStore` 提交领域操作，由 db actor 串行执行写事务；读操作可以保留独立只读连接，但必须继续按可恢复 busy 处理。
+- Server 停止流程必须覆盖连接、业务 worker、db actor 队列和后台线程，异常路径不得遗留 joinable 线程。
+- 是否切换 PostgreSQL 由部署规模、审计数据量和运维要求决定，而不是作为 v0.x 前置条件。
 
 ## 备选方案
 

@@ -651,6 +651,60 @@ TEST_CASE("http2 control client exposes rejected command stream status") {
   }
 }
 
+TEST_CASE("http2 control server rejects connections over configured limit") {
+  const zfleet::test::ScopedTestDir test_dir("integration");
+  const auto database_path = test_dir.path() / "zfleet-h2c-overload.db";
+
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  zfleet::server::Http2ControlService service(&database);
+  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::Http2ControlServer server(
+      "127.0.0.1:0", &database, &service, &registry,
+      zfleet::server::Http2ControlServerOptions{.max_connections = 1});
+
+  std::thread server_thread([&server]() { server.Run(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  asio::io_context io_context;
+  tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"), server.port());
+  tcp::socket first_socket(io_context);
+  first_socket.connect(endpoint);
+  for (int attempt = 0; attempt < 50 && registry.ActiveConnectionCount() == 0;
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  REQUIRE(registry.ActiveConnectionCount() == 1);
+
+  tcp::socket second_socket(io_context);
+  second_socket.connect(endpoint);
+  second_socket.non_blocking(true);
+
+  bool rejected = false;
+  std::array<char, 1> buffer{};
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    boost::system::error_code ec;
+    second_socket.read_some(asio::buffer(buffer), ec);
+    if (ec == asio::error::eof ||
+        ec == asio::error::connection_reset ||
+        ec == asio::error::connection_aborted) {
+      rejected = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  boost::system::error_code ignored;
+  first_socket.close(ignored);
+  second_socket.close(ignored);
+  server.Stop();
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+
+  REQUIRE(rejected);
+}
+
 TEST_CASE("http2 control server sends assigned task on command stream") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-command.db";
