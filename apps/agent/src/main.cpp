@@ -6,6 +6,7 @@
 #include <CLI/CLI.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <csignal>
 #include <filesystem>
 #include <optional>
@@ -14,9 +15,18 @@
 namespace {
 
 volatile std::sig_atomic_t g_stop_requested = 0;
+constexpr char kComponentRootEnvVar[] = "ZFLEET_COMPONENT_ROOT";
 
 void HandleStopSignal(int /*signal*/) {
   g_stop_requested = 1;
+}
+
+std::filesystem::path DetectInstallDir() {
+  if (const char* value = std::getenv(kComponentRootEnvVar);
+      value != nullptr && value[0] != '\0') {
+    return std::filesystem::path(value);
+  }
+  return std::filesystem::current_path();
 }
 
 } // namespace
@@ -25,14 +35,11 @@ int main(int argc, char** argv) {
   CLI::App app{"z-fleet agent"};
 
   std::string config_path_arg;
-  std::string install_dir_arg;
   std::string control_url_arg;
   std::string data_dir_arg;
   std::string state_path_arg;
   std::string log_level_arg;
-  app.add_option("--config", config_path_arg, "Path to agent config file");
-  app.add_option("--install-dir", install_dir_arg,
-                 "Base directory for relative agent paths");
+  app.add_option("-c,--config", config_path_arg, "Path to agent config file");
   app.add_option("--control-url", control_url_arg,
                  "Override server HTTP/2 control URL");
   app.add_option("--data-dir", data_dir_arg, "Override agent data directory");
@@ -42,14 +49,17 @@ int main(int argc, char** argv) {
   CLI11_PARSE(app, argc, argv);
 
   try {
+    const auto install_dir = DetectInstallDir();
     const auto config_path =
         config_path_arg.empty()
-            ? std::optional<std::filesystem::path>{}
-            : std::optional<std::filesystem::path>{config_path_arg};
-    auto config = zfleet::agent::LoadConfig(config_path);
-    if (!install_dir_arg.empty()) {
-      config.install_dir = std::filesystem::path(install_dir_arg);
-    }
+            ? zfleet::agent::DefaultConfigPath(
+                  std::optional<std::filesystem::path>{install_dir})
+            : std::filesystem::path{config_path_arg};
+    auto config = std::filesystem::exists(config_path)
+                      ? zfleet::agent::LoadConfig(
+                            std::optional<std::filesystem::path>{config_path})
+                      : zfleet::agent::AgentConfig{};
+    config.install_dir = install_dir;
     if (!data_dir_arg.empty()) {
       config.data_dir = data_dir_arg;
     }
@@ -62,6 +72,7 @@ int main(int argc, char** argv) {
     if (!log_level_arg.empty()) {
       config.log.level = zfleet::core::log::ParseLevel(log_level_arg);
     }
+    zfleet::agent::SaveConfig(config, config_path);
     zfleet::agent::ResolveConfigPaths(&config);
 
     zfleet::core::log::Init(config.log);

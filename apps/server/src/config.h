@@ -20,6 +20,10 @@ struct ServerConfig {
 };
 
 ServerConfig LoadConfig(const std::optional<std::filesystem::path>& config_path);
+std::filesystem::path DefaultConfigPath(
+    const std::optional<std::filesystem::path>& install_dir);
+void SaveConfig(const ServerConfig& config,
+                const std::filesystem::path& config_path);
 void ResolveConfigPaths(ServerConfig* config);
 
 } // namespace zfleet::server

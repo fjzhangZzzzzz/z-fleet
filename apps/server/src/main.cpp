@@ -11,20 +11,32 @@
 
 #include <CLI/CLI.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
+
+namespace {
+
+constexpr char kComponentRootEnvVar[] = "ZFLEET_COMPONENT_ROOT";
+
+std::filesystem::path DetectInstallDir() {
+  if (const char* value = std::getenv(kComponentRootEnvVar);
+      value != nullptr && value[0] != '\0') {
+    return std::filesystem::path(value);
+  }
+  return std::filesystem::current_path();
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
   CLI::App app{"z-fleet server"};
 
   std::string config_path_arg;
-  std::string install_dir_arg;
   std::string control_listen_arg;
   std::string database_path_arg;
   std::string log_level_arg;
-  app.add_option("--config", config_path_arg, "Path to server config file");
-  app.add_option("--install-dir", install_dir_arg,
-                 "Base directory for relative server paths");
+  app.add_option("-c,--config", config_path_arg, "Path to server config file");
   app.add_option("--control-listen", control_listen_arg,
                  "Override server HTTP/2 control listen address");
   app.add_option("--database-path", database_path_arg,
@@ -34,14 +46,17 @@ int main(int argc, char** argv) {
   CLI11_PARSE(app, argc, argv);
 
   try {
+    const auto install_dir = DetectInstallDir();
     const auto config_path =
         config_path_arg.empty()
-            ? std::optional<std::filesystem::path>{}
-            : std::optional<std::filesystem::path>{config_path_arg};
-    auto config = zfleet::server::LoadConfig(config_path);
-    if (!install_dir_arg.empty()) {
-      config.install_dir = std::filesystem::path(install_dir_arg);
-    }
+            ? zfleet::server::DefaultConfigPath(
+                  std::optional<std::filesystem::path>{install_dir})
+            : std::filesystem::path{config_path_arg};
+    auto config = std::filesystem::exists(config_path)
+                      ? zfleet::server::LoadConfig(
+                            std::optional<std::filesystem::path>{config_path})
+                      : zfleet::server::ServerConfig{};
+    config.install_dir = install_dir;
     if (!database_path_arg.empty()) {
       config.database_path = database_path_arg;
     }
@@ -51,6 +66,7 @@ int main(int argc, char** argv) {
     if (!log_level_arg.empty()) {
       config.log.level = zfleet::core::log::ParseLevel(log_level_arg);
     }
+    zfleet::server::SaveConfig(config, config_path);
     zfleet::server::ResolveConfigPaths(&config);
 
     zfleet::core::log::Init(config.log);

@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include <cstdint>
+#include <fstream>
 #include <stdexcept>
 #include <toml++/toml.hpp>
 
@@ -13,6 +15,10 @@ std::filesystem::path ResolvePath(
     return path;
   }
   return *install_dir / path;
+}
+
+std::string PathToConfigString(const std::filesystem::path& path) {
+  return path.generic_string();
 }
 
 void LoadLogConfig(const toml::table& table,
@@ -60,12 +66,6 @@ AgentConfig LoadConfig(
     return config;
   }
 
-  if (const auto* node = agent->get("install_dir"); node != nullptr) {
-    if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.install_dir = std::filesystem::path(*value);
-    }
-  }
-
   if (const auto* node = agent->get("control_url"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_url = *value;
@@ -106,6 +106,53 @@ AgentConfig LoadConfig(
   }
 
   return config;
+}
+
+std::filesystem::path DefaultConfigPath(
+    const std::optional<std::filesystem::path>& install_dir) {
+  if (install_dir.has_value()) {
+    return *install_dir / "etc" / "agent.toml";
+  }
+  return "agent.toml";
+}
+
+void SaveConfig(const AgentConfig& config,
+                const std::filesystem::path& config_path) {
+  if (config_path.has_parent_path()) {
+    std::filesystem::create_directories(config_path.parent_path());
+  }
+
+  toml::table root;
+  root.insert(
+      "agent",
+      toml::table{
+          {"control_url", config.control_url},
+          {"data_dir", PathToConfigString(config.data_dir)},
+          {"state_path", PathToConfigString(config.state_path)},
+          {"heartbeat_interval_seconds",
+           static_cast<std::int64_t>(config.heartbeat_interval_seconds)},
+          {"reconnect_initial_delay_seconds",
+           static_cast<std::int64_t>(config.reconnect_initial_delay_seconds)},
+          {"reconnect_max_delay_seconds",
+           static_cast<std::int64_t>(config.reconnect_max_delay_seconds)},
+      });
+  root.insert("log",
+              toml::table{
+                  {"level", std::string(zfleet::core::log::ToString(
+                                config.log.level))},
+                  {"file", PathToConfigString(config.log.file_path)},
+                  {"enable_console", config.log.enable_console},
+              });
+
+  std::ofstream stream(config_path, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    throw std::runtime_error("failed to open config for writing: " +
+                             config_path.string());
+  }
+  stream << root << '\n';
+  if (!stream) {
+    throw std::runtime_error("failed to write config: " + config_path.string());
+  }
 }
 
 void ResolveConfigPaths(AgentConfig* config) {

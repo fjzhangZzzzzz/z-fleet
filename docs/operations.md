@@ -92,7 +92,7 @@ Server 当前最小本地运行方式：
 ./build/linux-debug/apps/server/zfleet_server --database-path /tmp/zfleet-server/zfleet.db
 ```
 
-Server 支持 `--config` 指定配置文件，并可通过 `--install-dir`、`--database-path`、`--control-listen`、`--log-level` 覆盖配置项。启动时会自动初始化 SQLite 数据库和当前最小 schema。
+Server 支持 `-c, --config` 指定配置文件，并可通过 `--database-path`、`--control-listen`、`--log-level` 覆盖配置项。未指定配置文件时默认使用安装目录下的 `etc/server.toml`；通过 launcher stub 启动时，安装目录由固定 `bin/zfleet_server` 路径自动传递给真实进程。启动时会自动初始化 SQLite 数据库和当前最小 schema。
 
 Agent 当前最小本地运行方式：
 
@@ -100,7 +100,7 @@ Agent 当前最小本地运行方式：
 ./build/linux-debug/apps/agent/zfleet_agent --data-dir /tmp/zfleet-agent
 ```
 
-Agent 支持 `--config` 指定配置文件，并可通过 `--install-dir`、`--data-dir`、`--state-path`、`--log-level` 覆盖配置项。绝对路径保持不变；相对路径在配置了 `install_dir` 时以安装目录为基准，否则保持当前工作目录语义。首次启动会在状态路径生成本地状态文件；重复使用同一状态路径时应复用同一个 `agent_id`。
+Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--state-path`、`--log-level` 覆盖配置项。未指定配置文件时默认使用安装目录下的 `etc/agent.toml`；通过 launcher stub 启动时，安装目录由固定 `bin/zfleet_agent` 路径自动传递给真实进程。绝对路径保持不变；相对路径以安装目录为基准。首次启动会在状态路径生成本地状态文件；重复使用同一状态路径时应复用同一个 `agent_id`。
 
 ## 打包
 
@@ -176,7 +176,7 @@ manifest 最小 schema：
 本地部署优先使用 `scripts/install-local.sh`。脚本面向本地 root 安装，会按需调用 `make-package.sh` 生成 package，再调用 installer `apply`，安装成功后复制对应 launcher stub 到固定 bootstrap 路径。
 
 ```bash
-./scripts/install-local.sh apply <agent|server|installer> [--root <root>] [--preset <preset>] [--zip] [--force] [--no-build]
+./scripts/install-local.sh apply <agent|server|installer>... [--root <root>] [--preset <preset>] [--zip] [--force] [--replace] [--no-build]
 ./scripts/install-local.sh status <agent|server|installer> [--root <root>] [--preset <preset>]
 ./scripts/install-local.sh rollback <agent|server|installer> [--root <root>] [--preset <preset>]
 ```
@@ -185,16 +185,18 @@ manifest 最小 schema：
 
 - `--root` 未指定时使用 `/tmp/zfleet-root`。
 - `--preset` 未指定时使用仓库默认 preset。
+- `apply` 可一次指定多个组件；脚本会先构建一次 preset，再为每个组件生成并安装 package。
 - `apply --zip` 生成并安装 ZIP package；未指定 `--zip` 时生成并安装目录 package。
+- `apply --force` 覆盖 `build/packages` 下已存在的同版本 package 输出。
+- `apply --replace` 覆盖本地 root 下已安装的同版本目标组件 release，用于本地开发时重新部署相同版本号的二进制。
 - `status` 和 `rollback` 优先使用已部署的 `<root>/zfleet/installer/bin/zfleet_installer`；不存在时使用当前构建输出中的 installer。
-- `status` 和 `rollback` 不接受 `--zip`、`--force`、`--no-build`。
+- `status` 和 `rollback` 不接受 `--zip`、`--force`、`--replace`、`--no-build`。
 
 建议首次本地安装顺序：
 
 ```bash
 ./scripts/install-local.sh apply installer --zip
-./scripts/install-local.sh apply server --zip
-./scripts/install-local.sh apply agent --zip
+./scripts/install-local.sh apply server agent --zip
 ```
 
 已有 package 可直接用 installer 安装：
@@ -255,6 +257,8 @@ manifest 最小 schema：
 `apply` 先写入 `.staging/<version>` 并校验 manifest 中声明的文件大小、SHA-256、路径和可执行权限，再切换到 `releases/<version>` 并更新 `var/active-version`。当从健康版本 `A` 切换到 `B` 时，会记录 `previous-version=A`；`rollback` 成功后会交换 active 与 previous。
 
 launcher stub 位于固定 `bin/zfleet_*` 路径，启动时读取 `var/active-version` 并执行 `releases/<version>/bin/zfleet_*`。installer 自身也按同一模型更新，新版本从下一次通过 `installer/bin/zfleet_installer` 调用时生效。
+
+launcher stub 会把组件根目录通过内部环境变量传给真实进程。Agent 和 Server 不从配置文件读取 `install_dir`，也不会把 `install_dir` 写回配置文件；默认配置文件位于组件根目录下的 `etc/agent.toml` 或 `etc/server.toml`，可用 `-c, --config` 指向自定义配置文件。配置文件不存在时，启动流程会先按内置默认值生成 TOML；命令行覆盖项会在路径解析前写回配置文件。
 
 ## 当前边界
 

@@ -6,6 +6,7 @@
 
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -124,6 +125,14 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
   };
 }
 
+void SetComponentRootEnvironment(const fs::path& component_root) {
+#ifdef _WIN32
+  _putenv_s(kComponentRootEnvVar, component_root.string().c_str());
+#else
+  setenv(kComponentRootEnvVar, component_root.string().c_str(), 1);
+#endif
+}
+
 std::vector<std::string> BuildForwardedArgv(const fs::path& executable_path,
                                             int argc,
                                             char* const argv[]) {
@@ -143,7 +152,9 @@ int RunLauncher(const fs::path& launcher_path, int argc, char* argv[]) {
     return 1;
   }
 
-  auto forwarded = BuildForwardedArgv(resolved.target.executable_path, argc, argv);
+  auto forwarded =
+      BuildForwardedArgv(resolved.target.executable_path, argc, argv);
+  SetComponentRootEnvironment(resolved.target.component_root);
 
 #ifdef _WIN32
   std::vector<char*> raw_args;

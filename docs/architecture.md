@@ -182,12 +182,10 @@ create table if not exists audit_events (
 
 ```toml
 [server]
-install_dir = "/opt/z-fleet/server"
 control_listen = "127.0.0.1:8081"
 database_path = "data/zfleet.db"
 
 [agent]
-install_dir = "/opt/z-fleet/agent"
 control_url = "https://127.0.0.1:8081"
 data_dir = "data/agent"
 state_path = "state.toml"
@@ -197,17 +195,14 @@ level = "info"
 file = "logs/zfleet.log"
 ```
 
-路径配置支持 `install_dir` 作为相对路径基准。绝对路径保持不变；相对路径在
-`install_dir` 已配置时按安装目录解析，未配置时保持当前工作目录语义。命令行参数
-只覆盖少量启动级配置，例如 `--config`、`--install-dir`、`--log-level` 和
-`--data-dir`。
+安装目录由 launcher stub 根据固定安装结构传递给真实进程，不从 TOML 读取，也不写回 TOML。未指定配置文件时，Server 默认读取并维护 `<install_dir>/etc/server.toml`，Agent 默认读取并维护 `<install_dir>/etc/agent.toml`；`-c, --config` 可指定自定义配置文件。绝对路径保持不变；相对路径以安装目录为基准。命令行参数只覆盖少量启动级配置，例如 `--config`、`--log-level` 和 `--data-dir`，覆盖后的有效配置会在路径解析前写回配置文件。
 
 Agent 本地持久化信息应区分“配置”和“状态”：
 
 - 配置文件用于运维显式输入，例如 `control_url`、`data_dir`、`state_path` 和后续心跳周期、日志级别。
 - 状态文件用于程序生成并维护的本地稳定状态，例如 `agent_id`。
 - `agent_id` 不应写回运维配置文件，避免因配置模板覆盖、同步或人工编辑导致身份漂移。
-- `state_path` 与其他路径配置遵守同一基准：绝对路径不变，相对路径在配置了 `install_dir` 时按安装目录解析，否则保持当前工作目录语义。后续如果本地状态增多，可平滑迁移到 SQLite，而不改变“配置与状态分离”的边界。
+- `state_path` 与其他路径配置遵守同一基准：绝对路径不变，相对路径按安装目录解析。后续如果本地状态增多，可平滑迁移到 SQLite，而不改变“配置与状态分离”的边界。
 
 ## 相关 ADR
 

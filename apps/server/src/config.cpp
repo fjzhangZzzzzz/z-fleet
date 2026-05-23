@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include <fstream>
+#include <stdexcept>
 #include <toml++/toml.hpp>
 
 namespace zfleet::server {
@@ -12,6 +14,10 @@ std::filesystem::path ResolvePath(
     return path;
   }
   return *install_dir / path;
+}
+
+std::string PathToConfigString(const std::filesystem::path& path) {
+  return path.generic_string();
 }
 
 void LoadLogConfig(const toml::table& table,
@@ -59,12 +65,6 @@ ServerConfig LoadConfig(
     return config;
   }
 
-  if (const auto* node = server->get("install_dir"); node != nullptr) {
-    if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.install_dir = std::filesystem::path(*value);
-    }
-  }
-
   if (const auto* node = server->get("control_listen"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_listen = *value;
@@ -78,6 +78,46 @@ ServerConfig LoadConfig(
   }
 
   return config;
+}
+
+std::filesystem::path DefaultConfigPath(
+    const std::optional<std::filesystem::path>& install_dir) {
+  if (install_dir.has_value()) {
+    return *install_dir / "etc" / "server.toml";
+  }
+  return "server.toml";
+}
+
+void SaveConfig(const ServerConfig& config,
+                const std::filesystem::path& config_path) {
+  if (config_path.has_parent_path()) {
+    std::filesystem::create_directories(config_path.parent_path());
+  }
+
+  toml::table root;
+  root.insert(
+      "server",
+      toml::table{
+          {"control_listen", config.control_listen},
+          {"database_path", PathToConfigString(config.database_path)},
+      });
+  root.insert("log",
+              toml::table{
+                  {"level", std::string(zfleet::core::log::ToString(
+                                config.log.level))},
+                  {"file", PathToConfigString(config.log.file_path)},
+                  {"enable_console", config.log.enable_console},
+              });
+
+  std::ofstream stream(config_path, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    throw std::runtime_error("failed to open config for writing: " +
+                             config_path.string());
+  }
+  stream << root << '\n';
+  if (!stream) {
+    throw std::runtime_error("failed to write config: " + config_path.string());
+  }
 }
 
 void ResolveConfigPaths(ServerConfig* config) {

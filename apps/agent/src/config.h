@@ -25,6 +25,10 @@ struct AgentConfig {
 };
 
 AgentConfig LoadConfig(const std::optional<std::filesystem::path>& config_path);
+std::filesystem::path DefaultConfigPath(
+    const std::optional<std::filesystem::path>& install_dir);
+void SaveConfig(const AgentConfig& config,
+                const std::filesystem::path& config_path);
 void ResolveConfigPaths(AgentConfig* config);
 std::filesystem::path StatePathFor(const AgentConfig& config);
 

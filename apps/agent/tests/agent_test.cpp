@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -29,7 +30,6 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
     config_stream << "heartbeat_interval_seconds = 5\n";
     config_stream << "reconnect_initial_delay_seconds = 1\n";
     config_stream << "reconnect_max_delay_seconds = 3\n";
-    config_stream << "install_dir = \"" << test_root.string() << "\"\n";
     config_stream << "data_dir = \"data\"\n";
     config_stream << "state_path = \"state/agent-state.toml\"\n";
     config_stream << "\n[log]\n";
@@ -39,6 +39,7 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
   }
 
   auto config = zfleet::agent::LoadConfig(config_path);
+  config.install_dir = test_root;
   zfleet::agent::ResolveConfigPaths(&config);
   const auto state_path = zfleet::agent::StatePathFor(config);
 
@@ -52,6 +53,37 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
   REQUIRE(config.log.file_path == test_root / "logs" / "agent.log");
   REQUIRE_FALSE(config.log.enable_console);
   REQUIRE(state_path == test_root / "state" / "agent-state.toml");
+}
+
+TEST_CASE("agent config persists defaults and CLI overrides without install dir") {
+  const zfleet::test::ScopedTestDir test_dir("agent");
+  const auto test_root = test_dir.path();
+  const auto config_path = zfleet::agent::DefaultConfigPath(
+      std::optional<std::filesystem::path>{test_root});
+
+  zfleet::agent::AgentConfig config;
+  config.install_dir = test_root;
+  config.control_url = "http://127.0.0.1:18081";
+  config.log.level = zfleet::core::log::Level::kDebug;
+
+  zfleet::agent::SaveConfig(config, config_path);
+
+  REQUIRE(config_path == test_root / "etc" / "agent.toml");
+  const auto saved = zfleet::test::ReadTextFile(config_path);
+  REQUIRE(saved.find("install_dir") == std::string::npos);
+  REQUIRE(saved.find("control_url") != std::string::npos);
+  REQUIRE(saved.find("http://127.0.0.1:18081") != std::string::npos);
+  REQUIRE(saved.find("level") != std::string::npos);
+  REQUIRE(saved.find("debug") != std::string::npos);
+
+  auto loaded = zfleet::agent::LoadConfig(config_path);
+  loaded.install_dir = test_root;
+  zfleet::agent::ResolveConfigPaths(&loaded);
+
+  REQUIRE(loaded.install_dir == test_root);
+  REQUIRE(loaded.control_url == "http://127.0.0.1:18081");
+  REQUIRE(loaded.data_dir == test_root / "data" / "agent");
+  REQUIRE(loaded.log.level == zfleet::core::log::Level::kDebug);
 }
 
 TEST_CASE("agent state is persisted and reused across restarts") {

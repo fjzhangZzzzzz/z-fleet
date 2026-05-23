@@ -6,6 +6,8 @@
 
 namespace zfleet::launcher {
 
+inline constexpr char kComponentRootEnvVar[] = "ZFLEET_COMPONENT_ROOT";
+
 struct LaunchTarget {
   std::string component;
   std::filesystem::path component_root;
@@ -21,6 +23,7 @@ struct ResolveResult {
 };
 
 ResolveResult ResolveLaunchTarget(const std::filesystem::path& launcher_path);
+void SetComponentRootEnvironment(const std::filesystem::path& component_root);
 std::vector<std::string> BuildForwardedArgv(
     const std::filesystem::path& executable_path,
     int argc,

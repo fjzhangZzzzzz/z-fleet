@@ -151,6 +151,7 @@ TEST_CASE("launcher executable forwards args and propagates exit code on POSIX")
                                   "active-version",
                               "2.0.0\n");
   const auto args_file = test_root / "args.txt";
+  const auto env_file = test_root / "env.txt";
   const auto target_path =
       test_root / "zfleet" / "agent" / "releases" / "2.0.0" / "bin" /
       "zfleet_agent";
@@ -158,6 +159,8 @@ TEST_CASE("launcher executable forwards args and propagates exit code on POSIX")
                               "#!/bin/sh\n"
                               "printf '%s\\n' \"$@\" > \"" +
                                   args_file.string() + "\"\n"
+                              "printf '%s\\n' \"$ZFLEET_COMPONENT_ROOT\" > \"" +
+                                  env_file.string() + "\"\n"
                               "exit 23\n");
   zfleet::platform::SetExecutable(target_path, true);
 
@@ -166,5 +169,7 @@ TEST_CASE("launcher executable forwards args and propagates exit code on POSIX")
 
   REQUIRE(exit_code == 23);
   REQUIRE(zfleet::test::ReadTextFile(args_file) == "alpha\nbeta gamma\n--flag\n");
+  REQUIRE(zfleet::test::ReadTextFile(env_file) ==
+          (test_root / "zfleet" / "agent").string() + "\n");
 }
 #endif
