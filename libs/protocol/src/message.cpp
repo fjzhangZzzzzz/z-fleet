@@ -6,25 +6,6 @@ std::string_view protocol_version() noexcept {
   return "v1";
 }
 
-std::string_view ToString(MessageKind kind) noexcept {
-  switch (kind) {
-    case MessageKind::registration:
-      return "registration";
-    case MessageKind::heartbeat:
-      return "heartbeat";
-    case MessageKind::asset_snapshot:
-      return "asset_snapshot";
-    case MessageKind::task_create:
-      return "task_create";
-    case MessageKind::task_running:
-      return "task_running";
-    case MessageKind::task_result:
-      return "task_result";
-  }
-
-  return "unknown";
-}
-
 std::string_view ToString(ErrorCode code) noexcept {
   switch (code) {
     case ErrorCode::invalid_json:

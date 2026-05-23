@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -122,6 +123,15 @@ zfleet::protocol::AuditEventType AuditEventForTaskResult(
   return zfleet::protocol::AuditEventType::task_failed;
 }
 
+template <typename Message>
+std::string SerializeProto(const Message& message) {
+  std::string bytes;
+  if (!message.SerializeToString(&bytes)) {
+    throw std::runtime_error("failed to serialize protobuf message");
+  }
+  return bytes;
+}
+
 } // namespace
 
 Http2ControlService::Http2ControlService(ServerStore* store)
@@ -139,6 +149,8 @@ ControlEventResult Http2ControlService::HandleAgentEvent(
       return HandleRegister(event);
     case proto::AgentEvent::kHeartbeat:
       return HandleHeartbeat(event);
+    case proto::AgentEvent::kAssetSnapshot:
+      return HandleAssetSnapshot(event);
     case proto::AgentEvent::kTaskRunning:
       return HandleTaskRunning(event);
     case proto::AgentEvent::kTaskResult:
@@ -237,8 +249,8 @@ ControlEventResult Http2ControlService::HandleTaskResult(
       .error = std::nullopt,
   };
 
-  std::optional<std::string> result_json;
-  std::optional<std::string> error_json;
+  std::optional<std::string> result_blob;
+  std::optional<std::string> error_blob;
   if (*status == zfleet::protocol::TaskExecutionStatus::succeeded) {
     const zfleet::protocol::CollectBasicInventoryResult inventory{
         .hostname = result.collect_basic_inventory().hostname(),
@@ -247,8 +259,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
         .agent_version = result.collect_basic_inventory().agent_version(),
     };
     request.result = inventory;
-    result_json = zfleet::protocol::SerializeCollectBasicInventoryResult(
-        inventory);
+    result_blob = SerializeProto(result.collect_basic_inventory());
   } else {
     const auto error_code = ToDomainErrorCode(result.error().code());
     if (!error_code.has_value()) {
@@ -260,7 +271,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
         .retryable = result.error().retryable(),
     };
     request.error = error;
-    error_json = zfleet::protocol::SerializeTaskError(error);
+    error_blob = SerializeProto(result.error());
   }
 
   try {
@@ -278,7 +289,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
       return InvalidArgument("task already finished");
     }
 
-    store_->RecordTaskResult(request, result_json, error_json);
+    store_->RecordTaskResult(request, result_blob, error_blob);
     RecordAuditEvent(
         AuditEventForTaskResult(request.status), request.request_id,
         request.agent_id, "success",
@@ -381,8 +392,7 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
       return NotFound("agent not registered");
     }
 
-    store_->RecordHeartbeat(
-        request, zfleet::protocol::SerializeAgentHeartbeat(request));
+    store_->RecordHeartbeat(request, event);
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::agent_heartbeat, request.request_id,
         request.agent_id, "success",
@@ -396,6 +406,60 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
   } catch (const std::exception& ex) {
     ZFLOG_ERROR(EventLogger("http2.control.heartbeat", event),
                 "heartbeat failed: {}",
+                ex.what());
+    return InternalError();
+  }
+}
+
+ControlEventResult Http2ControlService::HandleAssetSnapshot(
+    const proto::AgentEvent& event) const {
+  const auto& snapshot = event.asset_snapshot();
+  const zfleet::protocol::AssetSnapshot request{
+      .protocol_version = event.protocol_version(),
+      .request_id = event.message_id(),
+      .agent_id = event.agent_id(),
+      .occurred_at = event.occurred_at(),
+      .hostname = snapshot.hostname(),
+      .os = snapshot.os(),
+      .os_version =
+          snapshot.os_version().empty()
+              ? std::optional<std::string>{}
+              : std::optional<std::string>{snapshot.os_version()},
+      .arch = snapshot.arch(),
+      .agent_version = snapshot.agent_version(),
+  };
+
+  try {
+    if (!store_->AgentExists(request.agent_id)) {
+      RecordAuditEvent(
+          zfleet::protocol::AuditEventType::agent_asset_snapshot,
+          request.request_id, request.agent_id, "error",
+          zfleet::protocol::SerializeAuditPayload(
+              {{"transport", std::string("http2")},
+               {"error_code",
+                std::string(zfleet::protocol::ToString(
+                    zfleet::protocol::ErrorCode::agent_not_registered))},
+               {"message", std::string("agent not registered")}}));
+      return NotFound("agent not registered");
+    }
+
+    store_->RecordAssetSnapshot(request, event);
+    RecordAuditEvent(
+        zfleet::protocol::AuditEventType::agent_asset_snapshot,
+        request.request_id, request.agent_id, "success",
+        zfleet::protocol::SerializeAuditPayload(
+            {{"transport", std::string("http2")},
+             {"status", std::string("accepted")},
+             {"hostname", request.hostname},
+             {"os", request.os},
+             {"arch", request.arch},
+             {"agent_version", request.agent_version}}));
+    ZFLOG_INFO(EventLogger("http2.control.asset_snapshot", event),
+               "asset snapshot stored");
+    return Accepted("accepted");
+  } catch (const std::exception& ex) {
+    ZFLOG_ERROR(EventLogger("http2.control.asset_snapshot", event),
+                "asset snapshot failed: {}",
                 ex.what());
     return InternalError();
   }

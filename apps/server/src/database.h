@@ -1,6 +1,7 @@
 #pragma once
 
 #include "zfleet/protocol/message.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -27,10 +28,10 @@ class ServerStore {
       const zfleet::protocol::AgentRegistration& request) = 0;
   virtual void RecordHeartbeat(
       const zfleet::protocol::AgentHeartbeat& request,
-      const std::string& payload_json) = 0;
+      const zfleet::protocol::v1::AgentEvent& event) = 0;
   virtual void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
-      const std::string& payload_json) = 0;
+      const zfleet::protocol::v1::AgentEvent& event) = 0;
   virtual void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) = 0;
   virtual void EnqueueTask(const zfleet::protocol::Task& task) = 0;
   virtual std::uint64_t TaskQueueVersion() const = 0;
@@ -46,8 +47,8 @@ class ServerStore {
       const std::string& task_id) const = 0;
   virtual void RecordTaskResult(
       const zfleet::protocol::TaskResult& request,
-      const std::optional<std::string>& result_json,
-      const std::optional<std::string>& error_json) = 0;
+      const std::optional<std::string>& result_blob,
+      const std::optional<std::string>& error_blob) = 0;
 };
 
 class ServerDatabase final : public ServerStore {
@@ -60,10 +61,10 @@ class ServerDatabase final : public ServerStore {
   bool AgentExists(const std::string& agent_id) const override;
   void UpsertAgent(const zfleet::protocol::AgentRegistration& request) override;
   void RecordHeartbeat(const zfleet::protocol::AgentHeartbeat& request,
-                       const std::string& payload_json) override;
+                       const zfleet::protocol::v1::AgentEvent& event) override;
   void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
-      const std::string& payload_json) override;
+      const zfleet::protocol::v1::AgentEvent& event) override;
   void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) override;
   void EnqueueTask(const zfleet::protocol::Task& task) override;
   std::uint64_t TaskQueueVersion() const override;
@@ -78,8 +79,8 @@ class ServerDatabase final : public ServerStore {
   std::optional<StoredTask> FindTaskById(
       const std::string& task_id) const override;
   void RecordTaskResult(const zfleet::protocol::TaskResult& request,
-                        const std::optional<std::string>& result_json,
-                        const std::optional<std::string>& error_json) override;
+                        const std::optional<std::string>& result_blob,
+                        const std::optional<std::string>& error_blob) override;
 
  private:
   std::filesystem::path database_path_;

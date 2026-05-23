@@ -7,15 +7,6 @@
 
 namespace zfleet::protocol {
 
-enum class MessageKind {
-  registration,
-  heartbeat,
-  asset_snapshot,
-  task_create,
-  task_running,
-  task_result,
-};
-
 enum class ErrorCode {
   invalid_json,
   missing_required_field,
@@ -136,13 +127,6 @@ struct Task {
   TaskInput input;
 };
 
-struct TaskCreation {
-  std::string protocol_version;
-  std::string request_id;
-  std::string occurred_at;
-  Task task;
-};
-
 struct TaskError {
   ErrorCode error_code;
   std::string message;
@@ -171,7 +155,6 @@ struct TaskResult {
 };
 
 std::string_view protocol_version() noexcept;
-std::string_view ToString(MessageKind kind) noexcept;
 std::string_view ToString(ErrorCode code) noexcept;
 std::string_view ToString(AuditEventType type) noexcept;
 std::string_view ToString(TaskType type) noexcept;

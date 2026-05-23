@@ -80,6 +80,82 @@ std::string ReadTaskField(const std::filesystem::path& database_path,
   return query.getColumn(0).getString();
 }
 
+std::string ReadTaskResultField(const std::filesystem::path& database_path,
+                                const std::string& task_id,
+                                const std::string& column_name) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db, "select " + column_name + " from task_results where task_id = ?");
+  query.bind(1, task_id);
+  if (!query.executeStep() || query.getColumn(0).isNull()) {
+    return {};
+  }
+  return query.getColumn(0).getString();
+}
+
+std::string ReadHeartbeatEventBlob(
+    const std::filesystem::path& database_path,
+    const std::string& agent_id) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db,
+      "select event_blob from heartbeats where agent_id = ? order by heartbeat_id desc limit 1");
+  query.bind(1, agent_id);
+  if (!query.executeStep()) {
+    return {};
+  }
+  const auto column = query.getColumn(0);
+  return std::string(static_cast<const char*>(column.getBlob()),
+                     static_cast<std::size_t>(column.getBytes()));
+}
+
+std::string ReadTaskResultBlob(const std::filesystem::path& database_path,
+                               const std::string& task_id,
+                               const std::string& column_name) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db, "select " + column_name + " from task_results where task_id = ?");
+  query.bind(1, task_id);
+  if (!query.executeStep() || query.getColumn(0).isNull()) {
+    return {};
+  }
+  const auto column = query.getColumn(0);
+  return std::string(static_cast<const char*>(column.getBlob()),
+                     static_cast<std::size_t>(column.getBytes()));
+}
+
+std::string ReadAssetSnapshotField(
+    const std::filesystem::path& database_path,
+    const std::string& agent_id,
+    const std::string& column_name) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db, "select " + column_name +
+              " from asset_snapshots where agent_id = ? order by snapshot_id desc limit 1");
+  query.bind(1, agent_id);
+  if (!query.executeStep() || query.getColumn(0).isNull()) {
+    return {};
+  }
+  return query.getColumn(0).getString();
+}
+
+std::string ReadAssetSnapshotBlob(
+    const std::filesystem::path& database_path,
+    const std::string& agent_id) {
+  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
+  SQLite::Statement query(
+      db,
+      "select event_blob from asset_snapshots where agent_id = ? order by snapshot_id desc limit 1");
+  query.bind(1, agent_id);
+  if (!query.executeStep()) {
+    return {};
+  }
+  const auto column = query.getColumn(0);
+  return std::string(static_cast<const char*>(column.getBlob()),
+                     static_cast<std::size_t>(column.getBytes()));
+}
+
+
 proto::AgentEvent RegisterEvent(std::string message_id,
                                 std::string agent_id,
                                 std::string occurred_at) {
@@ -108,6 +184,23 @@ proto::AgentEvent HeartbeatEvent(std::string message_id,
   return event;
 }
 
+proto::AgentEvent AssetSnapshotEvent(std::string message_id,
+                                     std::string agent_id,
+                                     std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_asset_snapshot();
+  payload->set_hostname("devbox-01");
+  payload->set_os("linux");
+  payload->set_os_version("6.8");
+  payload->set_arch("x86_64");
+  payload->set_agent_version("0.1.0");
+  return event;
+}
+
 proto::AgentEvent TaskRunningEvent(std::string message_id,
                                    std::string agent_id,
                                    std::string task_id,
@@ -120,6 +213,26 @@ proto::AgentEvent TaskRunningEvent(std::string message_id,
   auto* payload = event.mutable_task_running();
   payload->set_task_id(std::move(task_id));
   payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  return event;
+}
+
+proto::AgentEvent TaskFailedEvent(std::string message_id,
+                                  std::string agent_id,
+                                  std::string task_id,
+                                  std::string occurred_at) {
+  proto::AgentEvent event;
+  event.set_protocol_version("v1");
+  event.set_message_id(std::move(message_id));
+  event.set_agent_id(std::move(agent_id));
+  event.set_occurred_at(std::move(occurred_at));
+  auto* payload = event.mutable_task_result();
+  payload->set_task_id(std::move(task_id));
+  payload->set_task_type(proto::TASK_TYPE_COLLECT_BASIC_INVENTORY);
+  payload->set_status(proto::TASK_EXECUTION_STATUS_FAILED);
+  auto* error = payload->mutable_error();
+  error->set_code(proto::ERROR_CODE_INTERNAL_ERROR);
+  error->set_message("inventory failed");
+  error->set_retryable(true);
   return event;
 }
 
@@ -220,7 +333,7 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 2);
+  REQUIRE(database.schema_version() == 3);
   REQUIRE(TableExists(database_path, "agents"));
   REQUIRE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
@@ -279,6 +392,41 @@ TEST_CASE("http2 control service registers agent and stores heartbeat") {
           "agent.heartbeat");
   REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "payload_json")
               .find("\"status\":\"ok\"") != std::string::npos);
+  proto::AgentEvent stored_heartbeat;
+  const auto heartbeat_blob = ReadHeartbeatEventBlob(database_path, "agent-1");
+  REQUIRE(stored_heartbeat.ParseFromString(heartbeat_blob));
+  REQUIRE(stored_heartbeat.message_id() == "http2-heartbeat");
+  REQUIRE(stored_heartbeat.payload_case() == proto::AgentEvent::kHeartbeat);
+}
+
+TEST_CASE("http2 control service stores asset snapshot display columns and blob") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-1");
+  const zfleet::server::Http2ControlService service(&database);
+
+  const auto snapshot_result = service.HandleAgentEvent(AssetSnapshotEvent(
+      "asset-snapshot-1", "agent-1", "2026-05-21T10:00:06Z"));
+
+  REQUIRE(snapshot_result.status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(snapshot_result.message == "accepted");
+  REQUIRE(CountRows(database_path, "asset_snapshots") == 1);
+  REQUIRE(ReadAssetSnapshotField(database_path, "agent-1", "hostname") ==
+          "devbox-01");
+  REQUIRE(ReadAssetSnapshotField(database_path, "agent-1", "os_version") ==
+          "6.8");
+  REQUIRE(ReadAuditField(database_path, "asset-snapshot-1", "event_type") ==
+          "agent.asset_snapshot");
+  proto::AgentEvent stored_snapshot;
+  REQUIRE(stored_snapshot.ParseFromString(
+      ReadAssetSnapshotBlob(database_path, "agent-1")));
+  REQUIRE(stored_snapshot.message_id() == "asset-snapshot-1");
+  REQUIRE(stored_snapshot.payload_case() ==
+          proto::AgentEvent::kAssetSnapshot);
 }
 
 TEST_CASE("http2 control service rejects invalid and unregistered events") {
@@ -344,6 +492,45 @@ TEST_CASE("http2 control service stores task running and result events") {
           "task.running");
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
           "task.succeeded");
+  proto::CollectBasicInventoryResult stored_result;
+  REQUIRE(stored_result.ParseFromString(
+      ReadTaskResultBlob(database_path, "task-1", "result_blob")));
+  REQUIRE(stored_result.hostname() == "devbox-01");
+  REQUIRE(ReadTaskResultBlob(database_path, "task-1", "error_blob").empty());
+}
+
+TEST_CASE("http2 control service stores failed task error columns and blob") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-1");
+  SeedTask(&database, "task-failed-1", "agent-1");
+  REQUIRE(database.ClaimNextTaskForAgent("agent-1",
+                                         "2026-05-21T10:00:01Z")
+              .has_value());
+  const zfleet::server::Http2ControlService service(&database);
+
+  REQUIRE(service.HandleAgentEvent(TaskRunningEvent(
+              "task-running-failed-1", "agent-1", "task-failed-1",
+              "2026-05-21T10:00:02Z"))
+              .status == zfleet::server::ControlEventStatus::kAccepted);
+  const auto result = service.HandleAgentEvent(TaskFailedEvent(
+      "task-result-failed-1", "agent-1", "task-failed-1",
+      "2026-05-21T10:00:03Z"));
+
+  REQUIRE(result.status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(ReadTaskField(database_path, "task-failed-1", "state") == "failed");
+  REQUIRE(ReadTaskResultField(database_path, "task-failed-1", "error_code") ==
+          "internal_error");
+  REQUIRE(ReadTaskResultField(database_path, "task-failed-1",
+                              "error_retryable") == "1");
+  proto::AgentError stored_error;
+  REQUIRE(stored_error.ParseFromString(
+      ReadTaskResultBlob(database_path, "task-failed-1", "error_blob")));
+  REQUIRE(stored_error.retryable());
+  REQUIRE(stored_error.message() == "inventory failed");
 }
 
 TEST_CASE("http2 control service rejects running event before assignment") {

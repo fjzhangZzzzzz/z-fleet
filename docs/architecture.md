@@ -110,7 +110,7 @@ inline void to_json(nlohmann::json& j, const Heartbeat& h) {
 
 ## 持久化模型
 
-v0.1 Server 使用 SQLite 持久化设备、心跳、资产快照和审计事件。建议初始表保持简单，并为后续迁移保留 `schema version`。
+Server 使用 SQLite 持久化 Agent、心跳、资产快照、任务和审计事件。数据库采用“结构化查询列 + protobuf blob + 审计 JSON 摘要”的模型：Web/API、运维查询和状态流转依赖结构化列；控制协议原文或任务类型专属 payload 使用 protobuf blob；`audit_events.payload_json` 仅作为人读排障摘要，不是控制协议源数据。
 
 ```sql
 create table if not exists agents (
@@ -119,6 +119,54 @@ create table if not exists agents (
   last_seen_at text not null,
   platform text not null,
   status text not null
+);
+
+create table if not exists heartbeats (
+  heartbeat_id integer primary key autoincrement,
+  agent_id text not null,
+  occurred_at text not null,
+  agent_version text not null,
+  event_blob blob not null
+);
+
+create table if not exists asset_snapshots (
+  snapshot_id integer primary key autoincrement,
+  agent_id text not null,
+  occurred_at text not null,
+  hostname text not null,
+  os text not null,
+  os_version text,
+  arch text not null,
+  agent_version text not null,
+  event_blob blob not null
+);
+
+create table if not exists tasks (
+  task_id text primary key,
+  protocol_version text not null,
+  agent_id text not null,
+  task_type text not null,
+  capability_level text not null,
+  created_at text not null,
+  expires_at text not null,
+  input_blob blob not null,
+  state text not null,
+  assigned_at text,
+  completed_at text
+);
+
+create table if not exists task_results (
+  task_id text primary key,
+  protocol_version text not null,
+  request_id text not null,
+  agent_id text not null,
+  task_type text not null,
+  occurred_at text not null,
+  status text not null,
+  error_code text,
+  error_retryable integer,
+  result_blob blob,
+  error_blob blob
 );
 
 create table if not exists audit_events (
@@ -131,7 +179,7 @@ create table if not exists audit_events (
 );
 ```
 
-审计事件应入库，文本日志只作为运行排障辅助。
+审计事件应入库，文本日志只作为运行排障辅助。后续接入 Web 时，列表、筛选和聚合优先读取结构化列；详情页需要完整协议内容时由 Server 解码 protobuf blob 后输出 JSON API。
 
 ## 配置模型
 

@@ -1,17 +1,19 @@
 #include "database.h"
 
-#include "zfleet/protocol/json_codec.h"
-
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <sqlite3.h>
 
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <variant>
 
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
+
+namespace proto = zfleet::protocol::v1;
 
 std::optional<std::string> NullableOptionalColumn(SQLite::Statement& query,
                                                   int index) {
@@ -21,14 +23,57 @@ std::optional<std::string> NullableOptionalColumn(SQLite::Statement& query,
   return query.getColumn(index).getString();
 }
 
-zfleet::protocol::TaskInput ParseTaskInput(zfleet::protocol::TaskType task_type,
-                                           const std::string& input_json) {
-  const auto parsed = zfleet::protocol::ParseTaskInput(task_type, input_json);
-  if (const auto* value = std::get_if<zfleet::protocol::TaskInput>(&parsed)) {
-    return *value;
+std::string BlobColumn(SQLite::Statement& query, int index) {
+  const auto column = query.getColumn(index);
+  const auto size = column.getBytes();
+  if (size == 0) {
+    return {};
+  }
+  return std::string(static_cast<const char*>(column.getBlob()),
+                     static_cast<std::size_t>(size));
+}
+
+void BindBlob(SQLite::Statement& statement, int index,
+              const std::string& bytes) {
+  statement.bind(index, bytes.data(), static_cast<int>(bytes.size()));
+}
+
+template <typename Message>
+std::string SerializeProto(const Message& message) {
+  std::string bytes;
+  if (!message.SerializeToString(&bytes)) {
+    throw std::runtime_error("failed to serialize protobuf message");
+  }
+  return bytes;
+}
+
+std::string SerializeAgentEventBlob(const proto::AgentEvent& event) {
+  return SerializeProto(event);
+}
+
+std::string SerializeTaskInputBlob(const zfleet::protocol::TaskInput& input) {
+  return std::visit(
+      [](const auto&) {
+        proto::CollectBasicInventoryInput message;
+        return SerializeProto(message);
+      },
+      input);
+}
+
+zfleet::protocol::TaskInput ParseTaskInputBlob(
+    zfleet::protocol::TaskType task_type,
+    const std::string& input_blob) {
+  switch (task_type) {
+    case zfleet::protocol::TaskType::collect_basic_inventory: {
+      proto::CollectBasicInventoryInput message;
+      if (!message.ParseFromString(input_blob)) {
+        throw std::runtime_error("failed to parse stored task input");
+      }
+      return zfleet::protocol::CollectBasicInventoryInput{};
+    }
   }
 
-  throw std::runtime_error("failed to parse stored task input");
+  throw std::runtime_error("unsupported stored task input type");
 }
 
 zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
@@ -43,7 +88,7 @@ zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
           query.getColumn(4).getString()),
       .created_at = query.getColumn(5).getString(),
       .expires_at = query.getColumn(6).getString(),
-      .input = ParseTaskInput(task_type, query.getColumn(7).getString()),
+      .input = ParseTaskInputBlob(task_type, BlobColumn(query, 7)),
   };
 }
 
@@ -63,7 +108,8 @@ void ExecSchema(SQLite::Database& db) {
       heartbeat_id integer primary key autoincrement,
       agent_id text not null,
       occurred_at text not null,
-      payload_json text not null
+      agent_version text not null,
+      event_blob blob not null
     )
   )sql");
 
@@ -72,7 +118,12 @@ void ExecSchema(SQLite::Database& db) {
       snapshot_id integer primary key autoincrement,
       agent_id text not null,
       occurred_at text not null,
-      payload_json text not null
+      hostname text not null,
+      os text not null,
+      os_version text,
+      arch text not null,
+      agent_version text not null,
+      event_blob blob not null
     )
   )sql");
 
@@ -96,7 +147,7 @@ void ExecSchema(SQLite::Database& db) {
       capability_level text not null,
       created_at text not null,
       expires_at text not null,
-      input_json text not null,
+      input_blob blob not null,
       state text not null,
       assigned_at text,
       completed_at text
@@ -112,12 +163,14 @@ void ExecSchema(SQLite::Database& db) {
       task_type text not null,
       occurred_at text not null,
       status text not null,
-      result_json text,
-      error_json text
+      error_code text,
+      error_retryable integer,
+      result_blob blob,
+      error_blob blob
     )
   )sql");
 
-  db.exec("PRAGMA user_version = 2");
+  db.exec("PRAGMA user_version = 3");
 }
 
 constexpr int kBusyTimeoutMs = 5000;
@@ -196,17 +249,20 @@ void ServerDatabase::UpsertAgent(
 
 void ServerDatabase::RecordHeartbeat(
     const zfleet::protocol::AgentHeartbeat& request,
-    const std::string& payload_json) {
+    const proto::AgentEvent& event) {
+  const auto event_blob = SerializeAgentEventBlob(event);
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Transaction transaction(db);
 
   SQLite::Statement insert_statement(
       db,
-      "insert into heartbeats (agent_id, occurred_at, payload_json) values (?, ?, ?)");
+      "insert into heartbeats (agent_id, occurred_at, agent_version, event_blob) "
+      "values (?, ?, ?, ?)");
   insert_statement.bind(1, request.agent_id);
   insert_statement.bind(2, request.occurred_at);
-  insert_statement.bind(3, payload_json);
+  insert_statement.bind(3, request.agent_version);
+  BindBlob(insert_statement, 4, event_blob);
   insert_statement.exec();
 
   SQLite::Statement update_statement(
@@ -221,15 +277,36 @@ void ServerDatabase::RecordHeartbeat(
 
 void ServerDatabase::RecordAssetSnapshot(
     const zfleet::protocol::AssetSnapshot& request,
-    const std::string& payload_json) {
+    const proto::AgentEvent& event) {
+  const auto event_blob = SerializeAgentEventBlob(event);
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
       db,
-      "insert into asset_snapshots (agent_id, occurred_at, payload_json) values (?, ?, ?)");
+      R"sql(
+        insert into asset_snapshots (
+          agent_id,
+          occurred_at,
+          hostname,
+          os,
+          os_version,
+          arch,
+          agent_version,
+          event_blob
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+      )sql");
   statement.bind(1, request.agent_id);
   statement.bind(2, request.occurred_at);
-  statement.bind(3, payload_json);
+  statement.bind(3, request.hostname);
+  statement.bind(4, request.os);
+  if (request.os_version.has_value()) {
+    statement.bind(5, *request.os_version);
+  } else {
+    statement.bind(5);
+  }
+  statement.bind(6, request.arch);
+  statement.bind(7, request.agent_version);
+  BindBlob(statement, 8, event_blob);
   statement.exec();
 }
 
@@ -276,7 +353,7 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
             capability_level,
             created_at,
             expires_at,
-            input_json,
+            input_blob,
             state,
             assigned_at,
             completed_at
@@ -290,7 +367,7 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
         5, std::string(zfleet::protocol::ToString(task.capability_level)));
     statement.bind(6, task.created_at);
     statement.bind(7, task.expires_at);
-    statement.bind(8, zfleet::protocol::SerializeTaskInput(task.input));
+    BindBlob(statement, 8, SerializeTaskInputBlob(task.input));
     statement.bind(9, std::string(zfleet::protocol::ToString(
                           zfleet::protocol::TaskState::queued)));
     statement.bind(10);
@@ -361,7 +438,7 @@ std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
           capability_level,
           created_at,
           expires_at,
-          input_json
+          input_blob
         from tasks
         where agent_id = ?
           and state = ?
@@ -415,7 +492,7 @@ std::optional<StoredTask> ServerDatabase::FindTaskById(
           capability_level,
           created_at,
           expires_at,
-          input_json,
+          input_blob,
           state,
           assigned_at,
           completed_at
@@ -438,8 +515,8 @@ std::optional<StoredTask> ServerDatabase::FindTaskById(
 
 void ServerDatabase::RecordTaskResult(
     const zfleet::protocol::TaskResult& request,
-    const std::optional<std::string>& result_json,
-    const std::optional<std::string>& error_json) {
+    const std::optional<std::string>& result_blob,
+    const std::optional<std::string>& error_blob) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Transaction transaction(db);
@@ -455,9 +532,11 @@ void ServerDatabase::RecordTaskResult(
           task_type,
           occurred_at,
           status,
-          result_json,
-          error_json
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          error_code,
+          error_retryable,
+          result_blob,
+          error_blob
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       )sql");
   insert.bind(1, request.task_id);
   insert.bind(2, request.protocol_version);
@@ -466,15 +545,23 @@ void ServerDatabase::RecordTaskResult(
   insert.bind(5, std::string(zfleet::protocol::ToString(request.task_type)));
   insert.bind(6, request.occurred_at);
   insert.bind(7, std::string(zfleet::protocol::ToString(request.status)));
-  if (result_json.has_value()) {
-    insert.bind(8, *result_json);
+  if (request.error.has_value()) {
+    insert.bind(
+        8, std::string(zfleet::protocol::ToString(request.error->error_code)));
+    insert.bind(9, request.error->retryable ? 1 : 0);
   } else {
     insert.bind(8);
-  }
-  if (error_json.has_value()) {
-    insert.bind(9, *error_json);
-  } else {
     insert.bind(9);
+  }
+  if (result_blob.has_value()) {
+    BindBlob(insert, 10, *result_blob);
+  } else {
+    insert.bind(10);
+  }
+  if (error_blob.has_value()) {
+    BindBlob(insert, 11, *error_blob);
+  } else {
+    insert.bind(11);
   }
   insert.exec();
 

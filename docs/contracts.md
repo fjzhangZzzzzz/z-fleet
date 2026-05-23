@@ -247,7 +247,7 @@ v0.1 的注册、心跳、资产上报，以及已归类到这些事件类型的
 | `request_id` | `string` | yes | 关联的请求 ID |
 | `event_type` | `string` | yes | 事件类型 |
 | `result` | `string` | yes | `success` 或 `failure` |
-| `payload_json` | `string` | yes | 事件补充上下文的 JSON 字符串 |
+| `payload_json` | `string` | yes | 事件补充上下文的 JSON 摘要 |
 
 v0.1 固定事件类型：
 
@@ -261,6 +261,7 @@ v0.1 固定事件类型：
 - 对于无法解析请求体、无法识别事件类型、无法提取稳定 `request_id` 或 `agent_id` 的请求，`v0.1` 不写入 `audit_events`。
 - 上述未归类请求不属于 `v0.1` 业务审计范围，可通过运行日志观测；后续版本再纳入独立安全异常事件模型。
 - `payload_json` 应包含足够排障的信息，例如错误码、HTTP 状态码、Agent 基础字段摘要，但不应存放敏感密钥材料。
+- `payload_json` 是面向排障和展示的审计摘要，不是 HTTP/2 控制协议 payload；协议原文和任务类型专属 payload 在持久化层使用 protobuf blob 保存。
 - v0.1 不要求审计事件暴露独立外部接口；落库是最低要求。
 
 ## v0.2 任务模型
@@ -585,7 +586,7 @@ v0.2 任务相关审计事件建议至少包含以下字段：
 | `request_id` | `string` | 关联请求 |
 | `event_type` | `string` | 例如 `task.queued`、`task.assigned`、`task.running`、`task.succeeded`、`task.failed`、`task.expired` |
 | `result` | `string` | `success` 或 `failure` |
-| `payload_json` | `string` | 任务类型、状态、错误码、能力等级等补充字段 |
+| `payload_json` | `string` | 任务类型、状态、错误码、能力等级等审计摘要字段 |
 
 约束：
 

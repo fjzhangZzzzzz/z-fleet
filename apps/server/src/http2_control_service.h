@@ -33,6 +33,8 @@ class Http2ControlService {
       const zfleet::protocol::v1::AgentEvent& event) const;
   ControlEventResult HandleHeartbeat(
       const zfleet::protocol::v1::AgentEvent& event) const;
+  ControlEventResult HandleAssetSnapshot(
+      const zfleet::protocol::v1::AgentEvent& event) const;
   ControlEventResult HandleTaskRunning(
       const zfleet::protocol::v1::AgentEvent& event) const;
   ControlEventResult HandleTaskResult(
