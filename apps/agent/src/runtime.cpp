@@ -1,5 +1,6 @@
 #include "runtime.h"
 
+#include "command_decoder.h"
 #include "http2_control_client.h"
 #include "state.h"
 
@@ -11,6 +12,7 @@
 #include "zfleet/protocol/message.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
+#include "zfleet/transport/http2_session.h"
 
 #include <nghttp2/nghttp2.h>
 
@@ -110,14 +112,6 @@ std::vector<std::uint8_t> BuildEnvelopeBody(
   return body;
 }
 
-proto::ServerCommand ParseCommandFrame(std::span<const std::uint8_t> frame) {
-  proto::ServerCommand command;
-  if (!command.ParseFromArray(frame.data(), static_cast<int>(frame.size()))) {
-    throw std::runtime_error("failed to parse server command");
-  }
-  return command;
-}
-
 } // namespace
 
 AgentRuntime::AgentRuntime(AgentConfig config)
@@ -163,6 +157,11 @@ RuntimeResult AgentRuntime::Run() {
   };
 
   auto handle_command = [&](const proto::ServerCommand& command) {
+    if (command.payload_case() == proto::ServerCommand::kError) {
+      throw std::runtime_error("server control error " +
+                               proto::ErrorCode_Name(command.error().code()) +
+                               ": " + command.error().message());
+    }
     if (command.payload_case() != proto::ServerCommand::kTaskAssigned) {
       ZFLOG_WARN(logger, "unsupported server command payload");
       return;
@@ -216,7 +215,7 @@ RuntimeResult AgentRuntime::Run() {
           const auto error_code = client.command_stream_error_code();
           if (error_code.has_value() && *error_code != NGHTTP2_NO_ERROR) {
             throw std::runtime_error("command stream reset: " +
-                                     std::string(nghttp2_http2_strerror(
+                                     std::string(zfleet::transport::Http2ErrorMessage(
                                          *error_code)));
           }
           throw std::runtime_error("command stream closed");
@@ -225,11 +224,12 @@ RuntimeResult AgentRuntime::Run() {
         client.PumpFor(kCommandPumpInterval);
         const auto command_bytes = client.DrainCommandBytes();
         if (!command_bytes.empty()) {
-          const auto frames = command_decoder.Push(
+          const auto commands = DecodeServerCommands(
+              &command_decoder,
               std::span<const std::uint8_t>{command_bytes.data(),
                                             command_bytes.size()});
-          for (const auto& frame : frames) {
-            handle_command(ParseCommandFrame(frame));
+          for (const auto& command : commands) {
+            handle_command(command);
           }
         }
 

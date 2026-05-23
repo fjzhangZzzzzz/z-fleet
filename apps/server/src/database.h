@@ -24,12 +24,12 @@ class ServerStore {
 
   virtual bool AgentExists(const std::string& agent_id) const = 0;
   virtual void UpsertAgent(
-      const zfleet::protocol::RegistrationRequest& request) = 0;
+      const zfleet::protocol::AgentRegistration& request) = 0;
   virtual void RecordHeartbeat(
-      const zfleet::protocol::HeartbeatRequest& request,
+      const zfleet::protocol::AgentHeartbeat& request,
       const std::string& payload_json) = 0;
   virtual void RecordAssetSnapshot(
-      const zfleet::protocol::AssetSnapshotRequest& request,
+      const zfleet::protocol::AssetSnapshot& request,
       const std::string& payload_json) = 0;
   virtual void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) = 0;
   virtual void EnqueueTask(const zfleet::protocol::Task& task) = 0;
@@ -38,14 +38,14 @@ class ServerStore {
       std::uint64_t last_seen_version,
       std::chrono::milliseconds timeout) const = 0;
   virtual void MarkTaskRunning(
-      const zfleet::protocol::TaskRunningRequest& request) = 0;
+      const zfleet::protocol::TaskRunning& request) = 0;
   virtual std::optional<zfleet::protocol::Task> ClaimNextTaskForAgent(
       const std::string& agent_id,
       const std::string& assigned_at) = 0;
   virtual std::optional<StoredTask> FindTaskById(
       const std::string& task_id) const = 0;
   virtual void RecordTaskResult(
-      const zfleet::protocol::TaskResultRequest& request,
+      const zfleet::protocol::TaskResult& request,
       const std::optional<std::string>& result_json,
       const std::optional<std::string>& error_json) = 0;
 };
@@ -58,11 +58,11 @@ class ServerDatabase final : public ServerStore {
   int schema_version() const;
   const std::filesystem::path& database_path() const noexcept;
   bool AgentExists(const std::string& agent_id) const override;
-  void UpsertAgent(const zfleet::protocol::RegistrationRequest& request) override;
-  void RecordHeartbeat(const zfleet::protocol::HeartbeatRequest& request,
+  void UpsertAgent(const zfleet::protocol::AgentRegistration& request) override;
+  void RecordHeartbeat(const zfleet::protocol::AgentHeartbeat& request,
                        const std::string& payload_json) override;
   void RecordAssetSnapshot(
-      const zfleet::protocol::AssetSnapshotRequest& request,
+      const zfleet::protocol::AssetSnapshot& request,
       const std::string& payload_json) override;
   void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) override;
   void EnqueueTask(const zfleet::protocol::Task& task) override;
@@ -71,13 +71,13 @@ class ServerDatabase final : public ServerStore {
       std::uint64_t last_seen_version,
       std::chrono::milliseconds timeout) const override;
   void MarkTaskRunning(
-      const zfleet::protocol::TaskRunningRequest& request) override;
+      const zfleet::protocol::TaskRunning& request) override;
   std::optional<zfleet::protocol::Task> ClaimNextTaskForAgent(
       const std::string& agent_id,
       const std::string& assigned_at) override;
   std::optional<StoredTask> FindTaskById(
       const std::string& task_id) const override;
-  void RecordTaskResult(const zfleet::protocol::TaskResultRequest& request,
+  void RecordTaskResult(const zfleet::protocol::TaskResult& request,
                         const std::optional<std::string>& result_json,
                         const std::optional<std::string>& error_json) override;
 

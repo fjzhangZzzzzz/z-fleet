@@ -5,6 +5,7 @@ find_package(tomlplusplus CONFIG REQUIRED)
 set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
 
 add_library(zfleet_agent_app
+  src/command_decoder.cpp
   src/config.cpp
   src/http2_control_client.cpp
   src/runtime.cpp

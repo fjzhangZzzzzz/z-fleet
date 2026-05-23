@@ -146,7 +146,7 @@ proto::AgentEvent TaskSucceededEvent(std::string message_id,
 
 void SeedAgent(zfleet::server::ServerDatabase* database,
                std::string agent_id) {
-  database->UpsertAgent(zfleet::protocol::RegistrationRequest{
+  database->UpsertAgent(zfleet::protocol::AgentRegistration{
       .protocol_version = "v1",
       .request_id = "seed-agent",
       .agent_id = std::move(agent_id),
@@ -190,22 +190,23 @@ TEST_CASE("server config loads control listen and database path from toml") {
     std::ofstream config_stream(config_path);
     REQUIRE(config_stream);
     config_stream << "[server]\n";
+    config_stream << "install_dir = \"" << test_root.path().string() << "\"\n";
     config_stream << "control_listen = \"127.0.0.1:18081\"\n";
-    config_stream << "database_path = \"" << (test_root / "server.db").string()
-                  << "\"\n";
+    config_stream << "database_path = \"data/server.db\"\n";
     config_stream << "\n[log]\n";
     config_stream << "level = \"debug\"\n";
-    config_stream << "file = \"" << (test_root / "server.log").string()
-                  << "\"\n";
+    config_stream << "file = \"logs/server.log\"\n";
     config_stream << "enable_console = false\n";
   }
 
-  const auto config = zfleet::server::LoadConfig(config_path);
+  auto config = zfleet::server::LoadConfig(config_path);
+  zfleet::server::ResolveConfigPaths(&config);
 
+  REQUIRE(config.install_dir == test_root.path());
   REQUIRE(config.control_listen == "127.0.0.1:18081");
-  REQUIRE(config.database_path == test_root / "server.db");
+  REQUIRE(config.database_path == test_root / "data" / "server.db");
   REQUIRE(config.log.level == zfleet::core::log::Level::kDebug);
-  REQUIRE(config.log.file_path == test_root / "server.log");
+  REQUIRE(config.log.file_path == test_root / "logs" / "server.log");
   REQUIRE_FALSE(config.log.enable_console);
 }
 

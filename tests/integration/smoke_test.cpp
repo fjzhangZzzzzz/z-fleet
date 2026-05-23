@@ -652,7 +652,7 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  database.UpsertAgent(zfleet::protocol::RegistrationRequest{
+  database.UpsertAgent(zfleet::protocol::AgentRegistration{
       .protocol_version = "v1",
       .request_id = "seed-agent",
       .agent_id = "agent-command-1",
@@ -738,7 +738,7 @@ TEST_CASE("http2 control server sends multiple queued tasks on one command strea
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  database.UpsertAgent(zfleet::protocol::RegistrationRequest{
+  database.UpsertAgent(zfleet::protocol::AgentRegistration{
       .protocol_version = "v1",
       .request_id = "seed-agent-multi",
       .agent_id = "agent-command-multi",
@@ -836,7 +836,7 @@ TEST_CASE("agent runtime completes task over http2 control channel") {
       .control_url =
           std::string("http://127.0.0.1:") + std::to_string(server.port()),
       .data_dir = test_root / "agent-data",
-      .state_file = "agent-state.toml",
+      .state_path = "agent-state.toml",
       .heartbeat_interval_seconds = 1,
       .reconnect_initial_delay_seconds = 1,
       .reconnect_max_delay_seconds = 2,
@@ -923,7 +923,7 @@ TEST_CASE("agent runtime reconnects and registers again after server restart") {
       .control_url =
           std::string("http://127.0.0.1:") + std::to_string(port),
       .data_dir = test_root / "agent-data",
-      .state_file = "agent-state.toml",
+      .state_path = "agent-state.toml",
       .heartbeat_interval_seconds = 1,
       .reconnect_initial_delay_seconds = 1,
       .reconnect_max_delay_seconds = 2,

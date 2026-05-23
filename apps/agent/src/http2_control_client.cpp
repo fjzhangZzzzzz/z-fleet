@@ -1,6 +1,7 @@
 #include "http2_control_client.h"
 
 #include "zfleet/core/log.h"
+#include "zfleet/transport/http2_session.h"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/write.hpp>
@@ -360,8 +361,8 @@ void Http2ControlClient::ThrowIfStreamReset(
   if (response.close_error_code.has_value() &&
       *response.close_error_code != NGHTTP2_NO_ERROR) {
     throw std::runtime_error(std::string(operation) + " reset: " +
-                             nghttp2_http2_strerror(
-                                 *response.close_error_code));
+                             std::string(zfleet::transport::Http2ErrorMessage(
+                                 *response.close_error_code)));
   }
 }
 

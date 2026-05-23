@@ -5,6 +5,15 @@
 namespace zfleet::server {
 namespace {
 
+std::filesystem::path ResolvePath(
+    const std::optional<std::filesystem::path>& install_dir,
+    std::filesystem::path path) {
+  if (path.empty() || path.is_absolute() || !install_dir.has_value()) {
+    return path;
+  }
+  return *install_dir / path;
+}
+
 void LoadLogConfig(const toml::table& table,
                    zfleet::core::log::Config* config) {
   const auto* log = table.get_as<toml::table>("log");
@@ -50,6 +59,12 @@ ServerConfig LoadConfig(
     return config;
   }
 
+  if (const auto* node = server->get("install_dir"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.install_dir = std::filesystem::path(*value);
+    }
+  }
+
   if (const auto* node = server->get("control_listen"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_listen = *value;
@@ -63,6 +78,13 @@ ServerConfig LoadConfig(
   }
 
   return config;
+}
+
+void ResolveConfigPaths(ServerConfig* config) {
+  config->database_path = ResolvePath(config->install_dir,
+                                      config->database_path);
+  config->log.file_path = ResolvePath(config->install_dir,
+                                      config->log.file_path);
 }
 
 }  // namespace zfleet::server

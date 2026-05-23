@@ -161,7 +161,7 @@ ControlEventResult Http2ControlService::HandleTaskRunning(
     return InvalidArgument("task_id must not be empty");
   }
 
-  const zfleet::protocol::TaskRunningRequest request{
+  const zfleet::protocol::TaskRunning request{
       .protocol_version = event.protocol_version(),
       .request_id = event.message_id(),
       .task_id = running.task_id(),
@@ -225,7 +225,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
     return InvalidArgument("task_id must not be empty");
   }
 
-  zfleet::protocol::TaskResultRequest request{
+  zfleet::protocol::TaskResult request{
       .protocol_version = event.protocol_version(),
       .request_id = event.message_id(),
       .task_id = result.task_id(),
@@ -322,7 +322,7 @@ ControlEventResult Http2ControlService::ValidateEnvelope(
 ControlEventResult Http2ControlService::HandleRegister(
     const proto::AgentEvent& event) const {
   const auto& registration = event.register_();
-  const zfleet::protocol::RegistrationRequest request{
+  const zfleet::protocol::AgentRegistration request{
       .protocol_version = event.protocol_version(),
       .request_id = event.message_id(),
       .agent_id = event.agent_id(),
@@ -359,7 +359,7 @@ ControlEventResult Http2ControlService::HandleRegister(
 ControlEventResult Http2ControlService::HandleHeartbeat(
     const proto::AgentEvent& event) const {
   const auto& heartbeat = event.heartbeat();
-  const zfleet::protocol::HeartbeatRequest request{
+  const zfleet::protocol::AgentHeartbeat request{
       .protocol_version = event.protocol_version(),
       .request_id = event.message_id(),
       .agent_id = event.agent_id(),
@@ -382,7 +382,7 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
     }
 
     store_->RecordHeartbeat(
-        request, zfleet::protocol::SerializeHeartbeatRequest(request));
+        request, zfleet::protocol::SerializeAgentHeartbeat(request));
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::agent_heartbeat, request.request_id,
         request.agent_id, "success",

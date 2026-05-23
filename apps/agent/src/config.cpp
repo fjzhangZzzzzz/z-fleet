@@ -6,13 +6,13 @@
 namespace zfleet::agent {
 namespace {
 
-std::filesystem::path resolve_data_dir(const toml::table& agent) {
-  if (const auto value = agent["data_dir"].value<std::string>();
-      value.has_value()) {
-    return *value;
+std::filesystem::path ResolvePath(
+    const std::optional<std::filesystem::path>& install_dir,
+    std::filesystem::path path) {
+  if (path.empty() || path.is_absolute() || !install_dir.has_value()) {
+    return path;
   }
-
-  return AgentConfig{}.data_dir;
+  return *install_dir / path;
 }
 
 void LoadLogConfig(const toml::table& table,
@@ -60,17 +60,27 @@ AgentConfig LoadConfig(
     return config;
   }
 
+  if (const auto* node = agent->get("install_dir"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.install_dir = std::filesystem::path(*value);
+    }
+  }
+
   if (const auto* node = agent->get("control_url"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.control_url = *value;
     }
   }
 
-  config.data_dir = resolve_data_dir(*agent);
-
-  if (const auto node = agent->get("state_file"); node != nullptr) {
+  if (const auto* node = agent->get("data_dir"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
-      config.state_file = *value;
+      config.data_dir = *value;
+    }
+  }
+
+  if (const auto node = agent->get("state_path"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.state_path = *value;
     }
   }
 
@@ -98,13 +108,19 @@ AgentConfig LoadConfig(
   return config;
 }
 
+void ResolveConfigPaths(AgentConfig* config) {
+  config->data_dir = ResolvePath(config->install_dir, config->data_dir);
+  config->state_path = ResolvePath(config->install_dir, config->state_path);
+  config->log.file_path = ResolvePath(config->install_dir,
+                                      config->log.file_path);
+}
+
 std::filesystem::path StatePathFor(const AgentConfig& config) {
-  const std::filesystem::path state_file(config.state_file);
-  if (state_file.is_absolute()) {
-    return state_file;
+  if (config.state_path.is_absolute()) {
+    return config.state_path;
   }
 
-  return config.data_dir / state_file;
+  return config.data_dir / config.state_path;
 }
 
 }  // namespace zfleet::agent

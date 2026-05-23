@@ -173,7 +173,7 @@ bool ServerDatabase::AgentExists(const std::string& agent_id) const {
 }
 
 void ServerDatabase::UpsertAgent(
-    const zfleet::protocol::RegistrationRequest& request) {
+    const zfleet::protocol::AgentRegistration& request) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(
@@ -195,7 +195,7 @@ void ServerDatabase::UpsertAgent(
 }
 
 void ServerDatabase::RecordHeartbeat(
-    const zfleet::protocol::HeartbeatRequest& request,
+    const zfleet::protocol::AgentHeartbeat& request,
     const std::string& payload_json) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
@@ -220,7 +220,7 @@ void ServerDatabase::RecordHeartbeat(
 }
 
 void ServerDatabase::RecordAssetSnapshot(
-    const zfleet::protocol::AssetSnapshotRequest& request,
+    const zfleet::protocol::AssetSnapshot& request,
     const std::string& payload_json) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
@@ -321,7 +321,7 @@ std::uint64_t ServerDatabase::WaitForTaskQueueChange(
 }
 
 void ServerDatabase::MarkTaskRunning(
-    const zfleet::protocol::TaskRunningRequest& request) {
+    const zfleet::protocol::TaskRunning& request) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement update(
@@ -437,7 +437,7 @@ std::optional<StoredTask> ServerDatabase::FindTaskById(
 }
 
 void ServerDatabase::RecordTaskResult(
-    const zfleet::protocol::TaskResultRequest& request,
+    const zfleet::protocol::TaskResult& request,
     const std::optional<std::string>& result_json,
     const std::optional<std::string>& error_json) {
   std::lock_guard lock(write_mutex_);

@@ -40,7 +40,7 @@ namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
 constexpr std::size_t kMaxConnectionThreads = 128;
-constexpr auto kTaskQueueWait = std::chrono::milliseconds(50);
+constexpr auto kTaskQueueShutdownPoll = std::chrono::seconds(1);
 
 #define ZFLEET_NGHTTP2_NV(NAME, VALUE)                                      \
   nghttp2_nv {                                                              \
@@ -82,7 +82,7 @@ struct ConnectionContext {
   Http2ConnectionRegistry* registry;
   std::string connection_id;
   std::map<std::int32_t, StreamState> streams;
-  std::uint64_t task_queue_version = 0;
+  std::atomic_uint64_t task_queue_version = 0;
 
   ConnectionContext(std::shared_ptr<tcp::socket> accepted_socket,
                     ServerStore* store_arg,
@@ -501,15 +501,45 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
                       Http2ConnectionRegistry* registry) {
   ConnectionContext context(std::move(socket), store, service, registry,
                             zfleet::core::GenerateUuid());
-  context.task_queue_version = store->TaskQueueVersion();
+  context.task_queue_version.store(store->TaskQueueVersion());
   registry->OpenConnection(context.connection_id, zfleet::core::NowUtcRfc3339());
 
   try {
-    context.socket->non_blocking(true);
     SessionCallbacks callbacks;
     ServerSession server_session(callbacks, &context);
-    CheckNghttp2(nghttp2_session_send(server_session.session),
-                 "send initial http2 settings");
+    std::mutex session_mutex;
+    std::atomic_bool stop_task_notifier{false};
+    {
+      std::lock_guard lock(session_mutex);
+      CheckNghttp2(nghttp2_session_send(server_session.session),
+                   "send initial http2 settings");
+    }
+
+    std::thread task_notifier([&]() {
+      while (!stop_task_notifier.load()) {
+        const auto next_task_queue_version =
+            context.store->WaitForTaskQueueChange(
+                context.task_queue_version.load(), kTaskQueueShutdownPoll);
+        if (next_task_queue_version == context.task_queue_version.load()) {
+          continue;
+        }
+
+        std::lock_guard lock(session_mutex);
+        context.task_queue_version.store(next_task_queue_version);
+        FlushQueuedCommands(server_session.session, &context);
+      }
+    });
+    struct TaskNotifierCleanup {
+      std::atomic_bool& stop;
+      std::thread& thread;
+
+      ~TaskNotifierCleanup() {
+        stop.store(true);
+        if (thread.joinable()) {
+          thread.join();
+        }
+      }
+    } task_notifier_cleanup{stop_task_notifier, task_notifier};
 
     std::array<std::uint8_t, kReadBufferBytes> buffer{};
     boost::system::error_code ec;
@@ -518,27 +548,17 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
             nghttp2_session_want_write(server_session.session) != 0)) {
       const auto bytes_read =
           context.socket->read_some(boost::asio::buffer(buffer), ec);
-      if (ec == boost::asio::error::would_block ||
-          ec == boost::asio::error::try_again) {
-        const auto next_task_queue_version = context.store->WaitForTaskQueueChange(
-            context.task_queue_version, kTaskQueueWait);
-        if (next_task_queue_version != context.task_queue_version) {
-          context.task_queue_version = next_task_queue_version;
-          FlushQueuedCommands(server_session.session, &context);
-        }
-        ec.clear();
-        continue;
-      }
       if (ec == boost::asio::error::eof) {
         break;
       }
       if (ec) {
         throw boost::system::system_error(ec);
       }
+      std::lock_guard lock(session_mutex);
       const auto rv = nghttp2_session_mem_recv(server_session.session,
                                                buffer.data(), bytes_read);
       CheckNghttp2(static_cast<int>(rv), "receive http2 bytes");
-      context.task_queue_version = context.store->TaskQueueVersion();
+      context.task_queue_version.store(context.store->TaskQueueVersion());
       FlushQueuedCommands(server_session.session, &context);
       CheckNghttp2(nghttp2_session_send(server_session.session),
                    "send http2 bytes");

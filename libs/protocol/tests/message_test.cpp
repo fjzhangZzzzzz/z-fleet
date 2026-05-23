@@ -5,24 +5,22 @@
 
 namespace {
 
-using zfleet::protocol::AssetSnapshotRequest;
+using zfleet::protocol::AssetSnapshot;
 using zfleet::protocol::AuditEvent;
 using zfleet::protocol::AuditEventType;
 using zfleet::protocol::CapabilityLevel;
 using zfleet::protocol::CollectBasicInventoryInput;
 using zfleet::protocol::CollectBasicInventoryResult;
 using zfleet::protocol::ErrorCode;
-using zfleet::protocol::ErrorResponse;
-using zfleet::protocol::HeartbeatRequest;
+using zfleet::protocol::AgentHeartbeat;
 using zfleet::protocol::MessageKind;
-using zfleet::protocol::RegistrationRequest;
-using zfleet::protocol::StatusResponse;
+using zfleet::protocol::AgentRegistration;
 using zfleet::protocol::Task;
-using zfleet::protocol::TaskCreateRequest;
+using zfleet::protocol::TaskCreation;
 using zfleet::protocol::TaskError;
 using zfleet::protocol::TaskExecutionStatus;
-using zfleet::protocol::TaskRunningRequest;
-using zfleet::protocol::TaskResultRequest;
+using zfleet::protocol::TaskRunning;
+using zfleet::protocol::TaskResult;
 using zfleet::protocol::TaskState;
 using zfleet::protocol::TaskType;
 
@@ -65,8 +63,8 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           TaskState::queued);
 }
 
-TEST_CASE("registration request supports json round trip") {
-  RegistrationRequest registration{
+TEST_CASE("agent registration supports json round trip") {
+  AgentRegistration registration{
       .protocol_version = "v1",
       .request_id = "req-1",
       .agent_id = "agent-1",
@@ -78,19 +76,19 @@ TEST_CASE("registration request supports json round trip") {
   };
 
   const auto registration_json =
-      zfleet::protocol::SerializeRegistrationRequest(registration);
+      zfleet::protocol::SerializeAgentRegistration(registration);
   const auto parsed_registration =
-      zfleet::protocol::ParseRegistrationRequest(registration_json);
+      zfleet::protocol::ParseAgentRegistration(registration_json);
 
-  REQUIRE(std::holds_alternative<RegistrationRequest>(parsed_registration));
-  REQUIRE(std::get<RegistrationRequest>(parsed_registration).agent_id ==
+  REQUIRE(std::holds_alternative<AgentRegistration>(parsed_registration));
+  REQUIRE(std::get<AgentRegistration>(parsed_registration).agent_id ==
           registration.agent_id);
-  REQUIRE(std::get<RegistrationRequest>(parsed_registration).hostname ==
+  REQUIRE(std::get<AgentRegistration>(parsed_registration).hostname ==
           registration.hostname);
 }
 
-TEST_CASE("heartbeat request supports json round trip") {
-  HeartbeatRequest heartbeat{
+TEST_CASE("agent heartbeat supports json round trip") {
+  AgentHeartbeat heartbeat{
       .protocol_version = "v1",
       .request_id = "req-2",
       .agent_id = "agent-1",
@@ -99,19 +97,19 @@ TEST_CASE("heartbeat request supports json round trip") {
   };
 
   const auto heartbeat_json =
-      zfleet::protocol::SerializeHeartbeatRequest(heartbeat);
+      zfleet::protocol::SerializeAgentHeartbeat(heartbeat);
   const auto parsed_heartbeat =
-      zfleet::protocol::ParseHeartbeatRequest(heartbeat_json);
+      zfleet::protocol::ParseAgentHeartbeat(heartbeat_json);
 
-  REQUIRE(std::holds_alternative<HeartbeatRequest>(parsed_heartbeat));
-  REQUIRE(std::get<HeartbeatRequest>(parsed_heartbeat).request_id ==
+  REQUIRE(std::holds_alternative<AgentHeartbeat>(parsed_heartbeat));
+  REQUIRE(std::get<AgentHeartbeat>(parsed_heartbeat).request_id ==
           heartbeat.request_id);
-  REQUIRE(std::get<HeartbeatRequest>(parsed_heartbeat).agent_version ==
+  REQUIRE(std::get<AgentHeartbeat>(parsed_heartbeat).agent_version ==
           heartbeat.agent_version);
 }
 
 TEST_CASE("asset snapshot omits missing optional fields during json round trip") {
-  AssetSnapshotRequest asset{
+  AssetSnapshot asset{
       .protocol_version = "v1",
       .request_id = "req-3",
       .agent_id = "agent-1",
@@ -124,53 +122,15 @@ TEST_CASE("asset snapshot omits missing optional fields during json round trip")
   };
 
   const auto asset_json =
-      zfleet::protocol::SerializeAssetSnapshotRequest(asset);
+      zfleet::protocol::SerializeAssetSnapshot(asset);
   const auto parsed_asset =
-      zfleet::protocol::ParseAssetSnapshotRequest(asset_json);
+      zfleet::protocol::ParseAssetSnapshot(asset_json);
 
   REQUIRE(asset_json.find("os_version") == std::string::npos);
-  REQUIRE(std::holds_alternative<AssetSnapshotRequest>(parsed_asset));
+  REQUIRE(std::holds_alternative<AssetSnapshot>(parsed_asset));
   REQUIRE_FALSE(
-      std::get<AssetSnapshotRequest>(parsed_asset).os_version.has_value());
-  REQUIRE(std::get<AssetSnapshotRequest>(parsed_asset).arch == asset.arch);
-}
-
-TEST_CASE("status response supports json round trip") {
-  StatusResponse status{
-      .protocol_version = "v1",
-      .request_id = "req-4",
-      .agent_id = "agent-1",
-      .occurred_at = "2026-05-13T10:16:31Z",
-      .status = "accepted",
-      .server_time = "2026-05-13T10:16:31Z",
-  };
-
-  const auto parsed_status =
-      zfleet::protocol::ParseStatusResponse(
-          zfleet::protocol::SerializeStatusResponse(status));
-  REQUIRE(std::holds_alternative<StatusResponse>(parsed_status));
-  REQUIRE(std::get<StatusResponse>(parsed_status).status == "accepted");
-}
-
-TEST_CASE("error response omits missing optional fields during json round trip") {
-  ErrorResponse error{
-      .protocol_version = "v1",
-      .request_id = "req-5",
-      .agent_id = std::nullopt,
-      .occurred_at = "2026-05-13T10:16:32Z",
-      .error_code = ErrorCode::missing_required_field,
-      .message = "missing field",
-      .retryable = false,
-  };
-
-  const auto error_json = zfleet::protocol::SerializeErrorResponse(error);
-  const auto parsed_error = zfleet::protocol::ParseErrorResponse(error_json);
-
-  REQUIRE(error_json.find("agent_id") == std::string::npos);
-  REQUIRE(std::holds_alternative<ErrorResponse>(parsed_error));
-  REQUIRE(std::get<ErrorResponse>(parsed_error).error_code ==
-          ErrorCode::missing_required_field);
-  REQUIRE_FALSE(std::get<ErrorResponse>(parsed_error).retryable);
+      std::get<AssetSnapshot>(parsed_asset).os_version.has_value());
+  REQUIRE(std::get<AssetSnapshot>(parsed_asset).arch == asset.arch);
 }
 
 TEST_CASE("audit event supports json round trip") {
@@ -220,8 +180,8 @@ TEST_CASE("task supports json round trip") {
       std::get<Task>(parsed_task).input));
 }
 
-TEST_CASE("task create request supports json round trip") {
-  TaskCreateRequest request{
+TEST_CASE("task creation supports json round trip") {
+  TaskCreation creation{
       .protocol_version = "v1",
       .request_id = "task-create-1",
       .occurred_at = "2026-05-17T10:00:00Z",
@@ -238,19 +198,19 @@ TEST_CASE("task create request supports json round trip") {
           },
   };
 
-  const auto request_json =
-      zfleet::protocol::SerializeTaskCreateRequest(request);
-  const auto parsed_request =
-      zfleet::protocol::ParseTaskCreateRequest(request_json);
+  const auto creation_json =
+      zfleet::protocol::SerializeTaskCreation(creation);
+  const auto parsed_creation =
+      zfleet::protocol::ParseTaskCreation(creation_json);
 
-  REQUIRE(std::holds_alternative<TaskCreateRequest>(parsed_request));
-  REQUIRE(std::get<TaskCreateRequest>(parsed_request).request_id ==
+  REQUIRE(std::holds_alternative<TaskCreation>(parsed_creation));
+  REQUIRE(std::get<TaskCreation>(parsed_creation).request_id ==
           "task-create-1");
-  REQUIRE(std::get<TaskCreateRequest>(parsed_request).task.task_id == "task-1");
+  REQUIRE(std::get<TaskCreation>(parsed_creation).task.task_id == "task-1");
 }
 
-TEST_CASE("task result request supports success and failure shapes") {
-  TaskResultRequest success{
+TEST_CASE("task result supports success and failure shapes") {
+  TaskResult success{
       .protocol_version = "v1",
       .request_id = "result-1",
       .task_id = "task-1",
@@ -268,26 +228,26 @@ TEST_CASE("task result request supports success and failure shapes") {
   };
 
   const auto success_json =
-      zfleet::protocol::SerializeTaskResultRequest(success);
+      zfleet::protocol::SerializeTaskResult(success);
   const auto parsed_success =
-      zfleet::protocol::ParseTaskResultRequest(success_json);
+      zfleet::protocol::ParseTaskResult(success_json);
 
   REQUIRE(success_json.find("\"result\"") != std::string::npos);
   REQUIRE(success_json.find("\"error\"") == std::string::npos);
-  REQUIRE(std::holds_alternative<TaskResultRequest>(parsed_success));
-  REQUIRE(std::get<TaskResultRequest>(parsed_success).status ==
+  REQUIRE(std::holds_alternative<TaskResult>(parsed_success));
+  REQUIRE(std::get<TaskResult>(parsed_success).status ==
           TaskExecutionStatus::succeeded);
-  REQUIRE(std::get<TaskResultRequest>(parsed_success).result.has_value());
-  REQUIRE_FALSE(std::get<TaskResultRequest>(parsed_success).error.has_value());
-  REQUIRE(std::get<TaskResultRequest>(parsed_success).task_type ==
+  REQUIRE(std::get<TaskResult>(parsed_success).result.has_value());
+  REQUIRE_FALSE(std::get<TaskResult>(parsed_success).error.has_value());
+  REQUIRE(std::get<TaskResult>(parsed_success).task_type ==
           TaskType::collect_basic_inventory);
   REQUIRE(std::holds_alternative<CollectBasicInventoryResult>(
-      *std::get<TaskResultRequest>(parsed_success).result));
+      *std::get<TaskResult>(parsed_success).result));
   REQUIRE(std::get<CollectBasicInventoryResult>(
-              *std::get<TaskResultRequest>(parsed_success).result)
+              *std::get<TaskResult>(parsed_success).result)
               .hostname == "devbox-01");
 
-  TaskResultRequest failure{
+  TaskResult failure{
       .protocol_version = "v1",
       .request_id = "result-2",
       .task_id = "task-1",
@@ -304,23 +264,23 @@ TEST_CASE("task result request supports success and failure shapes") {
   };
 
   const auto failure_json =
-      zfleet::protocol::SerializeTaskResultRequest(failure);
+      zfleet::protocol::SerializeTaskResult(failure);
   const auto parsed_failure =
-      zfleet::protocol::ParseTaskResultRequest(failure_json);
+      zfleet::protocol::ParseTaskResult(failure_json);
 
   REQUIRE(failure_json.find("\"result\"") == std::string::npos);
   REQUIRE(failure_json.find("\"error\"") != std::string::npos);
-  REQUIRE(std::holds_alternative<TaskResultRequest>(parsed_failure));
-  REQUIRE(std::get<TaskResultRequest>(parsed_failure).status ==
+  REQUIRE(std::holds_alternative<TaskResult>(parsed_failure));
+  REQUIRE(std::get<TaskResult>(parsed_failure).status ==
           TaskExecutionStatus::failed);
-  REQUIRE_FALSE(std::get<TaskResultRequest>(parsed_failure).result.has_value());
-  REQUIRE(std::get<TaskResultRequest>(parsed_failure).error.has_value());
-  REQUIRE(std::get<TaskResultRequest>(parsed_failure).error->error_code ==
+  REQUIRE_FALSE(std::get<TaskResult>(parsed_failure).result.has_value());
+  REQUIRE(std::get<TaskResult>(parsed_failure).error.has_value());
+  REQUIRE(std::get<TaskResult>(parsed_failure).error->error_code ==
           ErrorCode::task_execution_failed);
 }
 
-TEST_CASE("task running request supports json round trip") {
-  TaskRunningRequest request{
+TEST_CASE("task running supports json round trip") {
+  TaskRunning running{
       .protocol_version = "v1",
       .request_id = "task-running-1",
       .task_id = "task-1",
@@ -329,13 +289,13 @@ TEST_CASE("task running request supports json round trip") {
       .occurred_at = "2026-05-17T10:00:10Z",
   };
 
-  const auto request_json =
-      zfleet::protocol::SerializeTaskRunningRequest(request);
-  const auto parsed_request =
-      zfleet::protocol::ParseTaskRunningRequest(request_json);
+  const auto running_json =
+      zfleet::protocol::SerializeTaskRunning(running);
+  const auto parsed_running =
+      zfleet::protocol::ParseTaskRunning(running_json);
 
-  REQUIRE(std::holds_alternative<TaskRunningRequest>(parsed_request));
-  REQUIRE(std::get<TaskRunningRequest>(parsed_request).task_id == "task-1");
-  REQUIRE(std::get<TaskRunningRequest>(parsed_request).task_type ==
+  REQUIRE(std::holds_alternative<TaskRunning>(parsed_running));
+  REQUIRE(std::get<TaskRunning>(parsed_running).task_id == "task-1");
+  REQUIRE(std::get<TaskRunning>(parsed_running).task_type ==
           TaskType::collect_basic_inventory);
 }

@@ -108,21 +108,6 @@ message ServerErrorCommand {
   bool retryable = 3;
 }
 
-message AssetSnapshotRequest {
-  AgentEvent envelope = 1;
-  AssetSnapshotEvent snapshot = 2;
-}
-
-message StatusResponse {
-  string protocol_version = 1;
-  string message_id = 2;
-  string correlation_id = 3;
-  string agent_id = 4;
-  string occurred_at = 5;
-  string status = 6;
-  string server_time = 7;
-}
-
 message LogChunk {
   string protocol_version = 1;
   string message_id = 2;

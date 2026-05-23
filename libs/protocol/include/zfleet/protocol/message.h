@@ -72,7 +72,7 @@ enum class TaskState {
   expired,
 };
 
-struct RegistrationRequest {
+struct AgentRegistration {
   std::string protocol_version;
   std::string request_id;
   std::string agent_id;
@@ -83,7 +83,7 @@ struct RegistrationRequest {
   std::string arch;
 };
 
-struct HeartbeatRequest {
+struct AgentHeartbeat {
   std::string protocol_version;
   std::string request_id;
   std::string agent_id;
@@ -91,7 +91,7 @@ struct HeartbeatRequest {
   std::string agent_version;
 };
 
-struct AssetSnapshotRequest {
+struct AssetSnapshot {
   std::string protocol_version;
   std::string request_id;
   std::string agent_id;
@@ -101,25 +101,6 @@ struct AssetSnapshotRequest {
   std::optional<std::string> os_version;
   std::string arch;
   std::string agent_version;
-};
-
-struct StatusResponse {
-  std::string protocol_version;
-  std::string request_id;
-  std::string agent_id;
-  std::string occurred_at;
-  std::string status;
-  std::string server_time;
-};
-
-struct ErrorResponse {
-  std::string protocol_version;
-  std::string request_id;
-  std::optional<std::string> agent_id;
-  std::string occurred_at;
-  ErrorCode error_code;
-  std::string message;
-  bool retryable;
 };
 
 struct AuditEvent {
@@ -155,7 +136,7 @@ struct Task {
   TaskInput input;
 };
 
-struct TaskCreateRequest {
+struct TaskCreation {
   std::string protocol_version;
   std::string request_id;
   std::string occurred_at;
@@ -168,7 +149,7 @@ struct TaskError {
   bool retryable;
 };
 
-struct TaskRunningRequest {
+struct TaskRunning {
   std::string protocol_version;
   std::string request_id;
   std::string task_id;
@@ -177,7 +158,7 @@ struct TaskRunningRequest {
   std::string occurred_at;
 };
 
-struct TaskResultRequest {
+struct TaskResult {
   std::string protocol_version;
   std::string request_id;
   std::string task_id;

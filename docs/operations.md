@@ -92,7 +92,7 @@ Server 当前最小本地运行方式：
 ./build/linux-debug/apps/server/zfleet_server --database-path /tmp/zfleet-server/zfleet.db
 ```
 
-Server 支持 `--config` 指定配置文件，并可通过 `--database-path`、`--listen`、`--log-level` 覆盖配置项。启动时会自动初始化 SQLite 数据库和当前最小 schema。
+Server 支持 `--config` 指定配置文件，并可通过 `--install-dir`、`--database-path`、`--control-listen`、`--log-level` 覆盖配置项。启动时会自动初始化 SQLite 数据库和当前最小 schema。
 
 Agent 当前最小本地运行方式：
 
@@ -100,7 +100,7 @@ Agent 当前最小本地运行方式：
 ./build/linux-debug/apps/agent/zfleet_agent --data-dir /tmp/zfleet-agent
 ```
 
-Agent 支持 `--config` 指定配置文件，并可通过 `--data-dir`、`--log-level` 覆盖配置项。首次启动会在 `data_dir/state.toml` 生成本地状态文件；重复使用同一 `data_dir` 时应复用同一个 `agent_id`。
+Agent 支持 `--config` 指定配置文件，并可通过 `--install-dir`、`--data-dir`、`--state-path`、`--log-level` 覆盖配置项。绝对路径保持不变；相对路径在配置了 `install_dir` 时以安装目录为基准，否则保持当前工作目录语义。首次启动会在状态路径生成本地状态文件；重复使用同一状态路径时应复用同一个 `agent_id`。
 
 ## 打包
 

@@ -9,4 +9,8 @@ std::uint32_t LinkedNghttp2Version() {
   return info == nullptr ? 0 : info->version_num;
 }
 
+std::string_view Http2ErrorMessage(std::uint32_t error_code) noexcept {
+  return nghttp2_http2_strerror(error_code);
+}
+
 } // namespace zfleet::transport

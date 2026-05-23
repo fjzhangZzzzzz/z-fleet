@@ -9,6 +9,7 @@
 namespace zfleet::server {
 
 struct ServerConfig {
+  std::optional<std::filesystem::path> install_dir = std::nullopt;
   std::string control_listen = "127.0.0.1:8081";
   std::filesystem::path database_path = "data/zfleet.db";
   zfleet::core::log::Config log{
@@ -19,5 +20,6 @@ struct ServerConfig {
 };
 
 ServerConfig LoadConfig(const std::optional<std::filesystem::path>& config_path);
+void ResolveConfigPaths(ServerConfig* config);
 
 } // namespace zfleet::server
