@@ -11,7 +11,7 @@
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 namespace proto = zfleet::protocol::v1;
 
@@ -45,10 +45,6 @@ std::string SerializeProto(const Message& message) {
     throw std::runtime_error("failed to serialize protobuf message");
   }
   return bytes;
-}
-
-std::string SerializeAgentEventBlob(const proto::AgentEvent& event) {
-  return SerializeProto(event);
 }
 
 std::string SerializeTaskInputBlob(const zfleet::protocol::TaskInput& input) {
@@ -98,18 +94,11 @@ void ExecSchema(SQLite::Database& db) {
       agent_id text primary key,
       first_seen_at text not null,
       last_seen_at text not null,
+      last_online_at text not null,
+      last_offline_at text,
       platform text not null,
-      status text not null
-    )
-  )sql");
-
-  db.exec(R"sql(
-    create table if not exists heartbeats (
-      heartbeat_id integer primary key autoincrement,
-      agent_id text not null,
-      occurred_at text not null,
       agent_version text not null,
-      event_blob blob not null
+      status text not null
     )
   )sql");
 
@@ -170,7 +159,7 @@ void ExecSchema(SQLite::Database& db) {
     )
   )sql");
 
-  db.exec("PRAGMA user_version = 3");
+  db.exec("PRAGMA user_version = " + std::to_string(kSchemaVersion));
 }
 
 constexpr int kBusyTimeoutMs = 5000;
@@ -232,53 +221,64 @@ void ServerDatabase::UpsertAgent(
   SQLite::Statement statement(
       db,
       R"sql(
-        insert into agents (agent_id, first_seen_at, last_seen_at, platform, status)
-        values (?, ?, ?, ?, ?)
+        insert into agents (
+          agent_id,
+          first_seen_at,
+          last_seen_at,
+          last_online_at,
+          last_offline_at,
+          platform,
+          agent_version,
+          status
+        ) values (?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(agent_id) do update set
-          last_seen_at = excluded.last_seen_at,
+          last_seen_at = case
+            when agents.status != 'online' then excluded.last_seen_at
+            else agents.last_seen_at
+          end,
+          last_online_at = case
+            when agents.status != 'online' then excluded.last_online_at
+            else agents.last_online_at
+          end,
+          last_offline_at = case
+            when agents.status != 'online' then null
+            else agents.last_offline_at
+          end,
           platform = excluded.platform,
+          agent_version = excluded.agent_version,
           status = excluded.status
       )sql");
   statement.bind(1, request.agent_id);
   statement.bind(2, request.occurred_at);
   statement.bind(3, request.occurred_at);
-  statement.bind(4, request.os);
-  statement.bind(5, "online");
+  statement.bind(4, request.occurred_at);
+  statement.bind(5);
+  statement.bind(6, request.os);
+  statement.bind(7, request.agent_version);
+  statement.bind(8, "online");
   statement.exec();
 }
 
-void ServerDatabase::RecordHeartbeat(
-    const zfleet::protocol::AgentHeartbeat& request,
-    const proto::AgentEvent& event) {
-  const auto event_blob = SerializeAgentEventBlob(event);
+void ServerDatabase::MarkAgentOffline(const std::string& agent_id,
+                                      const std::string& disconnected_at) {
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
-  SQLite::Transaction transaction(db);
-
-  SQLite::Statement insert_statement(
+  SQLite::Statement statement(
       db,
-      "insert into heartbeats (agent_id, occurred_at, agent_version, event_blob) "
-      "values (?, ?, ?, ?)");
-  insert_statement.bind(1, request.agent_id);
-  insert_statement.bind(2, request.occurred_at);
-  insert_statement.bind(3, request.agent_version);
-  BindBlob(insert_statement, 4, event_blob);
-  insert_statement.exec();
-
-  SQLite::Statement update_statement(
-      db, "update agents set last_seen_at = ?, status = ? where agent_id = ?");
-  update_statement.bind(1, request.occurred_at);
-  update_statement.bind(2, "online");
-  update_statement.bind(3, request.agent_id);
-  update_statement.exec();
-
-  transaction.commit();
+      "update agents set last_seen_at = ?, last_offline_at = ?, status = ? "
+      "where agent_id = ? and status != ?");
+  statement.bind(1, disconnected_at);
+  statement.bind(2, disconnected_at);
+  statement.bind(3, "offline");
+  statement.bind(4, agent_id);
+  statement.bind(5, "offline");
+  statement.exec();
 }
 
 void ServerDatabase::RecordAssetSnapshot(
     const zfleet::protocol::AssetSnapshot& request,
     const proto::AgentEvent& event) {
-  const auto event_blob = SerializeAgentEventBlob(event);
+  const auto event_blob = SerializeProto(event);
   std::lock_guard lock(write_mutex_);
   SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READWRITE);
   SQLite::Statement statement(

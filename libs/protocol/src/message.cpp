@@ -47,8 +47,6 @@ std::string_view ToString(AuditEventType type) noexcept {
   switch (type) {
     case AuditEventType::agent_register:
       return "agent.register";
-    case AuditEventType::agent_heartbeat:
-      return "agent.heartbeat";
     case AuditEventType::agent_asset_snapshot:
       return "agent.asset_snapshot";
     case AuditEventType::task_queued:
@@ -178,9 +176,6 @@ std::optional<AuditEventType> AuditEventTypeFromString(
     std::string_view type) noexcept {
   if (type == "agent.register") {
     return AuditEventType::agent_register;
-  }
-  if (type == "agent.heartbeat") {
-    return AuditEventType::agent_heartbeat;
   }
   if (type == "agent.asset_snapshot") {
     return AuditEventType::agent_asset_snapshot;

@@ -26,9 +26,8 @@ class ServerStore {
   virtual bool AgentExists(const std::string& agent_id) const = 0;
   virtual void UpsertAgent(
       const zfleet::protocol::AgentRegistration& request) = 0;
-  virtual void RecordHeartbeat(
-      const zfleet::protocol::AgentHeartbeat& request,
-      const zfleet::protocol::v1::AgentEvent& event) = 0;
+  virtual void MarkAgentOffline(const std::string& agent_id,
+                                const std::string& disconnected_at) = 0;
   virtual void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
       const zfleet::protocol::v1::AgentEvent& event) = 0;
@@ -60,8 +59,8 @@ class ServerDatabase final : public ServerStore {
   const std::filesystem::path& database_path() const noexcept;
   bool AgentExists(const std::string& agent_id) const override;
   void UpsertAgent(const zfleet::protocol::AgentRegistration& request) override;
-  void RecordHeartbeat(const zfleet::protocol::AgentHeartbeat& request,
-                       const zfleet::protocol::v1::AgentEvent& event) override;
+  void MarkAgentOffline(const std::string& agent_id,
+                        const std::string& disconnected_at) override;
   void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
       const zfleet::protocol::v1::AgentEvent& event) override;

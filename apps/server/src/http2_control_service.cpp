@@ -380,28 +380,11 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
 
   try {
     if (!store_->AgentExists(request.agent_id)) {
-      RecordAuditEvent(
-          zfleet::protocol::AuditEventType::agent_heartbeat,
-          request.request_id, request.agent_id, "error",
-          zfleet::protocol::SerializeAuditPayload(
-              {{"transport", std::string("http2")},
-               {"error_code",
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::ErrorCode::agent_not_registered))},
-               {"message", std::string("agent not registered")}}));
       return NotFound("agent not registered");
     }
 
-    store_->RecordHeartbeat(request, event);
-    RecordAuditEvent(
-        zfleet::protocol::AuditEventType::agent_heartbeat, request.request_id,
-        request.agent_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"transport", std::string("http2")},
-             {"status", std::string("ok")},
-             {"agent_version", request.agent_version}}));
     ZFLOG_INFO(EventLogger("http2.control.heartbeat", event),
-               "heartbeat stored");
+               "heartbeat accepted");
     return Accepted("ok");
   } catch (const std::exception& ex) {
     ZFLOG_ERROR(EventLogger("http2.control.heartbeat", event),

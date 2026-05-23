@@ -27,22 +27,32 @@ void Http2ConnectionRegistry::OpenConnection(std::string connection_id,
       });
 }
 
-void Http2ConnectionRegistry::CloseConnection(std::string_view connection_id,
-                                              std::string disconnected_at) {
+std::optional<ClosedConnectionSnapshot> Http2ConnectionRegistry::CloseConnection(
+    std::string_view connection_id,
+    std::string disconnected_at) {
   std::lock_guard lock(mutex_);
   const auto connection = connections_by_id_.find(connection_id);
   if (connection == connections_by_id_.end()) {
-    return;
+    return std::nullopt;
   }
 
+  ClosedConnectionSnapshot closed{
+      .connection_id = connection->second.connection_id,
+      .agent_id = connection->second.agent_id,
+      .disconnected_at = disconnected_at,
+      .was_current_agent_connection = false,
+  };
   connection->second.disconnected_at = std::move(disconnected_at);
   if (connection->second.agent_id.has_value()) {
     const auto agent = connection_by_agent_id_.find(*connection->second.agent_id);
     if (agent != connection_by_agent_id_.end() &&
         agent->second == connection->second.connection_id) {
       connection_by_agent_id_.erase(agent);
+      closed.was_current_agent_connection = true;
     }
   }
+  connections_by_id_.erase(connection);
+  return closed;
 }
 
 void Http2ConnectionRegistry::BindAgent(std::string_view connection_id,
@@ -146,7 +156,7 @@ void Http2ConnectionRegistry::BindAgentLocked(std::string_view connection_id,
       previous->second != connection->second.connection_id) {
     if (auto old_connection = connections_by_id_.find(previous->second);
         old_connection != connections_by_id_.end()) {
-      old_connection->second.disconnected_at = observed_at;
+      connections_by_id_.erase(old_connection);
     }
   }
 

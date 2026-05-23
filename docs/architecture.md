@@ -110,23 +110,18 @@ inline void to_json(nlohmann::json& j, const Heartbeat& h) {
 
 ## 持久化模型
 
-Server 使用 SQLite 持久化 Agent、心跳、资产快照、任务和审计事件。数据库采用“结构化查询列 + protobuf blob + 审计 JSON 摘要”的模型：Web/API、运维查询和状态流转依赖结构化列；控制协议原文或任务类型专属 payload 使用 protobuf blob；`audit_events.payload_json` 仅作为人读排障摘要，不是控制协议源数据。
+Server 使用 SQLite 持久化 Agent 当前状态、资产快照、任务和审计事件。数据库采用“结构化查询列 + protobuf blob + 审计 JSON 摘要”的模型：Web/API、运维查询和状态流转依赖结构化列；控制协议原文或任务类型专属 payload 使用 protobuf blob；`audit_events.payload_json` 仅作为人读排障摘要，不是控制协议源数据。心跳不落库，运行期在线判断依赖控制连接注册表；数据库只记录上线、离线等状态变化时间。
 
 ```sql
 create table if not exists agents (
   agent_id text primary key,
   first_seen_at text not null,
   last_seen_at text not null,
+  last_online_at text not null,
+  last_offline_at text,
   platform text not null,
-  status text not null
-);
-
-create table if not exists heartbeats (
-  heartbeat_id integer primary key autoincrement,
-  agent_id text not null,
-  occurred_at text not null,
   agent_version text not null,
-  event_blob blob not null
+  status text not null
 );
 
 create table if not exists asset_snapshots (

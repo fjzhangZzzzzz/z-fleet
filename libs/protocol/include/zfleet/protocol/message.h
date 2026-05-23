@@ -27,7 +27,6 @@ enum class ErrorCode {
 
 enum class AuditEventType {
   agent_register,
-  agent_heartbeat,
   agent_asset_snapshot,
   task_queued,
   task_assigned,

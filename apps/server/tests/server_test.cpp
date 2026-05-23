@@ -41,16 +41,22 @@ int CountRows(const std::filesystem::path& database_path,
   return query.getColumn(0).getInt();
 }
 
-std::string ReadAgentLastSeen(const std::filesystem::path& database_path,
-                              const std::string& agent_id) {
+std::string ReadAgentField(const std::filesystem::path& database_path,
+                           const std::string& agent_id,
+                           const std::string& column_name) {
   SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
   SQLite::Statement query(
-      db, "select last_seen_at from agents where agent_id = ?");
+      db, "select " + column_name + " from agents where agent_id = ?");
   query.bind(1, agent_id);
-  if (!query.executeStep()) {
+  if (!query.executeStep() || query.getColumn(0).isNull()) {
     return {};
   }
   return query.getColumn(0).getString();
+}
+
+std::string ReadAgentLastSeen(const std::filesystem::path& database_path,
+                              const std::string& agent_id) {
+  return ReadAgentField(database_path, agent_id, "last_seen_at");
 }
 
 std::string ReadAuditField(const std::filesystem::path& database_path,
@@ -91,22 +97,6 @@ std::string ReadTaskResultField(const std::filesystem::path& database_path,
     return {};
   }
   return query.getColumn(0).getString();
-}
-
-std::string ReadHeartbeatEventBlob(
-    const std::filesystem::path& database_path,
-    const std::string& agent_id) {
-  SQLite::Database db(database_path.string(), SQLite::OPEN_READONLY);
-  SQLite::Statement query(
-      db,
-      "select event_blob from heartbeats where agent_id = ? order by heartbeat_id desc limit 1");
-  query.bind(1, agent_id);
-  if (!query.executeStep()) {
-    return {};
-  }
-  const auto column = query.getColumn(0);
-  return std::string(static_cast<const char*>(column.getBlob()),
-                     static_cast<std::size_t>(column.getBytes()));
 }
 
 std::string ReadTaskResultBlob(const std::filesystem::path& database_path,
@@ -333,9 +323,9 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 3);
+  REQUIRE(database.schema_version() == 4);
   REQUIRE(TableExists(database_path, "agents"));
-  REQUIRE(TableExists(database_path, "heartbeats"));
+  REQUIRE_FALSE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
   REQUIRE(TableExists(database_path, "audit_events"));
   REQUIRE(TableExists(database_path, "tasks"));
@@ -362,7 +352,7 @@ TEST_CASE("server database claims queued task only once") {
           "assigned");
 }
 
-TEST_CASE("http2 control service registers agent and stores heartbeat") {
+TEST_CASE("http2 control service registers agent and accepts heartbeat") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -382,21 +372,37 @@ TEST_CASE("http2 control service registers agent and stores heartbeat") {
           zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(heartbeat_result.message == "ok");
   REQUIRE(database.AgentExists("agent-1"));
-  REQUIRE(CountRows(database_path, "heartbeats") == 1);
-  REQUIRE(CountRows(database_path, "audit_events") == 2);
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
   REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
-          "2026-05-21T10:00:05Z");
+          "2026-05-21T10:00:00Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_online_at") ==
+          "2026-05-21T10:00:00Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_offline_at").empty());
+  REQUIRE(ReadAgentField(database_path, "agent-1", "agent_version") ==
+          "0.1.0");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "status") == "online");
   REQUIRE(ReadAuditField(database_path, "http2-register", "event_type") ==
           "agent.register");
-  REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "event_type") ==
-          "agent.heartbeat");
-  REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "payload_json")
-              .find("\"status\":\"ok\"") != std::string::npos);
-  proto::AgentEvent stored_heartbeat;
-  const auto heartbeat_blob = ReadHeartbeatEventBlob(database_path, "agent-1");
-  REQUIRE(stored_heartbeat.ParseFromString(heartbeat_blob));
-  REQUIRE(stored_heartbeat.message_id() == "http2-heartbeat");
-  REQUIRE(stored_heartbeat.payload_case() == proto::AgentEvent::kHeartbeat);
+  REQUIRE(ReadAuditField(database_path, "http2-heartbeat", "event_type")
+              .empty());
+
+  database.MarkAgentOffline("agent-1", "2026-05-21T10:00:10Z");
+  REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
+          "2026-05-21T10:00:10Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_offline_at") ==
+          "2026-05-21T10:00:10Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "status") == "offline");
+
+  const auto reregister_result = service.HandleAgentEvent(RegisterEvent(
+      "http2-reregister", "agent-1", "2026-05-21T10:00:20Z"));
+  REQUIRE(reregister_result.status ==
+          zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
+          "2026-05-21T10:00:20Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_online_at") ==
+          "2026-05-21T10:00:20Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_offline_at").empty());
+  REQUIRE(ReadAgentField(database_path, "agent-1", "status") == "online");
 }
 
 TEST_CASE("http2 control service stores asset snapshot display columns and blob") {
@@ -453,12 +459,7 @@ TEST_CASE("http2 control service rejects invalid and unregistered events") {
   REQUIRE(heartbeat_result.status ==
           zfleet::server::ControlEventStatus::kNotFound);
   REQUIRE(heartbeat_result.message == "agent not registered");
-  REQUIRE(CountRows(database_path, "heartbeats") == 0);
-  REQUIRE(CountRows(database_path, "audit_events") == 1);
-  REQUIRE(ReadAuditField(
-              database_path, "http2-unregistered-heartbeat", "payload_json")
-              .find("\"error_code\":\"agent_not_registered\"") !=
-          std::string::npos);
+  REQUIRE(CountRows(database_path, "audit_events") == 0);
 }
 
 TEST_CASE("http2 control service stores task running and result events") {
@@ -574,15 +575,19 @@ TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
 
   const auto old_connection = registry.FindByConnection("conn-1");
   const auto current_connection = registry.FindByAgent("agent-1");
-  REQUIRE(old_connection.has_value());
-  REQUIRE(old_connection->disconnected_at == "2026-05-21T10:00:11Z");
+  REQUIRE_FALSE(old_connection.has_value());
   REQUIRE(current_connection.has_value());
   REQUIRE(current_connection->connection_id == "conn-2");
   REQUIRE(registry.ActiveConnectionCount() == 1);
 
-  registry.CloseConnection("conn-2", "2026-05-21T10:00:20Z");
+  const auto closed =
+      registry.CloseConnection("conn-2", "2026-05-21T10:00:20Z");
 
+  REQUIRE(closed.has_value());
+  REQUIRE(closed->agent_id == "agent-1");
+  REQUIRE(closed->was_current_agent_connection);
   REQUIRE_FALSE(registry.FindByAgent("agent-1").has_value());
+  REQUIRE_FALSE(registry.FindByConnection("conn-2").has_value());
   REQUIRE(registry.ActiveConnectionCount() == 0);
 }
 
@@ -621,9 +626,10 @@ TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
           zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(complete_results[1].status ==
           zfleet::server::ControlEventStatus::kAccepted);
-  REQUIRE(CountRows(database_path, "heartbeats") == 1);
   REQUIRE(ReadAgentLastSeen(database_path, "agent-1") ==
-          "2026-05-21T11:00:05Z");
+          "2026-05-21T11:00:00Z");
+  REQUIRE(ReadAgentField(database_path, "agent-1", "last_online_at") ==
+          "2026-05-21T11:00:00Z");
   const auto connection = registry.FindByAgent("agent-1");
   REQUIRE(connection.has_value());
   REQUIRE(connection->connection_id == "conn-1");

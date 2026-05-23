@@ -570,8 +570,13 @@ void HandleConnection(std::shared_ptr<tcp::socket> socket,
                 ex.what());
   }
 
-  registry->CloseConnection(context.connection_id,
-                            zfleet::core::NowUtcRfc3339());
+  const auto disconnected_at = zfleet::core::NowUtcRfc3339();
+  const auto closed = registry->CloseConnection(context.connection_id,
+                                                disconnected_at);
+  if (closed.has_value() && closed->agent_id.has_value() &&
+      closed->was_current_agent_connection) {
+    store->MarkAgentOffline(*closed->agent_id, disconnected_at);
+  }
 }
 
 } // namespace

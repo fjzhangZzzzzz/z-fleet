@@ -280,16 +280,19 @@ bool WaitForTaskState(const std::filesystem::path& database_path,
   return ReadTaskState(database_path, task_id) == expected_state;
 }
 
-bool WaitForRowCountAtLeast(const std::filesystem::path& database_path,
-                            const std::string& table_name,
-                            int expected_count) {
+bool WaitForSingleTextColumn(const std::filesystem::path& database_path,
+                             const std::string& query_text,
+                             const std::string& parameter,
+                             const std::string& expected_value) {
   for (int attempt = 0; attempt < 100; ++attempt) {
-    if (CountRows(database_path, table_name) >= expected_count) {
+    if (ReadSingleTextColumn(database_path, query_text, parameter) ==
+        expected_value) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  return CountRows(database_path, table_name) >= expected_count;
+  return ReadSingleTextColumn(database_path, query_text, parameter) ==
+         expected_value;
 }
 
 proto::AgentEvent RegisterEvent(std::string message_id,
@@ -561,16 +564,15 @@ TEST_CASE("http2 control dispatcher persists register and heartbeat end to end")
   REQUIRE(results[0].status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(results[1].status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(CountRows(database_path, "agents") == 1);
-  REQUIRE(CountRows(database_path, "heartbeats") == 1);
-  REQUIRE(CountRows(database_path, "audit_events") == 2);
+  REQUIRE(CountRows(database_path, "audit_events") == 1);
   REQUIRE(ReadSingleTextColumn(
               database_path,
               "select agent_id from agents where agent_id = ?",
               "agent-integration-1") == "agent-integration-1");
   REQUIRE(ReadSingleTextColumn(
               database_path,
-              "select agent_id from heartbeats where agent_id = ?",
-              "agent-integration-1") == "agent-integration-1");
+              "select last_online_at from agents where agent_id = ?",
+              "agent-integration-1") == "2026-05-21T12:00:00Z");
 
   const auto connection = registry.FindByAgent("agent-integration-1");
   REQUIRE(connection.has_value());
@@ -610,11 +612,14 @@ TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
   }
 
   REQUIRE(CountRows(database_path, "agents") == 1);
-  REQUIRE(CountRows(database_path, "heartbeats") == 1);
   REQUIRE(ReadSingleTextColumn(
               database_path,
               "select agent_id from agents where agent_id = ?",
               "agent-h2c-1") == "agent-h2c-1");
+  REQUIRE(ReadSingleTextColumn(
+              database_path,
+              "select last_online_at from agents where agent_id = ?",
+              "agent-h2c-1") == "2026-05-21T13:00:00Z");
 }
 
 TEST_CASE("http2 control client exposes rejected command stream status") {
@@ -897,7 +902,11 @@ TEST_CASE("agent runtime completes task over http2 control channel") {
               database_path,
               "select agent_id from agents where agent_id = ?",
               agent_state.agent_id) == agent_state.agent_id);
-  REQUIRE(CountRows(database_path, "heartbeats") >= 1);
+  REQUIRE_FALSE(ReadSingleTextColumn(
+                    database_path,
+                    "select last_online_at from agents where agent_id = ?",
+                    agent_state.agent_id)
+                    .empty());
   REQUIRE(CountRows(database_path, "task_results") == 1);
   REQUIRE(task_completed);
   REQUIRE(ReadTaskState(database_path, "task-runtime-1") == "succeeded");
@@ -953,7 +962,9 @@ TEST_CASE("agent runtime reconnects and registers again after server restart") {
     }
   } runtime_cleanup{runtime, runtime_thread};
 
-  REQUIRE(WaitForRowCountAtLeast(database_path, "heartbeats", 1));
+  REQUIRE(WaitForSingleTextColumn(
+      database_path, "select status from agents where agent_id = ?",
+      agent_state.agent_id, "online"));
 
   first_server.Stop();
   if (first_server_thread.joinable()) {

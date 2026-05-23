@@ -17,11 +17,19 @@ struct ControlConnectionSnapshot {
   std::optional<std::string> last_heartbeat_at;
 };
 
+struct ClosedConnectionSnapshot {
+  std::string connection_id;
+  std::optional<std::string> agent_id;
+  std::string disconnected_at;
+  bool was_current_agent_connection = false;
+};
+
 class Http2ConnectionRegistry {
  public:
   void OpenConnection(std::string connection_id, std::string connected_at);
-  void CloseConnection(std::string_view connection_id,
-                       std::string disconnected_at);
+  std::optional<ClosedConnectionSnapshot> CloseConnection(
+      std::string_view connection_id,
+      std::string disconnected_at);
   void BindAgent(std::string_view connection_id,
                  std::string agent_id,
                  std::string observed_at);
