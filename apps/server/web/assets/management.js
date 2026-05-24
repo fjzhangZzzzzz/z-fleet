@@ -16,6 +16,16 @@
     });
   }
 
+  function formatSystem(asset) {
+    const parts = [asset.os, asset.os_version].filter(function (value) {
+      return value != null && value !== "";
+    });
+    if (!parts.length) {
+      return "-";
+    }
+    return parts.map(escapeHtml).join(" ");
+  }
+
   function setStatus(page, text, ok) {
     const node = document.querySelector('[data-status-for="' + page + '"]');
     if (!node) return;
@@ -136,7 +146,7 @@
       detailBody.innerHTML = "<h2>" + escapeHtml(asset.hostname || agent.agent_id) + "</h2>" +
         '<p class="detail-id">' + escapeHtml(agent.agent_id) + "</p><dl>" +
         "<dt>状态</dt><dd>" + escapeHtml(agent.status) + "</dd>" +
-        "<dt>系统</dt><dd>" + escapeHtml(asset.os) + " " + escapeHtml(asset.os_version) + "</dd>" +
+        "<dt>系统</dt><dd>" + formatSystem(asset) + "</dd>" +
         "<dt>架构</dt><dd>" + escapeHtml(asset.arch) + "</dd>" +
         "<dt>版本</dt><dd>" + escapeHtml(agent.agent_version) + "</dd>" +
         "<dt>最后在线</dt><dd>" + escapeHtml(agent.last_online_at) + "</dd></dl>" +
