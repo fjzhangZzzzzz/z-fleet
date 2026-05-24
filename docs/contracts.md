@@ -1,12 +1,14 @@
 # 契约
 
 状态：草案
-最后更新：2026-05-13
-关联里程碑：v0.1, v0.2
+最后更新：2026-05-24
+关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
 
 本文档记录 Agent / Server 之间的共享契约，包括协议版本、消息结构、任务模型、审计事件、错误码和兼容性约束。
+
+Web 管理 API 属于 Server 管理面契约，不属于 Agent 控制通道。管理 API 的架构决策见 [ADR 0010](adr/0010-web-management-entry.md)。本文件先记录 API 边界和稳定字段方向；具体响应 schema 在实现对应接口时同步补齐。
 
 ## 协议版本管理
 
@@ -24,6 +26,94 @@ v0.1 约定如下：
 - ID 字段统一使用字符串类型；v0.1 推荐 UUID。
 - `request_id` 由请求发起方生成，用于串联请求、响应、日志和审计事件。
 - `agent_id` 是 Agent 稳定身份，首次生成后本地持久化，除非显式重置，否则重启后必须保持不变。
+
+## 管理 API 边界
+
+浏览器和运维集成使用 `/api/v1/...` 管理 API。管理 API 不复用 Agent 控制通道，不读取或写入 `/v1/control/events`、`/v1/control/commands` 的 protobuf frame。
+
+管理 API 最低范围：
+
+```text
+GET  /api/v1/install/options
+POST /api/v1/install/tokens
+GET  /api/v1/packages/agent/{package_id}/download
+
+GET /api/v1/agents
+GET /api/v1/agents/{agent_id}
+GET /api/v1/agents/{agent_id}/assets/latest
+GET /api/v1/agents/{agent_id}/assets
+
+GET  /api/v1/admin/packages
+POST /api/v1/admin/packages
+GET  /api/v1/admin/packages/{package_id}
+POST /api/v1/admin/packages/{package_id}/validate
+POST /api/v1/admin/packages/{package_id}/publish
+POST /api/v1/admin/packages/{package_id}/retire
+```
+
+### 安装选项
+
+`GET /api/v1/install/options` 返回当前可用于安装页的发布信息。建议字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `server_url` | `string` | yes | Agent 连接 Server 的地址 |
+| `channel` | `string` | yes | 默认安装 channel，例如 `stable` |
+| `platform` | `string` | yes | 平台，例如 `linux`、`windows` |
+| `arch` | `string` | yes | 架构，例如 `x86_64`、`arm64` |
+| `agent_version` | `string` | yes | 当前发布的 Agent 版本 |
+| `package_id` | `string` | yes | 安装包 ID |
+| `sha256` | `string` | yes | 安装包摘要 |
+| `download_url` | `string` | yes | 安装包下载路径 |
+
+### 注册 token
+
+`POST /api/v1/install/tokens` 生成 Agent 首次安装或 bootstrap 使用的注册 token。token 明文只在创建响应中返回一次，Server 持久化层只保存哈希。
+
+请求字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `purpose` | `string` | yes | 固定用途，例如 `agent_register` |
+| `expires_at` | `string` | yes | 过期时间，UTC RFC 3339 |
+| `channel` | `string` | no | 限定安装 channel |
+| `platform` | `string` | no | 限定平台 |
+| `arch` | `string` | no | 限定架构 |
+| `max_uses` | `integer` | no | 最大使用次数 |
+
+成功响应字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `token_id` | `string` | yes | token 标识 |
+| `token` | `string` | yes | token 明文，只返回一次 |
+| `expires_at` | `string` | yes | 过期时间 |
+
+### 安装包管理
+
+安装包状态：
+
+| 状态 | 含义 |
+| --- | --- |
+| `uploaded` | 已上传到 staging 或包仓库，尚未完成校验 |
+| `validated` | manifest、路径、大小和 SHA-256 校验通过 |
+| `published` | 已发布到至少一个 channel |
+| `retired` | 不再推荐安装，保留审计和回滚参考 |
+| `rejected` | 校验失败，不允许发布 |
+
+发布 channel：
+
+| channel | 含义 |
+| --- | --- |
+| `stable` | 默认推荐版本 |
+| `candidate` | 灰度验证版本 |
+| `dev` | 开发和测试版本 |
+
+约束：
+
+- channel 是 Server 侧发布指针，不改变 package manifest、安装包摘要或安装目录中的 `releases/<version>` 语义。
+- 同一 `component + platform + arch + channel` 同一时间只能有一个默认发布包。
+- 上传、校验、发布、退役和下载失败路径必须使用稳定错误码，并写入审计事件。
 
 ## v0.1 消息
 

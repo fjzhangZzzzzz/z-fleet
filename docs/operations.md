@@ -1,12 +1,14 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-21
+最后更新：2026-05-24
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
 
 本文档记录当前可执行的本地构建、测试、运行、打包、安装、状态、回滚和排障流程。安装模型以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 为决策源。
+
+Server 内置 Web 管理入口、安装包 channel 和注册 token 的目标运维模型以 [ADR 0010：Server 内置 Web 管理入口](adr/0010-web-management-entry.md) 为决策源。当前文档中标注为“规划”的 Web 管理流程不代表现有命令已经实现。
 
 ## 构建与测试
 
@@ -94,6 +96,24 @@ Server 当前最小本地运行方式：
 
 Server 支持 `-c, --config` 指定配置文件，并可通过 `--database-path`、`--control-listen`、`--log-level` 覆盖配置项。未指定配置文件时默认使用安装目录下的 `etc/server.toml`；通过 launcher stub 启动时，安装目录由固定 `bin/zfleet_server` 路径自动传递给真实进程。启动时会自动初始化 SQLite 数据库和当前最小 schema。
 
+规划中的 Web 管理面由 `zfleet_server` 内置托管，配置应与 Agent 控制监听分离：
+
+```toml
+[server]
+control_listen = "127.0.0.1:8081"
+management_listen = "127.0.0.1:8080"
+database_path = "data/zfleet.db"
+package_repository = "data/packages"
+web_static_dir = "share/web"
+```
+
+安全默认值：
+
+- `management_listen` 默认应绑定本机地址；
+- 对非本机开放前必须配置认证边界，例如本地 admin token 或反向代理认证；
+- 控制通道和管理 API 使用不同路径，不通过 Web 调用 Agent HTTP/2 protobuf 控制流；
+- 安装包上传、发布、退役和注册 token 操作必须写审计事件。
+
 Agent 当前最小本地运行方式：
 
 ```bash
@@ -170,6 +190,34 @@ manifest 最小 schema：
 ```
 
 当前 `min_installer_version` 只要求存在且非空，不做版本比较；当前不要求 `META/manifest.sig`，尚不做 manifest 签名验证。
+
+## Web 安装包发布规划
+
+Web 后台安装包管理面向 Agent package，不改变 `zfleet_installer` 的安装语义。channel 是 Server 侧发布指针，不写入 package manifest，也不改变目标设备上的 `releases/<version>`、`active-version` 和 `previous-version`。
+
+规划中的发布流程：
+
+1. 管理员在 `/admin/packages` 上传 Agent ZIP package。
+2. Server 将上传内容流式写入 staging 文件。
+3. Server 解析 `META/manifest.json`，校验 component、version、路径、文件大小和 SHA-256。
+4. 校验通过后写入包仓库和 `agent_packages` 记录。
+5. 管理员将 package 发布到 `stable`、`candidate` 或 `dev` channel。
+6. 安装页 `/install` 根据 channel 展示下载链接、摘要和安装命令。
+
+channel 约束：
+
+- 初始 channel 为 `stable`、`candidate`、`dev`。
+- 同一 `component + platform + arch + channel` 同一时间只能有一个默认发布包。
+- 发布新包只移动 channel 指针，不覆盖旧包本体。
+- 退役 package 不物理删除，保留审计和回滚参考。
+
+规划中的注册 token 流程：
+
+1. 管理员在安装页或后台生成注册 token。
+2. token 可绑定用途、过期时间、channel、platform、arch 和最大使用次数。
+3. Server 只保存 token 哈希，明文只在创建响应中返回一次。
+4. 安装命令携带 token 完成首次注册或 bootstrap。
+5. token 使用、过期、吊销和验证失败都写审计事件。
 
 ## 安装部署
 
