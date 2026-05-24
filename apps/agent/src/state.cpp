@@ -11,8 +11,21 @@
 namespace zfleet::agent {
 namespace {
 
+toml::table ParseTomlFileOrThrow(const std::filesystem::path& path) {
+#if TOML_EXCEPTIONS
+  return toml::parse_file(path.string());
+#else
+  const auto parsed = toml::parse_file(path.string());
+  if (!parsed) {
+    throw std::runtime_error("failed to parse state: " +
+                             std::string(parsed.error().description()));
+  }
+  return parsed.table();
+#endif
+}
+
 AgentState parse_state(const std::filesystem::path& state_path) {
-  const auto table = toml::parse_file(state_path.string());
+  const auto table = ParseTomlFileOrThrow(state_path);
   const auto* state = table.get_as<toml::table>("state");
   if (state == nullptr) {
     throw std::runtime_error("missing [state] table");

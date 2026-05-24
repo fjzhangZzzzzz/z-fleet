@@ -14,7 +14,7 @@
 #include "zfleet/transport/frame_codec.h"
 #include "zfleet/transport/http2_session.h"
 
-#include <nghttp2/nghttp2.h>
+#include "zfleet/transport/nghttp2_compat.h"
 
 #include <algorithm>
 #include <chrono>

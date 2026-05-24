@@ -151,9 +151,15 @@ TEST_CASE("create list read and extract zip archive") {
   REQUIRE(std::any_of(entries.begin(), entries.end(), [](const auto& entry) {
     return entry.path == "META/manifest.json" && entry.uncompressed_size > 0U;
   }));
+#ifndef _WIN32
   REQUIRE(std::any_of(entries.begin(), entries.end(), [](const auto& entry) {
     return entry.path == "payload/bin/zfleet_agent" && entry.executable;
   }));
+#else
+  REQUIRE(std::any_of(entries.begin(), entries.end(), [](const auto& entry) {
+    return entry.path == "payload/bin/zfleet_agent" && !entry.executable;
+  }));
+#endif
 
   const auto manifest = zfleet::package::ReadArchiveFile(archive_path,
                                                          "META/manifest.json");

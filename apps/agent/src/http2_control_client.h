@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <chrono>
 #include <map>
-#include <nghttp2/nghttp2.h>
+#include "zfleet/transport/nghttp2_compat.h"
 #include <optional>
 #include <utility>
 #include <span>

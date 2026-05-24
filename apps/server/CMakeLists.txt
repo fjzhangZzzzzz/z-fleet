@@ -17,6 +17,7 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(SQLiteCpp CONFIG REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 target_link_libraries(zfleet_server_app
   PUBLIC
@@ -25,6 +26,7 @@ target_link_libraries(zfleet_server_app
     nlohmann_json::nlohmann_json
     SQLiteCpp
     tomlplusplus::tomlplusplus
+    unofficial::sqlite3::sqlite3
     zfleet::core
     zfleet::crypto
     zfleet::package

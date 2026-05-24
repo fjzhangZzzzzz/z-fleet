@@ -20,6 +20,19 @@ std::string PathToConfigString(const std::filesystem::path& path) {
   return path.generic_string();
 }
 
+toml::table ParseTomlFileOrThrow(const std::filesystem::path& path) {
+#if TOML_EXCEPTIONS
+  return toml::parse_file(path.string());
+#else
+  const auto parsed = toml::parse_file(path.string());
+  if (!parsed) {
+    throw std::runtime_error("failed to parse config: " +
+                             std::string(parsed.error().description()));
+  }
+  return parsed.table();
+#endif
+}
+
 void LoadLogConfig(const toml::table& table,
                    zfleet::core::log::Config* config) {
   const auto* log = table.get_as<toml::table>("log");
@@ -56,7 +69,7 @@ ServerConfig LoadConfig(
     return config;
   }
 
-  const auto table = toml::parse_file(config_path->string());
+  const auto table = ParseTomlFileOrThrow(*config_path);
 
   LoadLogConfig(table, &config.log);
 

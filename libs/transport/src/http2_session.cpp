@@ -1,6 +1,5 @@
 #include "zfleet/transport/http2_session.h"
-
-#include <nghttp2/nghttp2.h>
+#include "zfleet/transport/nghttp2_compat.h"
 
 namespace zfleet::transport {
 

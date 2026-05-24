@@ -5,7 +5,7 @@
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/write.hpp>
-#include <nghttp2/nghttp2.h>
+#include "zfleet/transport/nghttp2_compat.h"
 
 #include <algorithm>
 #include <array>

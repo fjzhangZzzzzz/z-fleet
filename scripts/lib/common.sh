@@ -70,6 +70,15 @@ zf_to_native_path_if_needed() {
   fi
 }
 
+zf_to_windows_path_if_needed() {
+  local path="$1"
+  if zf_is_windows_host && command -v cygpath >/dev/null 2>&1; then
+    cygpath -aw "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
 zf_to_posix_path_if_needed() {
   local path="$1"
   if zf_is_windows_host && command -v cygpath >/dev/null 2>&1; then
@@ -77,6 +86,71 @@ zf_to_posix_path_if_needed() {
   else
     printf '%s\n' "$path"
   fi
+}
+
+zf_to_posix_path_list_if_needed() {
+  local path="$1"
+  if zf_is_windows_host && command -v cygpath >/dev/null 2>&1; then
+    cygpath -aup "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+zf_vswhere_path() {
+  printf '%s\n' '/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe'
+}
+
+zf_find_vs_devcmd() {
+  [[ -f "$(zf_vswhere_path)" ]] || return 1
+
+  local install_path
+  install_path="$(
+    "$(zf_vswhere_path)" \
+      -latest \
+      -products '*' \
+      -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+      -property installationPath 2>/dev/null | tr -d '\r'
+  )"
+  [[ -n "$install_path" ]] || return 1
+  install_path="$(zf_to_posix_path_if_needed "$install_path")"
+
+  local devcmd_path="$install_path/Common7/Tools/VsDevCmd.bat"
+  if [[ ! -f "$devcmd_path" ]]; then
+    devcmd_path="$install_path/Common7/Tools/LaunchDevCmd.bat"
+  fi
+  [[ -f "$devcmd_path" ]] || return 1
+
+  printf '%s\n' "$devcmd_path"
+}
+
+zf_run_in_msvc_env() {
+  if ! zf_is_windows_host; then
+    "$@"
+    return $?
+  fi
+
+  local devcmd_path
+  devcmd_path="$(zf_find_vs_devcmd)" ||
+    zf_fail_exec "Visual Studio Build Tools not found; expected VsDevCmd.bat or LaunchDevCmd.bat"
+
+  local devcmd_native
+  devcmd_native="$(zf_to_windows_path_if_needed "$devcmd_path")"
+
+  local env_script
+  env_script="$(mktemp "${TMPDIR:-/tmp}/zfleet-vsdevcmd.XXXXXX.cmd")" ||
+    zf_fail_exec "failed to create temporary Visual Studio environment script"
+  cat > "$env_script" <<EOF
+@echo off
+call "$devcmd_native" -arch=x64 -host_arch=x64 >nul
+if errorlevel 1 exit /b 1
+%*
+EOF
+
+  local exit_code=0
+  "$env_script" "$@" || exit_code=$?
+  rm -f "$env_script"
+  return "$exit_code"
 }
 
 zf_component_binary_name() {

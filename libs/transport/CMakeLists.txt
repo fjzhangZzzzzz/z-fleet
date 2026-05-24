@@ -1,5 +1,23 @@
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(NGHTTP2 REQUIRED IMPORTED_TARGET libnghttp2)
+find_path(NGHTTP2_INCLUDE_DIR
+  NAMES nghttp2/nghttp2.h
+  REQUIRED
+)
+
+find_library(NGHTTP2_LIBRARY
+  NAMES nghttp2
+  REQUIRED
+)
+
+add_library(zfleet_nghttp2 INTERFACE)
+add_library(zfleet::nghttp2 ALIAS zfleet_nghttp2)
+
+target_include_directories(zfleet_nghttp2 SYSTEM INTERFACE
+  "${NGHTTP2_INCLUDE_DIR}"
+)
+
+target_link_libraries(zfleet_nghttp2 INTERFACE
+  "${NGHTTP2_LIBRARY}"
+)
 
 add_library(zfleet_transport
   src/frame_codec.cpp
@@ -15,7 +33,7 @@ target_include_directories(zfleet_transport
 
 target_link_libraries(zfleet_transport
   PUBLIC
-    PkgConfig::NGHTTP2
+    zfleet::nghttp2
 )
 
 target_compile_features(zfleet_transport PUBLIC cxx_std_20)

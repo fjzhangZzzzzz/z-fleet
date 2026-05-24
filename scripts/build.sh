@@ -60,5 +60,5 @@ zf_apply_build_jobs "$jobs"
 zf_vcpkg_bootstrap
 zf_vcpkg_setup_project_env
 
-cmake --preset "$preset"
-cmake --build --preset "$preset"
+zf_run_in_msvc_env cmake --preset "$preset"
+zf_run_in_msvc_env cmake --build --preset "$preset"
