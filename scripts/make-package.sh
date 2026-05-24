@@ -79,7 +79,7 @@ case "$preset" in
 esac
 
 source_binary="$repo_root/build/$preset/apps/$component/$binary_name"
-version_file="$repo_root/build/$preset/apps/$component/${binary_name}_version.txt"
+version_file="$repo_root/build/$preset/apps/$component/zfleet_${component}_version.txt"
 packager_binary_name="zfleet_packager"
 if zf_is_windows_host; then
   packager_binary_name="${packager_binary_name}.exe"
