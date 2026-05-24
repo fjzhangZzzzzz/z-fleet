@@ -9,6 +9,8 @@ namespace zfleet::server {
 struct AgentPackageMetadata {
   std::string component;
   std::string version;
+  std::string platform;
+  std::string arch;
   std::string min_installer_version;
   std::uint64_t size_bytes = 0;
   std::string sha256;

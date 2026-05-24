@@ -12,6 +12,8 @@ int main(int argc, char** argv) {
 
   std::string component_arg;
   std::string version_arg;
+  std::string platform_arg;
+  std::string arch_arg;
   std::string payload_dir_arg;
   std::string entry_arg;
   std::string output_dir_arg;
@@ -23,6 +25,10 @@ int main(int argc, char** argv) {
   pack_command->add_option("--component", component_arg, "Component name")
       ->required();
   pack_command->add_option("--version", version_arg, "Package version")
+      ->required();
+  pack_command->add_option("--platform", platform_arg, "Target platform")
+      ->required();
+  pack_command->add_option("--arch", arch_arg, "Target architecture")
       ->required();
   pack_command->add_option("--payload-dir", payload_dir_arg,
                            "Payload directory")
@@ -48,6 +54,8 @@ int main(int argc, char** argv) {
     const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
         .component = component_arg,
         .version = version_arg,
+        .platform = platform_arg,
+        .arch = arch_arg,
         .payload_dir = payload_dir_arg,
         .entry_path = entry_arg,
         .output_dir = output_dir_arg,

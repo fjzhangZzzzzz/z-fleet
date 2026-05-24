@@ -78,6 +78,15 @@ std::string ValidateVersion(std::string_view version) {
   return validation.value;
 }
 
+std::string ValidatePackageTarget(std::string_view value, const char* field_name) {
+  const auto validation = zfleet::core::ValidatePathSegment(value);
+  if (!validation.ok) {
+    throw std::invalid_argument(std::string(field_name) + " " +
+                                validation.message);
+  }
+  return validation.value;
+}
+
 }  // namespace
 
 Manifest ParseManifestJson(std::string_view manifest_json) {
@@ -90,6 +99,8 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
       .schema_version = RequiredInt(parsed, "schema_version"),
       .component = Required<std::string>(parsed, "component"),
       .version = Required<std::string>(parsed, "version"),
+      .platform = Required<std::string>(parsed, "platform"),
+      .arch = Required<std::string>(parsed, "arch"),
       .min_installer_version =
           Required<std::string>(parsed, "min_installer_version"),
       .files = {},
@@ -102,6 +113,8 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
     throw std::invalid_argument("min_installer_version must not be empty");
   }
   manifest.version = ValidateVersion(manifest.version);
+  manifest.platform = ValidatePackageTarget(manifest.platform, "platform");
+  manifest.arch = ValidatePackageTarget(manifest.arch, "arch");
 
   const auto component_validation =
       zfleet::core::ValidateComponent(manifest.component);
@@ -152,6 +165,8 @@ std::string SerializeManifestJson(const Manifest& manifest) {
   payload["schema_version"] = manifest.schema_version;
   payload["component"] = manifest.component;
   payload["version"] = manifest.version;
+  payload["platform"] = manifest.platform;
+  payload["arch"] = manifest.arch;
   payload["min_installer_version"] = manifest.min_installer_version;
 
   ordered_json files = ordered_json::array();

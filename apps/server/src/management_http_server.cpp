@@ -6,6 +6,7 @@
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
 #include "zfleet/crypto/sha256.h"
+#include "zfleet/protocol/json_codec.h"
 
 #include <boost/asio/error.hpp>
 #include <boost/asio/steady_timer.hpp>
@@ -43,6 +44,22 @@ struct HttpResponse {
   std::string content_type = "application/json";
   std::string body;
 };
+
+void RecordManagementAudit(ServerDatabase* database,
+                           zfleet::protocol::AuditEventType event_type,
+                           const std::string& request_id,
+                           const std::string& result,
+                           const std::string& payload_json) {
+  database->RecordAuditEvent(zfleet::protocol::AuditEvent{
+      .audit_id = zfleet::core::GenerateUuid(),
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .agent_id = std::nullopt,
+      .request_id = request_id,
+      .event_type = event_type,
+      .result = result,
+      .payload_json = payload_json,
+  });
+}
 
 tcp::endpoint ParseListenAddress(const std::string& listen_address) {
   const auto delimiter = listen_address.rfind(':');
@@ -171,6 +188,8 @@ nlohmann::json ToJson(const AssetSnapshotSummary& snapshot) {
       {"os", snapshot.os},
       {"arch", snapshot.arch},
       {"agent_version", snapshot.agent_version},
+      {"applications", snapshot.applications},
+      {"services", snapshot.services},
   };
   if (snapshot.os_version.has_value()) {
     body["os_version"] = *snapshot.os_version;
@@ -241,8 +260,6 @@ HttpResponse CommitAgentPackageUpload(
                          "package upload body is empty");
   }
 
-  const auto platform = QueryValue(request, "platform", "linux");
-  const auto arch = QueryValue(request, "arch", "x86_64");
   const auto filename = QueryValue(request, "filename", "agent.zip");
   const auto now = zfleet::core::NowUtcRfc3339();
   try {
@@ -255,8 +272,8 @@ HttpResponse CommitAgentPackageUpload(
         .package_id = package_id,
         .component = metadata.component,
         .version = metadata.version,
-        .platform = platform,
-        .arch = arch,
+        .platform = metadata.platform,
+        .arch = metadata.arch,
         .filename = filename,
         .storage_path = storage_path,
         .size_bytes = metadata.size_bytes,
@@ -267,6 +284,14 @@ HttpResponse CommitAgentPackageUpload(
         .validated_at = now,
     };
     database->UpsertAgentPackage(record);
+    RecordManagementAudit(
+        database, zfleet::protocol::AuditEventType::package_validated,
+        package_id, "success",
+        zfleet::protocol::SerializeAuditPayload(
+            {{"package_id", package_id},
+             {"version", metadata.version},
+             {"platform", metadata.platform},
+             {"arch", metadata.arch}}));
     return JsonResponse(ToJson(record), 201);
   } catch (const std::exception& ex) {
     std::error_code ignored;
@@ -281,7 +306,14 @@ HttpResponse HandleApi(const HttpRequest& request,
   if (request.method == "GET" && request.path == "/api/v1/agents") {
     nlohmann::json agents = nlohmann::json::array();
     for (const auto& agent : database->ListAgents()) {
-      agents.push_back(ToJson(agent));
+      auto body = ToJson(agent);
+      if (const auto latest = database->FindLatestAssetSnapshot(agent.agent_id);
+          latest.has_value()) {
+        body["latest_asset"] = ToJson(*latest);
+      } else {
+        body["latest_asset"] = nullptr;
+      }
+      agents.push_back(std::move(body));
     }
     return JsonResponse({{"agents", std::move(agents)}});
   }
@@ -352,16 +384,20 @@ HttpResponse HandleApi(const HttpRequest& request,
     const auto input = request.body.empty() ? nlohmann::json::object()
                                             : nlohmann::json::parse(request.body);
     const auto channel = input.value("channel", "stable");
-    const auto platform = input.value("platform", package->platform);
-    const auto arch = input.value("arch", package->arch);
     const auto published_by =
         input.contains("published_by")
             ? std::optional<std::string>{
                   input["published_by"].get<std::string>()}
             : std::nullopt;
     const auto published_at = zfleet::core::NowUtcRfc3339();
-    database->PublishAgentPackage(package_id, channel, platform, arch,
+    database->PublishAgentPackage(package_id, channel, package->platform,
+                                  package->arch,
                                   published_by, published_at);
+    RecordManagementAudit(
+        database, zfleet::protocol::AuditEventType::package_published,
+        package_id, "success",
+        zfleet::protocol::SerializeAuditPayload(
+            {{"package_id", package_id}, {"channel", channel}}));
     const auto published = database->FindAgentPackage(package_id);
     return JsonResponse(ToJson(*published));
   }
@@ -396,6 +432,11 @@ HttpResponse HandleApi(const HttpRequest& request,
   if (request.method == "POST" && request.path == "/api/v1/install/tokens") {
     const auto input = request.body.empty() ? nlohmann::json::object()
                                             : nlohmann::json::parse(request.body);
+    if (!input.contains("expires_at") ||
+        input.value("expires_at", std::string{}).empty()) {
+      return ErrorResponse(400, "token_expiry_required",
+                           "expires_at is required");
+    }
     const auto now = zfleet::core::NowUtcRfc3339();
     const auto token_id = zfleet::core::GenerateUuid();
     const auto token_value = zfleet::core::GenerateUuid();
@@ -418,9 +459,14 @@ HttpResponse HandleApi(const HttpRequest& request,
         .use_count = 0,
         .status = "active",
         .created_at = now,
-        .expires_at = input.value("expires_at", now),
+        .expires_at = input["expires_at"].get<std::string>(),
     };
     database->CreateRegistrationToken(token);
+    RecordManagementAudit(
+        database, zfleet::protocol::AuditEventType::registration_token_created,
+        token_id, "success",
+        zfleet::protocol::SerializeAuditPayload(
+            {{"token_id", token_id}, {"purpose", token.purpose}}));
     return JsonResponse({{"token_id", token_id},
                          {"token", token_value},
                          {"expires_at", token.expires_at}},

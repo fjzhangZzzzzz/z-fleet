@@ -71,6 +71,11 @@ AgentConfig LoadConfig(
       config.control_url = *value;
     }
   }
+  if (const auto* node = agent->get("registration_token"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.registration_token = *value;
+    }
+  }
 
   if (const auto* node = agent->get("data_dir"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
@@ -127,6 +132,7 @@ void SaveConfig(const AgentConfig& config,
       "agent",
       toml::table{
           {"control_url", config.control_url},
+          {"registration_token", config.registration_token},
           {"data_dir", PathToConfigString(config.data_dir)},
           {"state_path", PathToConfigString(config.state_path)},
           {"heartbeat_interval_seconds",

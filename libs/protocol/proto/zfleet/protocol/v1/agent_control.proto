@@ -42,6 +42,7 @@ message AgentRegisterEvent {
   string hostname = 2;
   string os = 3;
   string arch = 4;
+  string registration_token = 5;
 }
 
 message HeartbeatEvent {
@@ -54,6 +55,8 @@ message AssetSnapshotEvent {
   string os_version = 3;
   string arch = 4;
   string agent_version = 5;
+  repeated string applications = 6;
+  repeated string services = 7;
 }
 
 message TaskRunningEvent {

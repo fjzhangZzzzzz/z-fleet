@@ -123,6 +123,8 @@ AgentPackageMetadata ValidateAgentPackageUpload(
   AgentPackageMetadata metadata{
       .component = std::move(manifest.component),
       .version = std::move(manifest.version),
+      .platform = std::move(manifest.platform),
+      .arch = std::move(manifest.arch),
       .min_installer_version = std::move(manifest.min_installer_version),
       .size_bytes = FileSizeBytes(staged_package_path),
       .sha256 = zfleet::crypto::Sha256FileHex(staged_package_path),

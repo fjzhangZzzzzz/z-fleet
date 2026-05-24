@@ -8,7 +8,7 @@
 
 本文档记录当前可执行的本地构建、测试、运行、打包、安装、状态、回滚和排障流程。安装模型以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 为决策源。
 
-Server 内置 Web 管理入口、安装包 channel 和注册 token 的目标运维模型以 [ADR 0010：Server 内置 Web 管理入口](adr/0010-web-management-entry.md) 为决策源。当前文档中标注为“规划”的 Web 管理流程不代表现有命令已经实现。
+Server 内置 Web 管理入口、安装包 channel 和注册 token 的运维模型以 [ADR 0010：Server 内置 Web 管理入口](adr/0010-web-management-entry.md) 为决策源。
 
 ## 构建与测试
 
@@ -142,6 +142,7 @@ Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--
 - 默认会先构建对应 preset；`--no-build` 用于复用已有构建产物。
 - 默认生成目录 package；`--zip` 生成标准 `.zip` 安装包。
 - 版本来自 `build/<preset>/apps/<component>/zfleet_<component>_version.txt`，不通过脚本手工输入。
+- 平台与架构由构建 preset 写入 manifest，上传 Web 管理面后不可人工改写。
 - 当前脚本收集组件主程序二进制到 `payload/bin/`；对 Server 还会收集 `apps/server/web/` 到 `payload/share/web/`。动态库或其他运行时依赖自动收集尚未实现。
 
 示例：
@@ -157,6 +158,8 @@ Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--
 ./build/linux-debug/apps/packager/zfleet_packager pack \
   --component agent \
   --version 0.1.0 \
+  --platform linux \
+  --arch x86_64 \
   --payload-dir /tmp/payload \
   --entry bin/zfleet_agent \
   --output-dir /tmp/packages \
@@ -181,6 +184,8 @@ manifest 最小 schema：
   "schema_version": 1,
   "component": "agent",
   "version": "0.1.0",
+  "platform": "linux",
+  "arch": "x86_64",
   "min_installer_version": "0.1.0",
   "files": [
     {
@@ -196,15 +201,15 @@ manifest 最小 schema：
 
 当前 `min_installer_version` 只要求存在且非空，不做版本比较；当前不要求 `META/manifest.sig`，尚不做 manifest 签名验证。
 
-## Web 安装包发布规划
+## Web 安装包发布
 
 Web 后台安装包管理面向 Agent package，不改变 `zfleet_installer` 的安装语义。channel 是 Server 侧发布指针，不写入 package manifest，也不改变目标设备上的 `releases/<version>`、`active-version` 和 `previous-version`。
 
-规划中的发布流程：
+发布流程：
 
 1. 管理员在 `/admin/packages` 上传 Agent ZIP package。
 2. Server 将上传内容流式写入 staging 文件。
-3. Server 解析 `META/manifest.json`，校验 component、version、路径、文件大小和 SHA-256。
+3. Server 解析 `META/manifest.json`，校验 component、version、platform、arch、路径、文件大小和 SHA-256；平台与架构仅从 manifest 读取。
 4. 校验通过后写入包仓库和 `agent_packages` 记录。
 5. 管理员将 package 发布到 `stable`、`candidate` 或 `dev` channel。
 6. 安装页 `/install` 根据 channel 展示下载链接、摘要和安装命令。
@@ -216,13 +221,13 @@ channel 约束：
 - 发布新包只移动 channel 指针，不覆盖旧包本体。
 - 退役 package 不物理删除，保留审计和回滚参考。
 
-规划中的注册 token 流程：
+注册 token 与安装流程：
 
 1. 管理员在安装页或后台生成注册 token。
 2. token 可绑定用途、过期时间、channel、platform、arch 和最大使用次数。
 3. Server 只保存 token 哈希，明文只在创建响应中返回一次。
-4. 安装命令携带 token 完成首次注册或 bootstrap。
-5. token 使用、过期、吊销和验证失败都写审计事件。
+4. 安装页生成可复制命令：下载 Agent ZIP，以 `zfleet_installer apply` 安装，再启动 release 中真实 Agent 二进制并传入控制地址与 token。
+5. Agent 将 token 写入本地配置并在注册事件中发送；Server 对携带 token 的首次注册校验使用次数、过期时间及可选的平台/架构约束，重连不重复消费已用 token。
 
 ## 安装部署
 

@@ -112,6 +112,7 @@ POST /api/v1/admin/packages/{package_id}/retire
 约束：
 
 - channel 是 Server 侧发布指针，不改变 package manifest、安装包摘要或安装目录中的 `releases/<version>` 语义。
+- package manifest 必须携带 `platform` 与 `arch`；上传和发布接口不得使用请求参数覆盖这两个目标字段。
 - 同一 `component + platform + arch + channel` 同一时间只能有一个默认发布包。
 - 上传、校验、发布、退役和下载失败路径必须使用稳定错误码，并写入审计事件。
 
@@ -161,6 +162,7 @@ POST /v1/agents/{agent_id}/assets
 | `hostname` | `string` | yes | 设备主机名 |
 | `os` | `string` | yes | 操作系统名称，例如 `linux`、`windows` |
 | `arch` | `string` | yes | CPU 架构，例如 `x86_64`、`arm64` |
+| `registration_token` | `string` | no | 首次 Web 安装注册时携带的短期 token；已登记 Agent 重连时不重复消费 |
 
 请求示例：
 
@@ -173,7 +175,8 @@ POST /v1/agents/{agent_id}/assets
   "agent_version": "0.1.0",
   "hostname": "devbox-01",
   "os": "linux",
-  "arch": "x86_64"
+  "arch": "x86_64",
+  "registration_token": "一次性明文 token"
 }
 ```
 
@@ -233,8 +236,8 @@ POST /v1/agents/{agent_id}/assets
 
 用途：
 
-- Agent 上报最小资产信息快照。
-- v0.1 只定义基础字段，不定义复杂硬件、软件或进程清单。
+- Agent 上报可展示的资产信息快照。
+- 基础字段用于列表检索；应用和服务清单用于详情抽屉展示。
 
 请求体：
 
@@ -249,6 +252,8 @@ POST /v1/agents/{agent_id}/assets
 | `os_version` | `string` | no | 操作系统版本；未知时可省略 |
 | `arch` | `string` | yes | CPU 架构 |
 | `agent_version` | `string` | yes | Agent 版本 |
+| `applications` | `string[]` | no | 已采集的应用清单 |
+| `services` | `string[]` | no | 已采集的服务清单 |
 
 请求示例：
 
@@ -262,7 +267,9 @@ POST /v1/agents/{agent_id}/assets
   "os": "linux",
   "os_version": "ubuntu-24.04",
   "arch": "x86_64",
-  "agent_version": "0.1.0"
+  "agent_version": "0.1.0",
+  "applications": ["cmake"],
+  "services": ["zfleet-agent"]
 }
 ```
 

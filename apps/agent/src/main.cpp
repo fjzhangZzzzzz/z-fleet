@@ -36,12 +36,15 @@ int main(int argc, char** argv) {
 
   std::string config_path_arg;
   std::string control_url_arg;
+  std::string registration_token_arg;
   std::string data_dir_arg;
   std::string state_path_arg;
   std::string log_level_arg;
   app.add_option("-c,--config", config_path_arg, "Path to agent config file");
   app.add_option("--control-url", control_url_arg,
                  "Override server HTTP/2 control URL");
+  app.add_option("--registration-token", registration_token_arg,
+                 "One-time registration token");
   app.add_option("--data-dir", data_dir_arg, "Override agent data directory");
   app.add_option("--state-path", state_path_arg, "Override agent state path");
   app.add_option("--log-level", log_level_arg, "Override agent log level");
@@ -68,6 +71,9 @@ int main(int argc, char** argv) {
     }
     if (!control_url_arg.empty()) {
       config.control_url = control_url_arg;
+    }
+    if (!registration_token_arg.empty()) {
+      config.registration_token = registration_token_arg;
     }
     if (!log_level_arg.empty()) {
       config.log.level = zfleet::core::log::ParseLevel(log_level_arg);

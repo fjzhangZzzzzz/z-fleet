@@ -64,6 +64,19 @@ zf_validate_component "$component" ||
 mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir"
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
 binary_name="$(zf_component_binary_name "$component")"
+case "$preset" in
+  linux-*)
+    package_platform="linux"
+    package_arch="x86_64"
+    ;;
+  windows-*)
+    package_platform="windows"
+    package_arch="x86_64"
+    ;;
+  *)
+    zf_fail_arg "cannot infer target platform and architecture from preset: $preset"
+    ;;
+esac
 
 source_binary="$repo_root/build/$preset/apps/$component/$binary_name"
 version_file="$repo_root/build/$preset/apps/$component/${binary_name}_version.txt"
@@ -118,6 +131,8 @@ packager_args+=(
   pack
   --component "$component"
   --version "$version"
+  --platform "$package_platform"
+  --arch "$package_arch"
   --payload-dir "$payload_dir_arg"
   --entry "$entry_path"
   --output-dir "$output_dir_arg"

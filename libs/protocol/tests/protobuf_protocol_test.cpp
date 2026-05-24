@@ -23,6 +23,7 @@ TEST_CASE("agent control event supports protobuf-lite round trip") {
   registration->set_hostname("devbox-01");
   registration->set_os("linux");
   registration->set_arch("x86_64");
+  registration->set_registration_token("token-once");
 
   std::string bytes;
   REQUIRE(event.SerializeToString(&bytes));
@@ -33,6 +34,7 @@ TEST_CASE("agent control event supports protobuf-lite round trip") {
   REQUIRE(parsed.message_id() == "msg-1");
   REQUIRE(parsed.payload_case() == proto::AgentEvent::kRegister);
   REQUIRE(parsed.register_().hostname() == "devbox-01");
+  REQUIRE(parsed.register_().registration_token() == "token-once");
 }
 
 TEST_CASE("server command supports protobuf-lite enum names") {

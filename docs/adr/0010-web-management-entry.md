@@ -42,10 +42,10 @@ z-fleet 需要提供轻量 Web 入口，覆盖 Agent 首次安装、在线状态
 
    v0.x Web 管理入口至少包含：
 
-   - Agent 安装页面：展示 Server 地址、平台/架构、推荐 channel、当前发布版本、下载链接、校验摘要和注册 token 安装命令；
-   - Agent 状态列表：以列表形式展示 Agent ID、hostname、OS、arch、agent_version、online/offline/stale 状态、last_seen_at、last_online_at 和 last_offline_at；
-   - Agent 资产详情：点击列表行进入详情，展示最新资产快照、历史快照摘要，以及由 Server 解码后的 JSON 详情；
-   - 后台 Agent 安装包管理：上传、校验、列表、发布、退役 Agent 安装包。
+   - Agent 安装页面：展示推荐版本、下载摘要、注册 token 和真实可复制安装命令；平台、架构与 channel 不作为默认安装操作的用户输入；
+   - Agent 状态列表：以紧凑表格展示 Agent ID、hostname、OS、arch、agent_version、online/offline/stale 状态和时间字段，并提供组合筛选；
+   - Agent 资产详情：点击列表行打开侧边抽屉，展示最新资产、应用、服务和历史快照摘要；
+   - 后台 Agent 安装包管理：上传、校验、列表、发布、退役 Agent 安装包，平台和架构由上传包 manifest 自动识别。
 
 4. **安装包发布支持 channel**
 

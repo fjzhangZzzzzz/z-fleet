@@ -20,6 +20,8 @@ struct Manifest {
   int schema_version;
   std::string component;
   std::string version;
+  std::string platform;
+  std::string arch;
   std::string min_installer_version;
   std::vector<ManifestFile> files;
 };

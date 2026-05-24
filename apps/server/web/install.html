@@ -14,21 +14,18 @@
   </header>
   <main class="page">
     <div class="title-row"><div><p class="kicker">BOOTSTRAP</p><h1>Agent 安装</h1></div><span class="status" data-status-for="install">准备就绪</span></div>
-    <section class="grid two">
+    <section class="grid two install-grid">
       <article class="panel">
-        <h2>安装目标</h2>
-        <form class="fields" data-install-fields>
-          <label>Channel<select name="channel"><option>stable</option><option>candidate</option><option>dev</option></select></label>
-          <label>Platform<select name="platform"><option>linux</option><option>windows</option></select></label>
-          <label>Architecture<select name="arch"><option>x86_64</option><option>arm64</option></select></label>
-        </form>
-        <dl class="release" data-install-release><dt>Published version</dt><dd>-</dd><dt>SHA-256</dt><dd>-</dd></dl>
+        <h2>推荐安装</h2>
+        <p class="muted">使用当前推荐版本部署 Agent。执行命令前目标设备需已有 <code>zfleet_installer</code>。</p>
+        <label>Server 控制地址<input name="control_url" data-control-url value="http://127.0.0.1:8081"></label>
+        <dl class="release" data-install-release><dt>推荐版本</dt><dd>-</dd><dt>SHA-256</dt><dd>-</dd></dl>
       </article>
       <article class="panel terminal-panel">
-        <h2>注册 Token 与命令</h2>
+        <div class="panel-heading"><h2>安装命令</h2><button class="button compact" type="button" data-copy-install disabled>复制命令</button></div>
         <button class="button primary" type="button" data-install-token-button>生成注册 token</button>
         <p class="secret" data-install-token-output>Token 仅在生成时展示一次。</p>
-        <pre data-install-command><code>请选择 channel 后生成安装命令。</code></pre>
+        <pre data-install-command><code>生成注册 token 后显示可执行命令。</code></pre>
       </article>
     </section>
   </main>

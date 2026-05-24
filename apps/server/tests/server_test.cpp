@@ -164,7 +164,8 @@ std::string ReadAssetSnapshotBlob(
 
 proto::AgentEvent RegisterEvent(std::string message_id,
                                 std::string agent_id,
-                                std::string occurred_at) {
+                                std::string occurred_at,
+                                std::string registration_token = {}) {
   proto::AgentEvent event;
   event.set_protocol_version("v1");
   event.set_message_id(std::move(message_id));
@@ -175,6 +176,7 @@ proto::AgentEvent RegisterEvent(std::string message_id,
   payload->set_hostname("devbox-01");
   payload->set_os("linux");
   payload->set_arch("x86_64");
+  payload->set_registration_token(std::move(registration_token));
   return event;
 }
 
@@ -204,6 +206,8 @@ proto::AgentEvent AssetSnapshotEvent(std::string message_id,
   payload->set_os_version("6.8");
   payload->set_arch("x86_64");
   payload->set_agent_version("0.1.0");
+  payload->add_applications("cmake");
+  payload->add_services("zfleet-agent");
   return event;
 }
 
@@ -354,6 +358,8 @@ std::filesystem::path CreateAgentPackageArchive(
           .schema_version = 1,
           .component = "agent",
           .version = "0.1.0",
+          .platform = "linux",
+          .arch = "x86_64",
           .min_installer_version = "0.1.0",
           .files = {zfleet::package::ManifestFile{
               .source = "payload/bin/zfleet_agent",
@@ -480,7 +486,7 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 5);
+  REQUIRE(database.schema_version() == 6);
   REQUIRE(TableExists(database_path, "agents"));
   REQUIRE_FALSE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
@@ -510,6 +516,8 @@ TEST_CASE("server database exposes web management read models") {
           .os_version = "6.8",
           .arch = "x86_64",
           .agent_version = "0.1.0",
+          .applications = {"cmake", "ninja"},
+          .services = {"zfleet-agent"},
       },
       AssetSnapshotEvent("asset-web-1", "agent-web-1",
                          "2026-05-24T10:00:00Z"));
@@ -523,6 +531,8 @@ TEST_CASE("server database exposes web management read models") {
   REQUIRE(latest.has_value());
   REQUIRE(latest->hostname == "devbox-web");
   REQUIRE(latest->os_version == "6.8");
+  REQUIRE((latest->applications == std::vector<std::string>{"cmake", "ninja"}));
+  REQUIRE((latest->services == std::vector<std::string>{"zfleet-agent"}));
 }
 
 TEST_CASE("server database stores package channel and registration tokens") {
@@ -757,7 +767,7 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   const auto archive_path = CreateAgentPackageArchive(test_root.path());
   const auto archive_body = ReadBinaryFile(archive_path);
   std::string upload_request =
-      "POST /api/v1/admin/packages?platform=linux&arch=x86_64&filename=agent.zip HTTP/1.1\r\n"
+      "POST /api/v1/admin/packages?platform=windows&arch=arm64&filename=agent.zip HTTP/1.1\r\n"
       "Host: 127.0.0.1\r\n"
       "Content-Type: application/zip\r\n"
       "Content-Length: " +
@@ -768,6 +778,8 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   REQUIRE(upload.status == 201);
   REQUIRE(upload.body.find("\"status\":\"validated\"") != std::string::npos);
   REQUIRE(database.ListAgentPackages().size() == 1);
+  REQUIRE(database.ListAgentPackages().front().platform == "linux");
+  REQUIRE(database.ListAgentPackages().front().arch == "x86_64");
   const auto package_id = database.ListAgentPackages().front().package_id;
 
   const std::string publish_body = R"json({"channel":"candidate"})json";
@@ -1193,6 +1205,11 @@ TEST_CASE("http2 control service stores asset snapshot display columns and blob"
           "devbox-01");
   REQUIRE(ReadAssetSnapshotField(database_path, "agent-1", "os_version") ==
           "6.8");
+  const auto stored_summary = database.FindLatestAssetSnapshot("agent-1");
+  REQUIRE(stored_summary.has_value());
+  REQUIRE((stored_summary->applications == std::vector<std::string>{"cmake"}));
+  REQUIRE((stored_summary->services ==
+           std::vector<std::string>{"zfleet-agent"}));
   REQUIRE(ReadAuditField(database_path, "asset-snapshot-1", "event_type") ==
           "agent.asset_snapshot");
   proto::AgentEvent stored_snapshot;
@@ -1201,6 +1218,46 @@ TEST_CASE("http2 control service stores asset snapshot display columns and blob"
   REQUIRE(stored_snapshot.message_id() == "asset-snapshot-1");
   REQUIRE(stored_snapshot.payload_case() ==
           proto::AgentEvent::kAssetSnapshot);
+}
+
+TEST_CASE("http2 control service consumes scoped registration tokens") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  database.CreateRegistrationToken(zfleet::server::RegistrationTokenRecord{
+      .token_id = "token-register",
+      .token_hash = zfleet::crypto::Sha256BytesHex("register-once"),
+      .purpose = "agent_register",
+      .platform = std::optional<std::string>{"linux"},
+      .arch = std::optional<std::string>{"x86_64"},
+      .max_uses = 1,
+      .status = "active",
+      .created_at = "2026-05-21T09:00:00Z",
+      .expires_at = "2099-05-21T09:00:00Z",
+  });
+  const zfleet::server::Http2ControlService service(&database);
+
+  const auto accepted = service.HandleAgentEvent(RegisterEvent(
+      "token-register-1", "agent-token-1", "2026-05-21T10:00:00Z",
+      "register-once"));
+  const auto reused = service.HandleAgentEvent(RegisterEvent(
+      "token-register-2", "agent-token-2", "2026-05-21T10:00:01Z",
+      "register-once"));
+  const auto reconnect = service.HandleAgentEvent(RegisterEvent(
+      "token-register-3", "agent-token-1", "2026-05-21T10:00:02Z",
+      "register-once"));
+
+  REQUIRE(accepted.status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(reused.status == zfleet::server::ControlEventStatus::kInvalidArgument);
+  REQUIRE(reconnect.status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(database.AgentExists("agent-token-1"));
+  REQUIRE_FALSE(database.AgentExists("agent-token-2"));
+  REQUIRE(database.ListRegistrationTokens().front().status == "consumed");
+  REQUIRE(database.ListRegistrationTokens().front().use_count == 1);
+  REQUIRE(ReadAuditField(test_root / "zfleet.db", "token-register-1",
+                         "event_type") == "agent.register");
+  REQUIRE(ReadAuditField(test_root / "zfleet.db", "token-register-2",
+                         "event_type") == "registration_token.rejected");
 }
 
 TEST_CASE("http2 control service rejects invalid and unregistered events") {

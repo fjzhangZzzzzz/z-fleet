@@ -12,6 +12,7 @@ namespace zfleet::agent {
 struct AgentConfig {
   std::optional<std::filesystem::path> install_dir = std::nullopt;
   std::string control_url = "http://127.0.0.1:8081";
+  std::string registration_token;
   std::filesystem::path data_dir = "data/agent";
   std::filesystem::path state_path = "state.toml";
   std::uint32_t heartbeat_interval_seconds = 30;

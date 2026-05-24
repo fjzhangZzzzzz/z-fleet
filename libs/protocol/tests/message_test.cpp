@@ -26,6 +26,8 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           "agent.asset_snapshot");
   REQUIRE(zfleet::protocol::ToString(AuditEventType::task_assigned) ==
           "task.assigned");
+  REQUIRE(zfleet::protocol::ToString(AuditEventType::registration_token_used) ==
+          "registration_token.used");
   REQUIRE(zfleet::protocol::ToString(TaskType::collect_basic_inventory) ==
           "collect_basic_inventory");
   REQUIRE(zfleet::protocol::ToString(CapabilityLevel::readonly) == "readonly");
@@ -40,6 +42,8 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           AuditEventType::agent_register);
   REQUIRE(zfleet::protocol::AuditEventTypeFromString("task.expired") ==
           AuditEventType::task_expired);
+  REQUIRE(zfleet::protocol::AuditEventTypeFromString("package.published") ==
+          AuditEventType::package_published);
   REQUIRE(zfleet::protocol::TaskTypeFromString("collect_basic_inventory") ==
           TaskType::collect_basic_inventory);
   REQUIRE(zfleet::protocol::CapabilityLevelFromString("shell") ==

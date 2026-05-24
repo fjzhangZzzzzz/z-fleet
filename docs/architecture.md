@@ -97,10 +97,10 @@ Web 管理入口由 `zfleet_server` 内置托管，见 [ADR 0010：Server 内置
 
 最小页面入口：
 
-- `/install`：Agent 安装页，展示平台、架构、channel、发布版本、下载链接、摘要和注册 token 安装命令；
-- `/agents`：Agent 状态列表，支持按状态、平台、版本筛选；
-- `/agents/{agent_id}`：Agent 资产详情，展示最新和历史资产快照；
-- `/admin/packages`：Agent 安装包管理，支持上传、校验、发布到 channel 和退役。
+- `/install`：Agent 安装页，展示推荐版本、摘要、注册 token 与可复制的实际安装命令，目标元数据不作为普通用户输入项暴露；
+- `/agents`：紧凑 Agent 表格，支持按状态、系统、架构、版本和关键字筛选；
+- `/agents/{agent_id}`：以列表侧边抽屉呈现最新资产、应用、服务和历史快照摘要；
+- `/admin/packages`：Agent 安装包管理，上传后依据 manifest 自动识别平台和架构，并支持发布到 channel。
 
 ## 数据模型边界
 
@@ -151,6 +151,8 @@ create table if not exists asset_snapshots (
   os_version text,
   arch text not null,
   agent_version text not null,
+  applications_json text not null,
+  services_json text not null,
   event_blob blob not null
 );
 

@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace zfleet::protocol {
 
@@ -28,6 +29,11 @@ enum class ErrorCode {
 enum class AuditEventType {
   agent_register,
   agent_asset_snapshot,
+  package_validated,
+  package_published,
+  registration_token_created,
+  registration_token_used,
+  registration_token_rejected,
   task_queued,
   task_assigned,
   task_running,
@@ -71,6 +77,7 @@ struct AgentRegistration {
   std::string hostname;
   std::string os;
   std::string arch;
+  std::optional<std::string> registration_token;
 };
 
 struct AgentHeartbeat {
@@ -91,6 +98,8 @@ struct AssetSnapshot {
   std::optional<std::string> os_version;
   std::string arch;
   std::string agent_version;
+  std::vector<std::string> applications;
+  std::vector<std::string> services;
 };
 
 struct AuditEvent {

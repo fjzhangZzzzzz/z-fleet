@@ -2,6 +2,7 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <sqlite3.h>
+#include <nlohmann/json.hpp>
 
 #include <boost/asio/post.hpp>
 
@@ -19,7 +20,7 @@
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 
 namespace proto = zfleet::protocol::v1;
 
@@ -119,6 +120,10 @@ AssetSnapshotSummary ParseAssetSnapshotSummary(SQLite::Statement& query) {
       .os_version = NullableOptionalColumn(query, 5),
       .arch = query.getColumn(6).getString(),
       .agent_version = query.getColumn(7).getString(),
+      .applications = nlohmann::json::parse(query.getColumn(8).getString())
+                          .get<std::vector<std::string>>(),
+      .services = nlohmann::json::parse(query.getColumn(9).getString())
+                      .get<std::vector<std::string>>(),
   };
 }
 
@@ -187,6 +192,8 @@ void ExecSchema(SQLite::Database& db) {
       os_version text,
       arch text not null,
       agent_version text not null,
+      applications_json text not null,
+      services_json text not null,
       event_blob blob not null
     )
   )sql");
@@ -594,6 +601,35 @@ bool ServerDatabase::AgentExists(const std::string& agent_id) const {
   });
 }
 
+bool ServerDatabase::ConsumeRegistrationToken(const std::string& token_hash,
+                                              const std::string& platform,
+                                              const std::string& arch,
+                                              const std::string& used_at) {
+  return SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Statement statement(
+        db,
+        R"sql(
+        update registration_tokens
+        set use_count = use_count + 1,
+            status = case when max_uses is not null and use_count + 1 >= max_uses
+                          then 'consumed' else status end
+        where token_hash = ?
+          and purpose = 'agent_register'
+          and status = 'active'
+          and expires_at >= ?
+          and (platform is null or platform = ?)
+          and (arch is null or arch = ?)
+          and (max_uses is null or use_count < max_uses)
+      )sql");
+    statement.bind(1, token_hash);
+    statement.bind(2, used_at);
+    statement.bind(3, platform);
+    statement.bind(4, arch);
+    statement.exec();
+    return db.getChanges() == 1;
+  });
+}
+
 void ServerDatabase::UpsertAgent(
     const zfleet::protocol::AgentRegistration& request) {
   SubmitWrite([&](SQLite::Database& db) {
@@ -671,8 +707,10 @@ void ServerDatabase::RecordAssetSnapshot(
           os_version,
           arch,
           agent_version,
+          applications_json,
+          services_json,
           event_blob
-        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       )sql");
     statement.bind(1, request.agent_id);
     statement.bind(2, request.occurred_at);
@@ -685,7 +723,9 @@ void ServerDatabase::RecordAssetSnapshot(
     }
     statement.bind(6, request.arch);
     statement.bind(7, request.agent_version);
-    BindBlob(statement, 8, event_blob);
+    statement.bind(8, nlohmann::json(request.applications).dump());
+    statement.bind(9, nlohmann::json(request.services).dump());
+    BindBlob(statement, 10, event_blob);
     statement.exec();
   });
 }
@@ -1014,8 +1054,10 @@ void ServerDatabase::AsyncRecordAssetSnapshot(
           os_version,
           arch,
           agent_version,
+          applications_json,
+          services_json,
           event_blob
-        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       )sql");
             statement.bind(1, request.agent_id);
             statement.bind(2, request.occurred_at);
@@ -1028,7 +1070,9 @@ void ServerDatabase::AsyncRecordAssetSnapshot(
             }
             statement.bind(6, request.arch);
             statement.bind(7, request.agent_version);
-            BindBlob(statement, 8, event_blob);
+            statement.bind(8, nlohmann::json(request.applications).dump());
+            statement.bind(9, nlohmann::json(request.services).dump());
+            BindBlob(statement, 10, event_blob);
             statement.exec();
           },
           completion_executor, std::move(completion))) {
@@ -1459,7 +1503,9 @@ std::vector<AssetSnapshotSummary> ServerDatabase::ListAssetSnapshots(
           os,
           os_version,
           arch,
-          agent_version
+          agent_version,
+          applications_json,
+          services_json
         from asset_snapshots
         where agent_id = ?
         order by snapshot_id desc

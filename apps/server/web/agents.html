@@ -13,11 +13,25 @@
     <nav><a href="/install">Agent 安装</a><a class="active" href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
   </header>
   <main class="page">
-    <div class="title-row"><div><p class="kicker">INVENTORY</p><h1>Agent 状态</h1></div><input class="search" data-agent-filter placeholder="按 Agent ID 筛选"></div>
-    <section class="grid fleet">
-      <article class="panel table-panel"><div class="table" data-agent-list><p class="muted">正在加载 Agent...</p></div></article>
-      <article class="panel detail" data-agent-detail><p class="muted">选择一个 Agent 查看资产详情。</p></article>
+    <div class="title-row"><div><p class="kicker">INVENTORY</p><h1>Agent 状态</h1></div></div>
+    <section class="filters" data-agent-filters>
+      <input class="search" name="search" placeholder="搜索主机名或 Agent ID">
+      <select name="status"><option value="">全部状态</option></select>
+      <select name="os"><option value="">全部系统</option></select>
+      <select name="arch"><option value="">全部架构</option></select>
+      <select name="version"><option value="">全部版本</option></select>
     </section>
+    <article class="panel table-panel">
+      <table class="agent-table">
+        <thead><tr><th>状态</th><th>主机名</th><th>系统</th><th>架构</th><th>Agent 版本</th><th>Agent ID</th><th>最后在线</th></tr></thead>
+        <tbody data-agent-list><tr><td colspan="7" class="muted">正在加载 Agent...</td></tr></tbody>
+      </table>
+    </article>
+    <div class="drawer-backdrop" data-agent-backdrop hidden></div>
+    <aside class="drawer" data-agent-detail aria-hidden="true">
+      <button class="drawer-close" type="button" data-agent-close aria-label="关闭">关闭</button>
+      <div data-agent-detail-body></div>
+    </aside>
   </main>
 </body>
 </html>

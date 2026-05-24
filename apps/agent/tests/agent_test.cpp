@@ -27,6 +27,7 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
     REQUIRE(config_stream);
     config_stream << "[agent]\n";
     config_stream << "control_url = \"http://127.0.0.1:18081\"\n";
+    config_stream << "registration_token = \"register-once\"\n";
     config_stream << "heartbeat_interval_seconds = 5\n";
     config_stream << "reconnect_initial_delay_seconds = 1\n";
     config_stream << "reconnect_max_delay_seconds = 3\n";
@@ -45,6 +46,7 @@ TEST_CASE("agent config loads values from toml and resolves state path") {
 
   REQUIRE(config.install_dir == test_root);
   REQUIRE(config.control_url == "http://127.0.0.1:18081");
+  REQUIRE(config.registration_token == "register-once");
   REQUIRE(config.data_dir == test_root / "data");
   REQUIRE(config.heartbeat_interval_seconds == 5);
   REQUIRE(config.reconnect_initial_delay_seconds == 1);
@@ -64,6 +66,7 @@ TEST_CASE("agent config persists defaults and CLI overrides without install dir"
   zfleet::agent::AgentConfig config;
   config.install_dir = test_root;
   config.control_url = "http://127.0.0.1:18081";
+  config.registration_token = "register-once";
   config.log.level = zfleet::core::log::Level::kDebug;
 
   zfleet::agent::SaveConfig(config, config_path);
@@ -73,6 +76,7 @@ TEST_CASE("agent config persists defaults and CLI overrides without install dir"
   REQUIRE(saved.find("install_dir") == std::string::npos);
   REQUIRE(saved.find("control_url") != std::string::npos);
   REQUIRE(saved.find("http://127.0.0.1:18081") != std::string::npos);
+  REQUIRE(saved.find("register-once") != std::string::npos);
   REQUIRE(saved.find("level") != std::string::npos);
   REQUIRE(saved.find("debug") != std::string::npos);
 
@@ -82,6 +86,7 @@ TEST_CASE("agent config persists defaults and CLI overrides without install dir"
 
   REQUIRE(loaded.install_dir == test_root);
   REQUIRE(loaded.control_url == "http://127.0.0.1:18081");
+  REQUIRE(loaded.registration_token == "register-once");
   REQUIRE(loaded.data_dir == test_root / "data" / "agent");
   REQUIRE(loaded.log.level == zfleet::core::log::Level::kDebug);
 }

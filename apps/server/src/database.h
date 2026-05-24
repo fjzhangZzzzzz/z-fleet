@@ -45,6 +45,8 @@ struct AssetSnapshotSummary {
   std::optional<std::string> os_version;
   std::string arch;
   std::string agent_version;
+  std::vector<std::string> applications;
+  std::vector<std::string> services;
 };
 
 struct AgentPackageRecord {
@@ -92,6 +94,10 @@ class ServerStore {
   virtual ~ServerStore() = default;
 
   virtual bool AgentExists(const std::string& agent_id) const = 0;
+  virtual bool ConsumeRegistrationToken(const std::string& token_hash,
+                                        const std::string& platform,
+                                        const std::string& arch,
+                                        const std::string& used_at) = 0;
   virtual void UpsertAgent(
       const zfleet::protocol::AgentRegistration& request) = 0;
   virtual void MarkAgentOffline(const std::string& agent_id,
@@ -188,6 +194,10 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
   int schema_version() const;
   const std::filesystem::path& database_path() const noexcept;
   bool AgentExists(const std::string& agent_id) const override;
+  bool ConsumeRegistrationToken(const std::string& token_hash,
+                                const std::string& platform,
+                                const std::string& arch,
+                                const std::string& used_at) override;
   void UpsertAgent(const zfleet::protocol::AgentRegistration& request) override;
   void MarkAgentOffline(const std::string& agent_id,
                         const std::string& disconnected_at) override;

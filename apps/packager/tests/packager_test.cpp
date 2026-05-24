@@ -39,6 +39,8 @@ std::string ExpectedManifestJson(const std::string& component,
       .schema_version = 1,
       .component = component,
       .version = version,
+      .platform = "linux",
+      .arch = "x86_64",
       .min_installer_version = min_installer_version,
       .files = {},
   };
@@ -74,6 +76,8 @@ TEST_CASE("pack creates package layout from payload directory") {
   const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
       .component = "agent",
       .version = "1.2.3",
+      .platform = "linux",
+      .arch = "x86_64",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_agent",
       .output_dir = output_dir,
@@ -126,6 +130,8 @@ TEST_CASE("pack creates a zip archive from payload directory") {
   const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
       .component = "server",
       .version = "3.4.5",
+      .platform = "linux",
+      .arch = "x86_64",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_server",
       .output_dir = output_dir,
@@ -177,6 +183,8 @@ TEST_CASE("pack rejects existing output unless force is set") {
   REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                         .component = "installer",
                         .version = "2.0.0",
+                        .platform = "linux",
+                        .arch = "x86_64",
                         .payload_dir = payload_dir,
                         .entry_path = "bin/zfleet_installer",
                         .output_dir = output_dir,
@@ -186,6 +194,8 @@ TEST_CASE("pack rejects existing output unless force is set") {
   const auto result = zfleet::packager::Pack(zfleet::packager::PackOptions{
       .component = "installer",
       .version = "2.0.0",
+      .platform = "linux",
+      .arch = "x86_64",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_installer",
       .output_dir = output_dir,
@@ -211,6 +221,8 @@ TEST_CASE("pack rejects invalid inputs") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "bad-component",
                           .version = "1.0.0",
+                          .platform = "linux",
+                          .arch = "x86_64",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -222,6 +234,8 @@ TEST_CASE("pack rejects invalid inputs") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "agent",
                           .version = "../bad",
+                          .platform = "linux",
+                          .arch = "x86_64",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -233,6 +247,8 @@ TEST_CASE("pack rejects invalid inputs") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "agent",
                           .version = "1.0.0",
+                          .platform = "linux",
+                          .arch = "x86_64",
                           .payload_dir = payload_dir,
                           .entry_path = "../zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -244,6 +260,8 @@ TEST_CASE("pack rejects invalid inputs") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "agent",
                           .version = "1.0.0",
+                          .platform = "linux",
+                          .arch = "x86_64",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/missing",
                           .output_dir = test_root / "packages",
@@ -256,6 +274,8 @@ TEST_CASE("pack rejects invalid inputs") {
     REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                           .component = "agent",
                           .version = "1.0.0",
+                          .platform = "linux",
+                          .arch = "x86_64",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -285,6 +305,8 @@ TEST_CASE("pack rejects symlinks in payload directory") {
   REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
                         .component = "agent",
                         .version = "1.0.0",
+                        .platform = "linux",
+                        .arch = "x86_64",
                         .payload_dir = payload_dir,
                         .entry_path = "bin/zfleet_agent",
                         .output_dir = test_root / "packages",

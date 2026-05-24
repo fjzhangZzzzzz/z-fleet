@@ -49,6 +49,16 @@ std::string_view ToString(AuditEventType type) noexcept {
       return "agent.register";
     case AuditEventType::agent_asset_snapshot:
       return "agent.asset_snapshot";
+    case AuditEventType::package_validated:
+      return "package.validated";
+    case AuditEventType::package_published:
+      return "package.published";
+    case AuditEventType::registration_token_created:
+      return "registration_token.created";
+    case AuditEventType::registration_token_used:
+      return "registration_token.used";
+    case AuditEventType::registration_token_rejected:
+      return "registration_token.rejected";
     case AuditEventType::task_queued:
       return "task.queued";
     case AuditEventType::task_assigned:
@@ -179,6 +189,21 @@ std::optional<AuditEventType> AuditEventTypeFromString(
   }
   if (type == "agent.asset_snapshot") {
     return AuditEventType::agent_asset_snapshot;
+  }
+  if (type == "package.validated") {
+    return AuditEventType::package_validated;
+  }
+  if (type == "package.published") {
+    return AuditEventType::package_published;
+  }
+  if (type == "registration_token.created") {
+    return AuditEventType::registration_token_created;
+  }
+  if (type == "registration_token.used") {
+    return AuditEventType::registration_token_used;
+  }
+  if (type == "registration_token.rejected") {
+    return AuditEventType::registration_token_rejected;
   }
   if (type == "task.queued") {
     return AuditEventType::task_queued;

@@ -36,6 +36,8 @@ std::string BuildManifestJson(
       .schema_version = 1,
       .component = component,
       .version = version,
+      .platform = "linux",
+      .arch = "x86_64",
       .min_installer_version = "0.1.0",
       .files = files,
   });

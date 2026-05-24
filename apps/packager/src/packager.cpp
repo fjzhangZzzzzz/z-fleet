@@ -45,12 +45,16 @@ struct PayloadFile {
 
 std::string BuildManifestJson(const std::string& component,
                               const std::string& version,
+                              const std::string& platform,
+                              const std::string& arch,
                               const std::string& min_installer_version,
                               const std::vector<PayloadFile>& files) {
   zfleet::package::Manifest manifest{
       .schema_version = 1,
       .component = component,
       .version = version,
+      .platform = platform,
+      .arch = arch,
       .min_installer_version = min_installer_version,
       .files = {},
   };
@@ -207,6 +211,11 @@ PackResult PackToDirectory(const PackOptions& options,
     throw std::invalid_argument(
         "invalid --min-installer-version: " + min_installer_version.message);
   }
+  const auto platform = zfleet::core::ValidatePathSegment(options.platform);
+  const auto arch = zfleet::core::ValidatePathSegment(options.arch);
+  if (!platform.ok || !arch.ok) {
+    throw std::invalid_argument("platform and arch must be safe non-empty values");
+  }
 
   const auto payload_dir = NormalizePath(options.payload_dir);
   ValidatePayloadDir(payload_dir);
@@ -234,7 +243,7 @@ PackResult PackToDirectory(const PackOptions& options,
   CopyPayloadFiles(paths.payload_dir, files);
 
   const auto manifest_text =
-      BuildManifestJson(component, options.version,
+      BuildManifestJson(component, options.version, options.platform, options.arch,
                         options.min_installer_version, files);
   std::ofstream manifest_stream(paths.manifest_path, std::ios::binary);
   if (!manifest_stream) {
@@ -277,6 +286,8 @@ PackResult Pack(const PackOptions& options) {
       PackToDirectory(PackOptions{
                           .component = options.component,
                           .version = options.version,
+                          .platform = options.platform,
+                          .arch = options.arch,
                           .payload_dir = options.payload_dir,
                           .entry_path = options.entry_path,
                           .output_dir = temp_root.path(),

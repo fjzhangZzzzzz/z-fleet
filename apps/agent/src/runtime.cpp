@@ -44,7 +44,8 @@ std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
       reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
 }
 
-proto::AgentEvent BuildRegisterEvent(const std::string& agent_id) {
+proto::AgentEvent BuildRegisterEvent(const std::string& agent_id,
+                                     const std::string& registration_token) {
   proto::AgentEvent event;
   event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
   event.set_message_id(zfleet::core::GenerateUuid());
@@ -55,6 +56,7 @@ proto::AgentEvent BuildRegisterEvent(const std::string& agent_id) {
   register_event->set_hostname(zfleet::platform::hostname());
   register_event->set_os(std::string(zfleet::platform::os_name()));
   register_event->set_arch(zfleet::platform::architecture_name());
+  register_event->set_registration_token(registration_token);
   return event;
 }
 
@@ -138,7 +140,8 @@ RuntimeResult AgentRuntime::Run() {
 
   auto send_connection_bootstrap = [&]() {
     const auto bootstrap_body = BuildEnvelopeBody(
-        {BuildRegisterEvent(state.agent_id), BuildHeartbeatEvent(state.agent_id)});
+        {BuildRegisterEvent(state.agent_id, config_.registration_token),
+         BuildHeartbeatEvent(state.agent_id)});
     const auto response = client.PostEvents(bootstrap_body);
     if (response.status != "200") {
       throw std::runtime_error("agent bootstrap events were rejected");

@@ -19,10 +19,9 @@
         <h2>上传 Agent Package</h2>
         <form class="fields" data-package-upload-form>
           <label>ZIP Package<input type="file" name="package" accept=".zip" required></label>
-          <label>Platform<input name="platform" value="linux" required></label>
-          <label>Architecture<input name="arch" value="x86_64" required></label>
           <button class="button primary" type="submit">上传并校验</button>
         </form>
+        <p class="muted note">平台与架构由安装包清单自动识别，上传后不可修改。</p>
       </article>
       <article class="panel">
         <h2>已入库版本</h2>

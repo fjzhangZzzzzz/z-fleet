@@ -3,6 +3,7 @@
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
+#include "zfleet/crypto/sha256.h"
 #include "zfleet/protocol/json_codec.h"
 
 #include <cstdint>
@@ -342,10 +343,51 @@ ControlEventResult Http2ControlService::HandleRegister(
       .hostname = registration.hostname(),
       .os = registration.os(),
       .arch = registration.arch(),
+      .registration_token =
+          registration.registration_token().empty()
+              ? std::optional<std::string>{}
+              : std::optional<std::string>{registration.registration_token()},
   };
 
   try {
+    bool token_used = false;
+    if (!store_->AgentExists(request.agent_id) &&
+        request.registration_token.has_value()) {
+      token_used = store_->ConsumeRegistrationToken(
+          zfleet::crypto::Sha256BytesHex(*request.registration_token),
+          request.os, request.arch, zfleet::core::NowUtcRfc3339());
+      if (!token_used) {
+        RecordAuditEvent(
+            zfleet::protocol::AuditEventType::registration_token_rejected,
+            request.request_id, request.agent_id, "error",
+            zfleet::protocol::SerializeAuditPayload(
+                {{"status", std::string("rejected")},
+                 {"message", std::string("invalid or expired token")}}));
+        return InvalidArgument("registration token is invalid or expired");
+      }
+    }
+    if (token_used) {
+      RecordAuditEvent(
+          zfleet::protocol::AuditEventType::registration_token_used,
+          request.request_id, request.agent_id, "success",
+          zfleet::protocol::SerializeAuditPayload(
+              {{"status", std::string("consumed")},
+               {"platform", request.os},
+               {"arch", request.arch}}));
+    }
     store_->UpsertAgent(request);
+    store_->RecordAssetSnapshot(
+        zfleet::protocol::AssetSnapshot{
+            .protocol_version = request.protocol_version,
+            .request_id = request.request_id,
+            .agent_id = request.agent_id,
+            .occurred_at = request.occurred_at,
+            .hostname = request.hostname,
+            .os = request.os,
+            .arch = request.arch,
+            .agent_version = request.agent_version,
+        },
+        event);
     RecordAuditEvent(
         zfleet::protocol::AuditEventType::agent_register, request.request_id,
         request.agent_id, "success",
@@ -410,6 +452,9 @@ ControlEventResult Http2ControlService::HandleAssetSnapshot(
               : std::optional<std::string>{snapshot.os_version()},
       .arch = snapshot.arch(),
       .agent_version = snapshot.agent_version(),
+      .applications = {snapshot.applications().begin(),
+                       snapshot.applications().end()},
+      .services = {snapshot.services().begin(), snapshot.services().end()},
   };
 
   try {

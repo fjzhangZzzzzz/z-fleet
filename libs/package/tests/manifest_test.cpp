@@ -20,6 +20,8 @@ TEST_CASE("manifest json supports serialization and parsing") {
       .schema_version = 1,
       .component = "agent",
       .version = "0.1.0",
+      .platform = "linux",
+      .arch = "x86_64",
       .min_installer_version = "0.1.0",
       .files = {zfleet::package::ManifestFile{
           .source = "payload/bin/zfleet_agent",
@@ -36,6 +38,8 @@ TEST_CASE("manifest json supports serialization and parsing") {
   REQUIRE(parsed.schema_version == 1);
   REQUIRE(parsed.component == "agent");
   REQUIRE(parsed.version == "0.1.0");
+  REQUIRE(parsed.platform == "linux");
+  REQUIRE(parsed.arch == "x86_64");
   REQUIRE(parsed.min_installer_version == "0.1.0");
   REQUIRE(parsed.files.size() == 1);
   REQUIRE(parsed.files.front().source == "payload/bin/zfleet_agent");
@@ -54,6 +58,8 @@ TEST_CASE("manifest json loader reads from disk") {
           .schema_version = 1,
           .component = "server",
           .version = "1.2.3",
+          .platform = "linux",
+          .arch = "x86_64",
           .min_installer_version = "0.1.0",
           .files = {},
       }));
