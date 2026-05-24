@@ -7,6 +7,7 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/any_io_executor.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -24,6 +25,7 @@
 namespace zfleet::server {
 
 struct Http2ControlServerOptions {
+  std::size_t io_threads = 2;
   std::size_t max_connections = 128;
   std::size_t worker_threads = 4;
 };
@@ -38,6 +40,11 @@ class Http2ControlWorkerPool {
 
   std::future<std::vector<ControlEventResult>> Submit(
       std::function<std::vector<ControlEventResult>()> task);
+  bool Submit(std::function<std::vector<ControlEventResult>()> task,
+              boost::asio::any_io_executor completion_executor,
+              std::function<void(std::exception_ptr,
+                                 std::vector<ControlEventResult>)>
+                  completion);
   void Stop();
 
  private:
@@ -64,14 +71,14 @@ class Http2ControlServer {
   std::uint16_t port() const noexcept;
 
  private:
-  struct ConnectionThread {
-    std::thread thread;
-    std::shared_ptr<boost::asio::ip::tcp::socket> socket;
+  struct ActiveSession {
+    std::shared_ptr<void> session;
+    std::function<void()> stop;
     std::shared_ptr<std::atomic_bool> done;
   };
 
   void StartAccept();
-  void ReapFinishedConnections();
+  void ReapFinishedSessions();
 
   boost::asio::ip::tcp::endpoint endpoint_;
   boost::asio::io_context io_context_;
@@ -81,8 +88,10 @@ class Http2ControlServer {
   Http2ConnectionRegistry* registry_;
   Http2ControlServerOptions options_;
   Http2ControlWorkerPool worker_pool_;
-  std::mutex connection_threads_mutex_;
-  std::vector<ConnectionThread> connection_threads_;
+  std::mutex io_threads_mutex_;
+  std::vector<std::thread> io_threads_;
+  std::mutex sessions_mutex_;
+  std::vector<ActiveSession> sessions_;
 };
 
 } // namespace zfleet::server

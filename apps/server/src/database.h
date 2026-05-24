@@ -3,6 +3,8 @@
 #include "zfleet/protocol/message.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 
+#include <boost/asio/any_io_executor.hpp>
+
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -10,6 +12,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <map>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -58,8 +61,68 @@ class ServerStore {
       const std::optional<std::string>& error_blob) = 0;
 };
 
-class ServerDatabase final : public ServerStore {
+class AsyncServerStore {
  public:
+  virtual ~AsyncServerStore() = default;
+
+  virtual void AsyncAgentExists(
+      std::string agent_id,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr, bool)> completion) = 0;
+  virtual void AsyncUpsertAgent(
+      zfleet::protocol::AgentRegistration request,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncMarkAgentOffline(
+      std::string agent_id,
+      std::string disconnected_at,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncRecordAssetSnapshot(
+      zfleet::protocol::AssetSnapshot request,
+      zfleet::protocol::v1::AgentEvent event,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncRecordAuditEvent(
+      zfleet::protocol::AuditEvent event,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncEnqueueTask(
+      zfleet::protocol::Task task,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncMarkTaskRunning(
+      zfleet::protocol::TaskRunning request,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+  virtual void AsyncClaimNextTaskForAgent(
+      std::string agent_id,
+      std::string assigned_at,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr,
+                         std::optional<zfleet::protocol::Task>)>
+          completion) = 0;
+  virtual void AsyncFindTaskById(
+      std::string task_id,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr, std::optional<StoredTask>)>
+          completion) = 0;
+  virtual void AsyncRecordTaskResult(
+      zfleet::protocol::TaskResult request,
+      std::optional<std::string> result_blob,
+      std::optional<std::string> error_blob,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) = 0;
+};
+
+class ServerDatabase final : public ServerStore, public AsyncServerStore {
+ public:
+  struct TaskQueueSubscription {
+    std::uint64_t id = 0;
+  };
+
+  using TaskQueueObserver = std::function<void(std::uint64_t)>;
+
   explicit ServerDatabase(std::filesystem::path database_path);
   ~ServerDatabase() override;
 
@@ -90,6 +153,59 @@ class ServerDatabase final : public ServerStore {
   void RecordTaskResult(const zfleet::protocol::TaskResult& request,
                         const std::optional<std::string>& result_blob,
                         const std::optional<std::string>& error_blob) override;
+  void AsyncAgentExists(
+      std::string agent_id,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr, bool)> completion) override;
+  void AsyncUpsertAgent(
+      zfleet::protocol::AgentRegistration request,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncMarkAgentOffline(
+      std::string agent_id,
+      std::string disconnected_at,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncRecordAssetSnapshot(
+      zfleet::protocol::AssetSnapshot request,
+      zfleet::protocol::v1::AgentEvent event,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncRecordAuditEvent(
+      zfleet::protocol::AuditEvent event,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncEnqueueTask(
+      zfleet::protocol::Task task,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncMarkTaskRunning(
+      zfleet::protocol::TaskRunning request,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+  void AsyncClaimNextTaskForAgent(
+      std::string agent_id,
+      std::string assigned_at,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr,
+                         std::optional<zfleet::protocol::Task>)>
+          completion) override;
+  void AsyncFindTaskById(
+      std::string task_id,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr, std::optional<StoredTask>)>
+          completion) override;
+  void AsyncRecordTaskResult(
+      zfleet::protocol::TaskResult request,
+      std::optional<std::string> result_blob,
+      std::optional<std::string> error_blob,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr)> completion) override;
+
+  TaskQueueSubscription SubscribeTaskQueueChanges(
+      boost::asio::any_io_executor completion_executor,
+      TaskQueueObserver observer);
+  void UnsubscribeTaskQueueChanges(TaskQueueSubscription subscription);
 
  private:
   struct WriteTask {
@@ -97,11 +213,21 @@ class ServerDatabase final : public ServerStore {
     std::function<void(std::exception_ptr)> fail;
   };
 
+  struct TaskQueueObserverEntry {
+    boost::asio::any_io_executor completion_executor;
+    TaskQueueObserver observer;
+  };
+
   void RunWriteActor();
   void StopWriteActor();
 
   template <typename Func>
   auto SubmitWrite(Func&& func) -> std::invoke_result_t<Func, SQLite::Database&>;
+  template <typename Func, typename Completion>
+  bool SubmitWriteAsync(Func&& func,
+                        boost::asio::any_io_executor completion_executor,
+                        Completion&& completion);
+  void NotifyTaskQueueChanged();
 
   std::filesystem::path database_path_;
   mutable std::mutex write_actor_mutex_;
@@ -113,6 +239,9 @@ class ServerDatabase final : public ServerStore {
   mutable std::condition_variable task_queue_cv_;
   std::uint64_t task_queue_version_ = 0;
   bool task_queue_closed_ = false;
+  mutable std::mutex task_queue_observers_mutex_;
+  std::uint64_t next_task_queue_subscription_id_ = 1;
+  std::map<std::uint64_t, TaskQueueObserverEntry> task_queue_observers_;
 };
 
 } // namespace zfleet::server

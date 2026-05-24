@@ -11,6 +11,7 @@
 #include "zfleet/transport/frame_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
+#include <boost/asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -455,6 +456,183 @@ TEST_CASE("server database stop closes write actor and wakes task queue waiters"
       std::runtime_error);
 }
 
+TEST_CASE("server database async operations post completions to executor") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  boost::asio::io_context io_context;
+  auto work_guard = boost::asio::make_work_guard(io_context);
+  std::thread io_thread([&io_context]() { io_context.run(); });
+
+  bool enqueue_completed = false;
+  std::exception_ptr enqueue_error;
+  database.AsyncEnqueueTask(
+      zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-async-1",
+          .agent_id = "agent-async-1",
+          .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+          .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+          .created_at = "2026-05-21T10:00:00Z",
+          .expires_at = "2099-05-21T10:05:00Z",
+          .input = zfleet::protocol::CollectBasicInventoryInput{},
+      },
+      io_context.get_executor(),
+      [&](std::exception_ptr error) {
+        enqueue_error = error;
+        enqueue_completed = true;
+        work_guard.reset();
+      });
+
+  if (io_thread.joinable()) {
+    io_thread.join();
+  }
+
+  REQUIRE(enqueue_completed);
+  REQUIRE(enqueue_error == nullptr);
+  REQUIRE(ReadTaskField(database_path, "task-async-1", "state") == "queued");
+}
+
+TEST_CASE("server database task queue subscriptions observe enqueue changes") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  boost::asio::io_context io_context;
+  auto work_guard = boost::asio::make_work_guard(io_context);
+  std::thread io_thread([&io_context]() { io_context.run(); });
+
+  bool notified = false;
+  std::uint64_t observed_version = 0;
+  const auto subscription = database.SubscribeTaskQueueChanges(
+      io_context.get_executor(),
+      [&](std::uint64_t version) {
+        observed_version = version;
+        notified = true;
+        work_guard.reset();
+      });
+
+  database.EnqueueTask(zfleet::protocol::Task{
+      .protocol_version = "v1",
+      .task_id = "task-subscription-1",
+      .agent_id = "agent-subscription-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-21T10:00:00Z",
+      .expires_at = "2099-05-21T10:05:00Z",
+      .input = zfleet::protocol::CollectBasicInventoryInput{},
+  });
+
+  if (io_thread.joinable()) {
+    io_thread.join();
+  }
+
+  database.UnsubscribeTaskQueueChanges(subscription);
+
+  REQUIRE(notified);
+  REQUIRE(observed_version > 0);
+  REQUIRE(ReadTaskField(database_path, "task-subscription-1", "state") ==
+          "queued");
+}
+
+TEST_CASE("server database async claim keeps single assignment semantics") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedTask(&database, "task-async-claim-1", "agent-async-claim-1");
+  boost::asio::io_context io_context;
+  auto work_guard = boost::asio::make_work_guard(io_context);
+  std::thread io_thread([&io_context]() { io_context.run(); });
+
+  int completion_count = 0;
+  int claimed_count = 0;
+  std::exception_ptr first_error;
+  std::exception_ptr second_error;
+  database.AsyncClaimNextTaskForAgent(
+      "agent-async-claim-1", "2026-05-21T10:00:01Z",
+      io_context.get_executor(),
+      [&](std::exception_ptr error,
+          std::optional<zfleet::protocol::Task> task) {
+        first_error = error;
+        if (task.has_value()) {
+          ++claimed_count;
+        }
+        ++completion_count;
+        if (completion_count == 2) {
+          work_guard.reset();
+        }
+      });
+  database.AsyncClaimNextTaskForAgent(
+      "agent-async-claim-1", "2026-05-21T10:00:02Z",
+      io_context.get_executor(),
+      [&](std::exception_ptr error,
+          std::optional<zfleet::protocol::Task> task) {
+        second_error = error;
+        if (task.has_value()) {
+          ++claimed_count;
+        }
+        ++completion_count;
+        if (completion_count == 2) {
+          work_guard.reset();
+        }
+      });
+
+  if (io_thread.joinable()) {
+    io_thread.join();
+  }
+
+  REQUIRE(completion_count == 2);
+  REQUIRE(first_error == nullptr);
+  REQUIRE(second_error == nullptr);
+  REQUIRE(claimed_count == 1);
+  REQUIRE(ReadTaskField(database_path, "task-async-claim-1", "state") ==
+          "assigned");
+}
+
+TEST_CASE("server database async submission reports stopped actor on executor") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  database.Stop();
+  boost::asio::io_context io_context;
+  auto work_guard = boost::asio::make_work_guard(io_context);
+  std::thread io_thread([&io_context]() { io_context.run(); });
+
+  bool completed = false;
+  std::exception_ptr completion_error;
+  database.AsyncEnqueueTask(
+      zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-async-after-stop",
+          .agent_id = "agent-async-1",
+          .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+          .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+          .created_at = "2026-05-21T10:00:00Z",
+          .expires_at = "2099-05-21T10:05:00Z",
+          .input = zfleet::protocol::CollectBasicInventoryInput{},
+      },
+      io_context.get_executor(),
+      [&](std::exception_ptr error) {
+        completion_error = error;
+        completed = true;
+        work_guard.reset();
+      });
+
+  if (io_thread.joinable()) {
+    io_thread.join();
+  }
+
+  REQUIRE(completed);
+  REQUIRE(completion_error != nullptr);
+}
+
 TEST_CASE("http2 control worker pool runs tasks and rejects submissions after stop") {
   zfleet::server::Http2ControlWorkerPool worker_pool(2);
 
@@ -477,6 +655,45 @@ TEST_CASE("http2 control worker pool runs tasks and rejects submissions after st
         return std::vector<zfleet::server::ControlEventResult>{};
       }),
       std::runtime_error);
+}
+
+TEST_CASE("http2 control worker pool posts async completion to executor") {
+  zfleet::server::Http2ControlWorkerPool worker_pool(2);
+  boost::asio::io_context io_context;
+  auto work_guard = boost::asio::make_work_guard(io_context);
+  std::thread io_thread([&io_context]() { io_context.run(); });
+
+  bool completed = false;
+  std::exception_ptr completion_error;
+  std::vector<zfleet::server::ControlEventResult> completion_results;
+  const auto accepted = worker_pool.Submit(
+      []() {
+        return std::vector<zfleet::server::ControlEventResult>{
+            zfleet::server::ControlEventResult{
+                .status = zfleet::server::ControlEventStatus::kAccepted,
+                .message = "async-ok",
+            }};
+      },
+      io_context.get_executor(),
+      [&](std::exception_ptr error,
+          std::vector<zfleet::server::ControlEventResult> results) {
+        completion_error = error;
+        completion_results = std::move(results);
+        completed = true;
+        work_guard.reset();
+      });
+
+  REQUIRE(accepted);
+  if (io_thread.joinable()) {
+    io_thread.join();
+  }
+
+  REQUIRE(completed);
+  REQUIRE(completion_error == nullptr);
+  REQUIRE(completion_results.size() == 1);
+  REQUIRE(completion_results[0].message == "async-ok");
+
+  worker_pool.Stop();
 }
 
 TEST_CASE("http2 control service registers agent and accepts heartbeat") {

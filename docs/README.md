@@ -28,6 +28,7 @@
 | [ADR 模板](adr/template.md) | 草案 | ADR 模板 |
 | [ADR 0007](adr/0007-agent-control-channel-http2-protobuf-lite.md) | 已接受 | Agent/Server 主控制通道协议决策 |
 | [ADR 0008](adr/0008-server-persistence-and-connection-concurrency.md) | 已接受 | Server 持久化边界与连接并发模型 |
+| [ADR 0009](adr/0009-server-async-io-and-store.md) | 已接受 | Server 异步 I/O 与异步 Store 架构 |
 
 ## 文档状态枚举
 
