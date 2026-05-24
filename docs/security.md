@@ -38,6 +38,8 @@
 Server 内置 Web 管理入口见 [ADR 0010](adr/0010-web-management-entry.md)。Web 管理面必须与 Agent 控制面分离：
 
 - 浏览器只访问静态页面和 `/api/v1/...` 管理 API；
+- 静态页面由 Server release 中的独立 `share/web/` 资源提供，启动时校验必需文件，静态路由拒绝目录穿越和符号链接逃逸；
+- 管理 HTTP 连接基于 Boost.Beast 异步处理并对读取设置超时及请求大小上限，避免预连接、慢连接或超大上传阻塞管理入口；安装包 body 必须流式写入 staging 后再校验入库；
 - Agent 控制流继续使用 HTTP/2 + protobuf-lite，不接受浏览器直接读写；
 - Agent 状态和资产详情默认只读；
 - 安装包上传、校验、发布、退役、注册 token 生成和吊销属于后台写操作，必须有认证边界并写审计事件；

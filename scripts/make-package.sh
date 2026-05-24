@@ -102,6 +102,15 @@ entry_path="bin/$binary_name"
 mkdir -p "$payload_dir/bin" || zf_fail_exec "failed to create payload staging dir"
 cp -p "$source_binary" "$payload_dir/$entry_path" ||
   zf_fail_exec "failed to stage component binary"
+if [[ "$component" == "server" ]]; then
+  web_source_dir="$repo_root/apps/server/web"
+  [[ -d "$web_source_dir" ]] ||
+    zf_fail_exec "server Web static asset directory not found: $web_source_dir"
+  mkdir -p "$payload_dir/share" ||
+    zf_fail_exec "failed to create server Web asset staging dir"
+  cp -Rp "$web_source_dir" "$payload_dir/share/web" ||
+    zf_fail_exec "failed to stage server Web static assets"
+fi
 payload_dir_arg="$(zf_to_native_path_if_needed "$payload_dir")"
 
 packager_args=()

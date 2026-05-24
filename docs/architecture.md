@@ -254,7 +254,7 @@ control_listen = "127.0.0.1:8081"
 management_listen = "127.0.0.1:8080"
 database_path = "data/zfleet.db"
 package_repository = "data/packages"
-web_static_dir = "share/web"
+web_static_dir = ""
 
 [agent]
 control_url = "https://127.0.0.1:8081"
@@ -266,7 +266,11 @@ level = "info"
 file = "logs/zfleet.log"
 ```
 
-安装目录由 launcher stub 根据固定安装结构传递给真实进程，不从 TOML 读取，也不写回 TOML。未指定配置文件时，Server 默认读取并维护 `<install_dir>/etc/server.toml`，Agent 默认读取并维护 `<install_dir>/etc/agent.toml`；`-c, --config` 可指定自定义配置文件。绝对路径保持不变；相对路径以安装目录为基准。命令行参数只覆盖少量启动级配置，例如 `--config`、`--log-level` 和 `--data-dir`，覆盖后的有效配置会在路径解析前写回配置文件。
+安装目录由 launcher stub 根据固定安装结构传递给真实进程，不从 TOML 读取，也不写回 TOML。未指定配置文件时，Server 默认读取并维护 `<install_dir>/etc/server.toml`，Agent 默认读取并维护 `<install_dir>/etc/agent.toml`；`-c, --config` 可指定自定义配置文件。一般路径的绝对路径保持不变，相对路径以安装目录为基准。Server 的 `web_static_dir` 留空时例外：运行时从 active release 的真实二进制定位 `<release>/share/web`，确保页面资源与后端版本及回滚一致；配置非空值或 `--web-static-dir` 为运维显式覆盖。命令行参数只覆盖少量启动级配置，覆盖后的有效配置会在路径解析前写回配置文件。
+
+Web 静态资源源码位于 `apps/server/web/`，保持 HTML、CSS 和 JavaScript 文件独立于 C++ 翻译单元。Server package 将该目录写入 `payload/share/web/`，installer 因而把资源放入对应 `releases/<version>/share/web/`。管理 listener 启动时验证必需资源文件，运行时只通过固定页面路由和安全的 `/assets/` 路由按需读取文件。
+
+管理 listener 使用 Boost.Beast 构建每连接异步 HTTP/1.1 会话，accept 路径不等待客户端补齐请求数据，避免浏览器预连接或慢连接阻塞其他管理请求。当前输入防护默认包含 `10s` 请求读取超时、`16 KiB` header 上限和 `128 MiB` body 上限；超时或超限请求在进入管理 API 前终止。Agent package 上传使用 Beast `buffer_body` 分块写入 staging 文件，校验通过后才进入包仓库，不将整个 ZIP 加载到请求内存中。
 
 Agent 本地持久化信息应区分“配置”和“状态”：
 

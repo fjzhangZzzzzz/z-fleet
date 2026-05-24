@@ -17,7 +17,9 @@ z-fleet 需要提供轻量 Web 入口，覆盖 Agent 首次安装、在线状态
 
 1. **Web 由 `zfleet_server` 内置托管**
 
-   `zfleet_server` 提供 Web 静态资源托管和 JSON 管理 API。初期不引入独立 Web 服务进程，避免增加部署组件、反向代理强依赖和多进程配置漂移。前端构建产物作为 Server 发布包的一部分进入 `payload/`。
+   `zfleet_server` 提供 Web 静态资源托管和 JSON 管理 API。初期不引入独立 Web 服务进程，避免增加部署组件、反向代理强依赖和多进程配置漂移。HTML、CSS 和 JavaScript 保持为独立资源文件，不以 C++ 字符串编译入二进制；前端资源作为 Server 发布包的 `payload/share/web/` 内容安装到对应 release。
+
+   Server 默认从当前真实二进制所在 release 的 `share/web/` 加载资源，因此升级和回滚会同步切换页面与 API 对应版本。运维可通过 `web_static_dir` 或 `--web-static-dir` 显式覆盖资源根目录。管理 listener 启动前必须确认必需页面和资源文件存在，静态路由只允许固定 HTML 页面和受限 `/assets/` 文件类型，不允许目录穿越或符号链接逃逸。
 
 2. **管理 API 与 Agent 控制通道分离**
 
@@ -190,6 +192,7 @@ token 只存储哈希，不存储明文。
 - `docs/contracts.md` 需要补充 Web 管理 API 字段、错误码、审计事件和权限边界。
 - `docs/operations.md` 需要补充 Web 监听配置、安装包上传发布、channel 选择、注册 token 生成和排障流程。
 - Server 发布包需要包含 Web 静态资源，并保持 `zfleet_installer` 的 manifest 安全契约。
+- 静态页面可以独立迭代和审阅，但缺失或不安全的资源目录会使管理 listener 启动失败，避免带着残缺管理面运行。
 - 安装包上传、发布、退役、token 生成、token 使用、token 吊销和失败路径都必须写审计事件。
 - Web 不引入 shell、插件或高风险写入任务入口；远程任务能力仍按任务能力等级和后续 ADR 演进。
 

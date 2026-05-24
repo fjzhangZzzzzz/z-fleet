@@ -771,9 +771,15 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     if (closed.has_value() && closed->agent_id.has_value() &&
         closed->was_current_agent_connection) {
       if (async_store_ != nullptr) {
+        auto done = done_;
         async_store_->AsyncMarkAgentOffline(
             *closed->agent_id, disconnected_at, executor_,
-            [](std::exception_ptr) {});
+            [done](std::exception_ptr) {
+              if (done != nullptr) {
+                done->store(true);
+              }
+            });
+        return;
       } else {
         context_->store->MarkAgentOffline(*closed->agent_id,
                                           disconnected_at);
@@ -788,8 +794,8 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
   boost::asio::any_io_executor executor_;
   std::array<std::uint8_t, kReadBufferBytes> read_buffer_{};
   SessionCallbacks callbacks_;
-  std::unique_ptr<ServerSession> server_session_;
   std::shared_ptr<ConnectionContext> context_;
+  std::unique_ptr<ServerSession> server_session_;
   AsyncServerStore* async_store_;
   ServerDatabase* database_;
   std::optional<ServerDatabase::TaskQueueSubscription> task_queue_subscription_;
@@ -982,6 +988,19 @@ void Http2ControlServer::Stop() {
     if (session.stop) {
       session.stop();
     }
+  }
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto all_done = std::all_of(
+        sessions.begin(), sessions.end(), [](const ActiveSession& session) {
+          return session.done == nullptr || session.done->load();
+        });
+    if (all_done) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   io_context_.stop();

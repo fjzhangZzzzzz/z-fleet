@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>安装包管理 | z-fleet</title>
+  <link rel="stylesheet" href="/assets/management.css">
+  <script defer src="/assets/management.js"></script>
+</head>
+<body data-page="packages">
+  <header class="shell-header">
+    <a class="brand" href="/">z-fleet</a>
+    <nav><a href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a class="active" href="/admin/packages">安装包管理</a></nav>
+  </header>
+  <main class="page">
+    <div class="title-row"><div><p class="kicker">RELEASE CONTROL</p><h1>安装包管理</h1></div><span class="status" data-status-for="packages">待上传</span></div>
+    <section class="grid two">
+      <article class="panel">
+        <h2>上传 Agent Package</h2>
+        <form class="fields" data-package-upload-form>
+          <label>ZIP Package<input type="file" name="package" accept=".zip" required></label>
+          <label>Platform<input name="platform" value="linux" required></label>
+          <label>Architecture<input name="arch" value="x86_64" required></label>
+          <button class="button primary" type="submit">上传并校验</button>
+        </form>
+      </article>
+      <article class="panel">
+        <h2>已入库版本</h2>
+        <div class="packages" data-package-list><p class="muted">正在加载安装包...</p></div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

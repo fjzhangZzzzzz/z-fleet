@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent 状态 | z-fleet</title>
+  <link rel="stylesheet" href="/assets/management.css">
+  <script defer src="/assets/management.js"></script>
+</head>
+<body data-page="agents">
+  <header class="shell-header">
+    <a class="brand" href="/">z-fleet</a>
+    <nav><a href="/install">Agent 安装</a><a class="active" href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
+  </header>
+  <main class="page">
+    <div class="title-row"><div><p class="kicker">INVENTORY</p><h1>Agent 状态</h1></div><input class="search" data-agent-filter placeholder="按 Agent ID 筛选"></div>
+    <section class="grid fleet">
+      <article class="panel table-panel"><div class="table" data-agent-list><p class="muted">正在加载 Agent...</p></div></article>
+      <article class="panel detail" data-agent-detail><p class="muted">选择一个 Agent 查看资产详情。</p></article>
+    </section>
+  </main>
+</body>
+</html>

@@ -5,6 +5,7 @@
   "description": "Lightweight endpoint probe and management framework.",
   "dependencies": [
     "boost-asio",
+    "boost-beast",
     "boost-uuid",
     "catch2",
     "cli11",

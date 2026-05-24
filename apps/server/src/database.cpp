@@ -19,7 +19,7 @@
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 
 namespace proto = zfleet::protocol::v1;
 
@@ -96,6 +96,73 @@ zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
   };
 }
 
+AgentSummary ParseAgentSummary(SQLite::Statement& query) {
+  return AgentSummary{
+      .agent_id = query.getColumn(0).getString(),
+      .first_seen_at = query.getColumn(1).getString(),
+      .last_seen_at = query.getColumn(2).getString(),
+      .last_online_at = query.getColumn(3).getString(),
+      .last_offline_at = NullableOptionalColumn(query, 4),
+      .platform = query.getColumn(5).getString(),
+      .agent_version = query.getColumn(6).getString(),
+      .status = query.getColumn(7).getString(),
+  };
+}
+
+AssetSnapshotSummary ParseAssetSnapshotSummary(SQLite::Statement& query) {
+  return AssetSnapshotSummary{
+      .snapshot_id = query.getColumn(0).getInt64(),
+      .agent_id = query.getColumn(1).getString(),
+      .occurred_at = query.getColumn(2).getString(),
+      .hostname = query.getColumn(3).getString(),
+      .os = query.getColumn(4).getString(),
+      .os_version = NullableOptionalColumn(query, 5),
+      .arch = query.getColumn(6).getString(),
+      .agent_version = query.getColumn(7).getString(),
+  };
+}
+
+AgentPackageRecord ParseAgentPackageRecord(SQLite::Statement& query) {
+  return AgentPackageRecord{
+      .package_id = query.getColumn(0).getString(),
+      .component = query.getColumn(1).getString(),
+      .version = query.getColumn(2).getString(),
+      .platform = query.getColumn(3).getString(),
+      .arch = query.getColumn(4).getString(),
+      .filename = query.getColumn(5).getString(),
+      .storage_path = query.getColumn(6).getString(),
+      .size_bytes = static_cast<std::uint64_t>(query.getColumn(7).getInt64()),
+      .sha256 = query.getColumn(8).getString(),
+      .manifest_json = query.getColumn(9).getString(),
+      .status = query.getColumn(10).getString(),
+      .uploaded_at = query.getColumn(11).getString(),
+      .validated_at = NullableOptionalColumn(query, 12),
+      .published_at = NullableOptionalColumn(query, 13),
+      .retired_at = NullableOptionalColumn(query, 14),
+  };
+}
+
+RegistrationTokenRecord ParseRegistrationTokenRecord(SQLite::Statement& query) {
+  std::optional<int> max_uses;
+  if (!query.isColumnNull(6)) {
+    max_uses = query.getColumn(6).getInt();
+  }
+  return RegistrationTokenRecord{
+      .token_id = query.getColumn(0).getString(),
+      .token_hash = query.getColumn(1).getString(),
+      .purpose = query.getColumn(2).getString(),
+      .channel = NullableOptionalColumn(query, 3),
+      .platform = NullableOptionalColumn(query, 4),
+      .arch = NullableOptionalColumn(query, 5),
+      .max_uses = max_uses,
+      .use_count = query.getColumn(7).getInt(),
+      .status = query.getColumn(8).getString(),
+      .created_at = query.getColumn(9).getString(),
+      .expires_at = query.getColumn(10).getString(),
+      .revoked_at = NullableOptionalColumn(query, 11),
+  };
+}
+
 void ExecSchema(SQLite::Database& db) {
   db.exec(R"sql(
     create table if not exists agents (
@@ -165,6 +232,63 @@ void ExecSchema(SQLite::Database& db) {
       result_blob blob,
       error_blob blob
     )
+  )sql");
+
+  db.exec(R"sql(
+    create table if not exists agent_packages (
+      package_id text primary key,
+      component text not null,
+      version text not null,
+      platform text not null,
+      arch text not null,
+      filename text not null,
+      storage_path text not null,
+      size_bytes integer not null,
+      sha256 text not null,
+      manifest_json text not null,
+      status text not null,
+      uploaded_at text not null,
+      validated_at text,
+      published_at text,
+      retired_at text
+    )
+  )sql");
+
+  db.exec(R"sql(
+    create table if not exists package_publications (
+      publication_id text primary key,
+      package_id text not null,
+      channel text not null,
+      platform text not null,
+      arch text not null,
+      is_default integer not null,
+      published_at text not null,
+      published_by text,
+      foreign key(package_id) references agent_packages(package_id)
+    )
+  )sql");
+
+  db.exec(R"sql(
+    create table if not exists registration_tokens (
+      token_id text primary key,
+      token_hash text not null,
+      purpose text not null,
+      channel text,
+      platform text,
+      arch text,
+      max_uses integer,
+      use_count integer not null,
+      status text not null,
+      created_at text not null,
+      expires_at text not null,
+      revoked_at text
+    )
+  )sql");
+
+  db.exec(R"sql(
+    create unique index if not exists package_publications_default_idx
+      on package_publications(channel, platform, arch)
+      where is_default = 1
   )sql");
 
   db.exec("PRAGMA user_version = " + std::to_string(kSchemaVersion));
@@ -1263,6 +1387,440 @@ void ServerDatabase::RecordTaskResult(
     }
 
     transaction.commit();
+  });
+}
+
+std::vector<AgentSummary> ServerDatabase::ListAgents() const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          agent_id,
+          first_seen_at,
+          last_seen_at,
+          last_online_at,
+          last_offline_at,
+          platform,
+          agent_version,
+          status
+        from agents
+        order by status desc, last_seen_at desc, agent_id asc
+      )sql");
+    std::vector<AgentSummary> agents;
+    while (query.executeStep()) {
+      agents.push_back(ParseAgentSummary(query));
+    }
+    return agents;
+  });
+}
+
+std::optional<AgentSummary> ServerDatabase::FindAgent(
+    const std::string& agent_id) const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          agent_id,
+          first_seen_at,
+          last_seen_at,
+          last_online_at,
+          last_offline_at,
+          platform,
+          agent_version,
+          status
+        from agents
+        where agent_id = ?
+      )sql");
+    query.bind(1, agent_id);
+    if (!query.executeStep()) {
+      return std::optional<AgentSummary>{};
+    }
+    return std::optional<AgentSummary>{ParseAgentSummary(query)};
+  });
+}
+
+std::vector<AssetSnapshotSummary> ServerDatabase::ListAssetSnapshots(
+    const std::string& agent_id,
+    int limit) const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          snapshot_id,
+          agent_id,
+          occurred_at,
+          hostname,
+          os,
+          os_version,
+          arch,
+          agent_version
+        from asset_snapshots
+        where agent_id = ?
+        order by snapshot_id desc
+        limit ?
+      )sql");
+    query.bind(1, agent_id);
+    query.bind(2, limit <= 0 ? 100 : limit);
+    std::vector<AssetSnapshotSummary> snapshots;
+    while (query.executeStep()) {
+      snapshots.push_back(ParseAssetSnapshotSummary(query));
+    }
+    return snapshots;
+  });
+}
+
+std::optional<AssetSnapshotSummary> ServerDatabase::FindLatestAssetSnapshot(
+    const std::string& agent_id) const {
+  const auto snapshots = ListAssetSnapshots(agent_id, 1);
+  if (snapshots.empty()) {
+    return std::nullopt;
+  }
+  return snapshots.front();
+}
+
+void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Statement statement(
+        db,
+        R"sql(
+        insert into agent_packages (
+          package_id,
+          component,
+          version,
+          platform,
+          arch,
+          filename,
+          storage_path,
+          size_bytes,
+          sha256,
+          manifest_json,
+          status,
+          uploaded_at,
+          validated_at,
+          published_at,
+          retired_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(package_id) do update set
+          component = excluded.component,
+          version = excluded.version,
+          platform = excluded.platform,
+          arch = excluded.arch,
+          filename = excluded.filename,
+          storage_path = excluded.storage_path,
+          size_bytes = excluded.size_bytes,
+          sha256 = excluded.sha256,
+          manifest_json = excluded.manifest_json,
+          status = excluded.status,
+          uploaded_at = excluded.uploaded_at,
+          validated_at = excluded.validated_at,
+          published_at = excluded.published_at,
+          retired_at = excluded.retired_at
+      )sql");
+    statement.bind(1, package.package_id);
+    statement.bind(2, package.component);
+    statement.bind(3, package.version);
+    statement.bind(4, package.platform);
+    statement.bind(5, package.arch);
+    statement.bind(6, package.filename);
+    statement.bind(7, package.storage_path.string());
+    statement.bind(8, static_cast<std::int64_t>(package.size_bytes));
+    statement.bind(9, package.sha256);
+    statement.bind(10, package.manifest_json);
+    statement.bind(11, package.status);
+    statement.bind(12, package.uploaded_at);
+    if (package.validated_at.has_value()) {
+      statement.bind(13, *package.validated_at);
+    } else {
+      statement.bind(13);
+    }
+    if (package.published_at.has_value()) {
+      statement.bind(14, *package.published_at);
+    } else {
+      statement.bind(14);
+    }
+    if (package.retired_at.has_value()) {
+      statement.bind(15, *package.retired_at);
+    } else {
+      statement.bind(15);
+    }
+    statement.exec();
+  });
+}
+
+std::vector<AgentPackageRecord> ServerDatabase::ListAgentPackages() const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          package_id,
+          component,
+          version,
+          platform,
+          arch,
+          filename,
+          storage_path,
+          size_bytes,
+          sha256,
+          manifest_json,
+          status,
+          uploaded_at,
+          validated_at,
+          published_at,
+          retired_at
+        from agent_packages
+        order by uploaded_at desc, package_id asc
+      )sql");
+    std::vector<AgentPackageRecord> packages;
+    while (query.executeStep()) {
+      packages.push_back(ParseAgentPackageRecord(query));
+    }
+    return packages;
+  });
+}
+
+std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
+    const std::string& package_id) const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          package_id,
+          component,
+          version,
+          platform,
+          arch,
+          filename,
+          storage_path,
+          size_bytes,
+          sha256,
+          manifest_json,
+          status,
+          uploaded_at,
+          validated_at,
+          published_at,
+          retired_at
+        from agent_packages
+        where package_id = ?
+      )sql");
+    query.bind(1, package_id);
+    if (!query.executeStep()) {
+      return std::optional<AgentPackageRecord>{};
+    }
+    return std::optional<AgentPackageRecord>{ParseAgentPackageRecord(query)};
+  });
+}
+
+void ServerDatabase::PublishAgentPackage(
+    const std::string& package_id,
+    const std::string& channel,
+    const std::string& platform,
+    const std::string& arch,
+    const std::optional<std::string>& published_by,
+    const std::string& published_at) {
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Transaction transaction(db);
+    SQLite::Statement clear(
+        db,
+        "update package_publications set is_default = 0 "
+        "where channel = ? and platform = ? and arch = ? and is_default = 1");
+    clear.bind(1, channel);
+    clear.bind(2, platform);
+    clear.bind(3, arch);
+    clear.exec();
+
+    const auto publication_id =
+        package_id + ":" + channel + ":" + platform + ":" + arch;
+    SQLite::Statement publish(
+        db,
+        R"sql(
+        insert into package_publications (
+          publication_id,
+          package_id,
+          channel,
+          platform,
+          arch,
+          is_default,
+          published_at,
+          published_by
+        ) values (?, ?, ?, ?, ?, 1, ?, ?)
+        on conflict(publication_id) do update set
+          package_id = excluded.package_id,
+          channel = excluded.channel,
+          platform = excluded.platform,
+          arch = excluded.arch,
+          is_default = excluded.is_default,
+          published_at = excluded.published_at,
+          published_by = excluded.published_by
+      )sql");
+    publish.bind(1, publication_id);
+    publish.bind(2, package_id);
+    publish.bind(3, channel);
+    publish.bind(4, platform);
+    publish.bind(5, arch);
+    publish.bind(6, published_at);
+    if (published_by.has_value()) {
+      publish.bind(7, *published_by);
+    } else {
+      publish.bind(7);
+    }
+    publish.exec();
+
+    SQLite::Statement update_package(
+        db,
+        "update agent_packages set status = ?, published_at = ? "
+        "where package_id = ?");
+    update_package.bind(1, "published");
+    update_package.bind(2, published_at);
+    update_package.bind(3, package_id);
+    update_package.exec();
+    if (sqlite3_changes(db.getHandle()) != 1) {
+      throw std::runtime_error("agent package not found for publish");
+    }
+    transaction.commit();
+  });
+}
+
+std::optional<AgentPackageRecord>
+ServerDatabase::FindDefaultPublishedAgentPackage(
+    const std::string& channel,
+    const std::string& platform,
+    const std::string& arch) const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          p.package_id,
+          p.component,
+          p.version,
+          p.platform,
+          p.arch,
+          p.filename,
+          p.storage_path,
+          p.size_bytes,
+          p.sha256,
+          p.manifest_json,
+          p.status,
+          p.uploaded_at,
+          p.validated_at,
+          p.published_at,
+          p.retired_at
+        from agent_packages p
+        join package_publications pub on pub.package_id = p.package_id
+        where pub.channel = ?
+          and pub.platform = ?
+          and pub.arch = ?
+          and pub.is_default = 1
+          and p.status = 'published'
+        order by pub.published_at desc
+        limit 1
+      )sql");
+    query.bind(1, channel);
+    query.bind(2, platform);
+    query.bind(3, arch);
+    if (!query.executeStep()) {
+      return std::optional<AgentPackageRecord>{};
+    }
+    return std::optional<AgentPackageRecord>{ParseAgentPackageRecord(query)};
+  });
+}
+
+void ServerDatabase::CreateRegistrationToken(
+    const RegistrationTokenRecord& token) {
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Statement statement(
+        db,
+        R"sql(
+        insert into registration_tokens (
+          token_id,
+          token_hash,
+          purpose,
+          channel,
+          platform,
+          arch,
+          max_uses,
+          use_count,
+          status,
+          created_at,
+          expires_at,
+          revoked_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      )sql");
+    statement.bind(1, token.token_id);
+    statement.bind(2, token.token_hash);
+    statement.bind(3, token.purpose);
+    if (token.channel.has_value()) {
+      statement.bind(4, *token.channel);
+    } else {
+      statement.bind(4);
+    }
+    if (token.platform.has_value()) {
+      statement.bind(5, *token.platform);
+    } else {
+      statement.bind(5);
+    }
+    if (token.arch.has_value()) {
+      statement.bind(6, *token.arch);
+    } else {
+      statement.bind(6);
+    }
+    if (token.max_uses.has_value()) {
+      statement.bind(7, *token.max_uses);
+    } else {
+      statement.bind(7);
+    }
+    statement.bind(8, token.use_count);
+    statement.bind(9, token.status);
+    statement.bind(10, token.created_at);
+    statement.bind(11, token.expires_at);
+    if (token.revoked_at.has_value()) {
+      statement.bind(12, *token.revoked_at);
+    } else {
+      statement.bind(12);
+    }
+    statement.exec();
+  });
+}
+
+std::vector<RegistrationTokenRecord>
+ServerDatabase::ListRegistrationTokens() const {
+  return ExecuteWithBusyRetry([&]() {
+    SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
+    SQLite::Statement query(
+        db,
+        R"sql(
+        select
+          token_id,
+          token_hash,
+          purpose,
+          channel,
+          platform,
+          arch,
+          max_uses,
+          use_count,
+          status,
+          created_at,
+          expires_at,
+          revoked_at
+        from registration_tokens
+        order by created_at desc, token_id asc
+      )sql");
+    std::vector<RegistrationTokenRecord> tokens;
+    while (query.executeStep()) {
+      tokens.push_back(ParseRegistrationTokenRecord(query));
+    }
+    return tokens;
   });
 }
 

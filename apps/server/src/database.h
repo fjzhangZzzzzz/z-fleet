@@ -7,21 +7,78 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
-#include <map>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace SQLite {
 class Database;
 }
 
 namespace zfleet::server {
+
+struct AgentSummary {
+  std::string agent_id;
+  std::string first_seen_at;
+  std::string last_seen_at;
+  std::string last_online_at;
+  std::optional<std::string> last_offline_at;
+  std::string platform;
+  std::string agent_version;
+  std::string status;
+};
+
+struct AssetSnapshotSummary {
+  std::int64_t snapshot_id = 0;
+  std::string agent_id;
+  std::string occurred_at;
+  std::string hostname;
+  std::string os;
+  std::optional<std::string> os_version;
+  std::string arch;
+  std::string agent_version;
+};
+
+struct AgentPackageRecord {
+  std::string package_id;
+  std::string component;
+  std::string version;
+  std::string platform;
+  std::string arch;
+  std::string filename;
+  std::filesystem::path storage_path;
+  std::uint64_t size_bytes = 0;
+  std::string sha256;
+  std::string manifest_json;
+  std::string status;
+  std::string uploaded_at;
+  std::optional<std::string> validated_at;
+  std::optional<std::string> published_at;
+  std::optional<std::string> retired_at;
+};
+
+struct RegistrationTokenRecord {
+  std::string token_id;
+  std::string token_hash;
+  std::string purpose;
+  std::optional<std::string> channel;
+  std::optional<std::string> platform;
+  std::optional<std::string> arch;
+  std::optional<int> max_uses;
+  int use_count = 0;
+  std::string status;
+  std::string created_at;
+  std::string expires_at;
+  std::optional<std::string> revoked_at;
+};
 
 struct StoredTask {
   zfleet::protocol::Task task;
@@ -153,6 +210,29 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
   void RecordTaskResult(const zfleet::protocol::TaskResult& request,
                         const std::optional<std::string>& result_blob,
                         const std::optional<std::string>& error_blob) override;
+  std::vector<AgentSummary> ListAgents() const;
+  std::optional<AgentSummary> FindAgent(const std::string& agent_id) const;
+  std::vector<AssetSnapshotSummary> ListAssetSnapshots(
+      const std::string& agent_id,
+      int limit) const;
+  std::optional<AssetSnapshotSummary> FindLatestAssetSnapshot(
+      const std::string& agent_id) const;
+  void UpsertAgentPackage(const AgentPackageRecord& package);
+  std::vector<AgentPackageRecord> ListAgentPackages() const;
+  std::optional<AgentPackageRecord> FindAgentPackage(
+      const std::string& package_id) const;
+  void PublishAgentPackage(const std::string& package_id,
+                           const std::string& channel,
+                           const std::string& platform,
+                           const std::string& arch,
+                           const std::optional<std::string>& published_by,
+                           const std::string& published_at);
+  std::optional<AgentPackageRecord> FindDefaultPublishedAgentPackage(
+      const std::string& channel,
+      const std::string& platform,
+      const std::string& arch) const;
+  void CreateRegistrationToken(const RegistrationTokenRecord& token);
+  std::vector<RegistrationTokenRecord> ListRegistrationTokens() const;
   void AsyncAgentExists(
       std::string agent_id,
       boost::asio::any_io_executor completion_executor,

@@ -5,21 +5,29 @@ add_library(zfleet_server_app
   src/http2_control_dispatcher.cpp
   src/http2_control_server.cpp
   src/http2_control_service.cpp
+  src/management_http_server.cpp
+  src/package_repository.cpp
+  src/static_file_service.cpp
 )
 
 set(ZFLEET_SERVER_VERSION "${PROJECT_VERSION}")
 
-find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS beast system)
 find_package(CLI11 CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(SQLiteCpp CONFIG REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 
 target_link_libraries(zfleet_server_app
   PUBLIC
+    Boost::beast
     Boost::system
+    nlohmann_json::nlohmann_json
     SQLiteCpp
     tomlplusplus::tomlplusplus
     zfleet::core
+    zfleet::crypto
+    zfleet::package
     zfleet::protocol
     zfleet::transport
 )

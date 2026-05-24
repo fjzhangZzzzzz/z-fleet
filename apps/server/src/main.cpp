@@ -3,6 +3,7 @@
 #include "http2_connection_registry.h"
 #include "http2_control_server.h"
 #include "http2_control_service.h"
+#include "management_http_server.h"
 
 #include "zfleet/core/log.h"
 #include "zfleet/core/version.h"
@@ -27,6 +28,13 @@ std::filesystem::path DetectInstallDir() {
   return std::filesystem::current_path();
 }
 
+std::filesystem::path DetectReleaseWebStaticDir(const char* executable_path) {
+  const auto executable =
+      std::filesystem::absolute(executable_path == nullptr ? "" : executable_path)
+          .lexically_normal();
+  return executable.parent_path().parent_path() / "share" / "web";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -34,13 +42,22 @@ int main(int argc, char** argv) {
 
   std::string config_path_arg;
   std::string control_listen_arg;
+  std::string management_listen_arg;
   std::string database_path_arg;
+  std::string package_repository_arg;
+  std::string web_static_dir_arg;
   std::string log_level_arg;
   app.add_option("-c,--config", config_path_arg, "Path to server config file");
   app.add_option("--control-listen", control_listen_arg,
                  "Override server HTTP/2 control listen address");
+  app.add_option("--management-listen", management_listen_arg,
+                 "Override server Web management listen address");
   app.add_option("--database-path", database_path_arg,
                  "Override server database path");
+  app.add_option("--package-repository", package_repository_arg,
+                 "Override server package repository path");
+  app.add_option("--web-static-dir", web_static_dir_arg,
+                 "Override server Web static asset directory");
   app.add_option("--log-level", log_level_arg, "Override server log level");
 
   CLI11_PARSE(app, argc, argv);
@@ -63,11 +80,24 @@ int main(int argc, char** argv) {
     if (!control_listen_arg.empty()) {
       config.control_listen = control_listen_arg;
     }
+    if (!management_listen_arg.empty()) {
+      config.management_listen = management_listen_arg;
+    }
+    if (!package_repository_arg.empty()) {
+      config.package_repository = package_repository_arg;
+    }
+    if (!web_static_dir_arg.empty()) {
+      config.web_static_dir = web_static_dir_arg;
+    }
     if (!log_level_arg.empty()) {
       config.log.level = zfleet::core::log::ParseLevel(log_level_arg);
     }
     zfleet::server::SaveConfig(config, config_path);
     zfleet::server::ResolveConfigPaths(&config);
+    if (config.web_static_dir.empty()) {
+      config.web_static_dir =
+          DetectReleaseWebStaticDir(argc > 0 ? argv[0] : nullptr);
+    }
 
     zfleet::core::log::Init(config.log);
     const auto logger = zfleet::core::log::Component("server").With(
@@ -82,15 +112,22 @@ int main(int argc, char** argv) {
                                                       &database,
                                                       &control_service,
                                                       &connection_registry);
+    zfleet::server::ManagementHttpServer management_server(
+        config.management_listen,
+        &database,
+        config.package_repository,
+        config.web_static_dir);
+    management_server.Start();
 
     ZFLOG_INFO(logger,
-               "{} server {} protocol {} on {} schema_version={} control_listen={}",
+               "{} server {} protocol {} on {} schema_version={} control_listen={} management_listen={}",
                zfleet::core::project_name(),
                zfleet::core::version(),
                zfleet::protocol::protocol_version(),
                zfleet::platform::os_name(),
                database.schema_version(),
-               config.control_listen);
+               config.control_listen,
+               config.management_listen);
     control_server.Run();
     zfleet::core::log::Shutdown();
     return 0;

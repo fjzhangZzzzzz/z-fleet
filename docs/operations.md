@@ -91,12 +91,14 @@ cmake --preset linux-debug
 Server 当前最小本地运行方式：
 
 ```bash
-./build/linux-debug/apps/server/zfleet_server --database-path /tmp/zfleet-server/zfleet.db
+./build/linux-debug/apps/server/zfleet_server \
+  --database-path /tmp/zfleet-server/zfleet.db \
+  --web-static-dir "$PWD/apps/server/web"
 ```
 
-Server 支持 `-c, --config` 指定配置文件，并可通过 `--database-path`、`--control-listen`、`--log-level` 覆盖配置项。未指定配置文件时默认使用安装目录下的 `etc/server.toml`；通过 launcher stub 启动时，安装目录由固定 `bin/zfleet_server` 路径自动传递给真实进程。启动时会自动初始化 SQLite 数据库和当前最小 schema。
+Server 支持 `-c, --config` 指定配置文件，并可通过 `--database-path`、`--control-listen`、`--management-listen`、`--package-repository`、`--web-static-dir`、`--log-level` 覆盖配置项。未指定配置文件时默认使用安装目录下的 `etc/server.toml`；通过 launcher stub 启动时，安装目录由固定 `bin/zfleet_server` 路径自动传递给真实进程。直接运行 build 产物不处于 installer release 结构内，因此本地调试 Web 时需要如上显式指定源码静态资源目录。启动时会自动初始化 SQLite 数据库和当前最小 schema。
 
-规划中的 Web 管理面由 `zfleet_server` 内置托管，配置应与 Agent 控制监听分离：
+Web 管理面由 `zfleet_server` 内置托管，配置与 Agent 控制监听分离：
 
 ```toml
 [server]
@@ -104,7 +106,7 @@ control_listen = "127.0.0.1:8081"
 management_listen = "127.0.0.1:8080"
 database_path = "data/zfleet.db"
 package_repository = "data/packages"
-web_static_dir = "share/web"
+web_static_dir = ""
 ```
 
 安全默认值：
@@ -113,6 +115,9 @@ web_static_dir = "share/web"
 - 对非本机开放前必须配置认证边界，例如本地 admin token 或反向代理认证；
 - 控制通道和管理 API 使用不同路径，不通过 Web 调用 Agent HTTP/2 protobuf 控制流；
 - 安装包上传、发布、退役和注册 token 操作必须写审计事件。
+- `web_static_dir` 留空时从当前 active release 的 `share/web/` 加载静态资源；配置非空值时按安装目录解析为显式覆盖；
+- 管理 listener 启动前校验必需 HTML、CSS 和 JavaScript 文件；`/assets/` 不接受目录穿越、符号链接文件或非允许类型资源。
+- 管理 listener 基于 Boost.Beast 异步处理连接，默认对请求读取应用 `10s` 超时、`16 KiB` header 上限和 `128 MiB` body 上限；超限上传会返回 `413`，慢请求会返回 `408`。Agent ZIP 上传按块写入 staging 文件，校验通过前不会进入包仓库。
 
 Agent 当前最小本地运行方式：
 
@@ -137,7 +142,7 @@ Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--
 - 默认会先构建对应 preset；`--no-build` 用于复用已有构建产物。
 - 默认生成目录 package；`--zip` 生成标准 `.zip` 安装包。
 - 版本来自 `build/<preset>/apps/<component>/zfleet_<component>_version.txt`，不通过脚本手工输入。
-- 当前脚本只收集组件主程序二进制到 `payload/bin/`，动态库或其他依赖自动收集尚未实现。
+- 当前脚本收集组件主程序二进制到 `payload/bin/`；对 Server 还会收集 `apps/server/web/` 到 `payload/share/web/`。动态库或其他运行时依赖自动收集尚未实现。
 
 示例：
 
@@ -307,6 +312,8 @@ channel 约束：
 launcher stub 位于固定 `bin/zfleet_*` 路径，启动时读取 `var/active-version` 并执行 `releases/<version>/bin/zfleet_*`。installer 自身也按同一模型更新，新版本从下一次通过 `installer/bin/zfleet_installer` 调用时生效。
 
 launcher stub 会把组件根目录通过内部环境变量传给真实进程。Agent 和 Server 不从配置文件读取 `install_dir`，也不会把 `install_dir` 写回配置文件；默认配置文件位于组件根目录下的 `etc/agent.toml` 或 `etc/server.toml`，可用 `-c, --config` 指向自定义配置文件。配置文件不存在时，启动流程会先按内置默认值生成 TOML；命令行覆盖项会在路径解析前写回配置文件。
+
+Server 安装包额外包含 `share/web/` 静态资源，安装后位于 `releases/<version>/share/web/`。默认配置不固定该路径，真实 `zfleet_server` 依据自身 release 位置加载对应资源；`apply` 和 `rollback` 因此会随二进制一起切换 Web 页面版本。
 
 ## 当前边界
 

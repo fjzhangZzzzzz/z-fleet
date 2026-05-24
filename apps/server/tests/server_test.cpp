@@ -4,23 +4,33 @@
 #include "http2_control_dispatcher.h"
 #include "http2_control_server.h"
 #include "http2_control_service.h"
+#include "management_http_server.h"
 
 #include "test_util.h"
 
 #include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/crypto/sha256.h"
+#include "zfleet/package/archive.h"
+#include "zfleet/package/manifest.h"
 #include "zfleet/transport/frame_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/read.hpp>
+#include <boost/asio/streambuf.hpp>
+#include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -289,6 +299,96 @@ std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
       reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
 }
 
+struct HttpResponse {
+  int status = 0;
+  std::string headers;
+  std::string body;
+};
+
+HttpResponse ReadHttpResponse(boost::asio::ip::tcp::socket* socket) {
+  boost::asio::streambuf response;
+  boost::system::error_code ec;
+  boost::asio::read(*socket, response, ec);
+  REQUIRE(ec == boost::asio::error::eof);
+
+  std::istream stream(&response);
+  std::string text((std::istreambuf_iterator<char>(stream)),
+                   std::istreambuf_iterator<char>());
+  const auto header_end = text.find("\r\n\r\n");
+  REQUIRE(header_end != std::string::npos);
+  const auto status_end = text.find("\r\n");
+  REQUIRE(status_end != std::string::npos);
+  const auto status_line = text.substr(0, status_end);
+  HttpResponse parsed;
+  parsed.status = std::stoi(status_line.substr(9, 3));
+  parsed.headers = text.substr(0, header_end);
+  parsed.body = text.substr(header_end + 4);
+  return parsed;
+}
+
+HttpResponse SendHttpRequest(std::uint16_t port,
+                             const std::string& request) {
+  boost::asio::io_context io_context;
+  boost::asio::ip::tcp::socket socket(io_context);
+  socket.connect({boost::asio::ip::make_address("127.0.0.1"), port});
+  boost::asio::write(socket, boost::asio::buffer(request));
+  return ReadHttpResponse(&socket);
+}
+
+std::string ReadBinaryFile(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  REQUIRE(stream);
+  std::ostringstream contents;
+  contents << stream.rdbuf();
+  return contents.str();
+}
+
+std::filesystem::path CreateAgentPackageArchive(
+    const std::filesystem::path& root) {
+  const auto package_dir = root / "package";
+  const auto payload_file = package_dir / "payload" / "bin" / "zfleet_agent";
+  zfleet::test::WriteTextFile(payload_file, "agent-binary");
+
+  const auto manifest = zfleet::package::SerializeManifestJson(
+      zfleet::package::Manifest{
+          .schema_version = 1,
+          .component = "agent",
+          .version = "0.1.0",
+          .min_installer_version = "0.1.0",
+          .files = {zfleet::package::ManifestFile{
+              .source = "payload/bin/zfleet_agent",
+              .target = "bin/zfleet_agent",
+              .size = 12,
+              .sha256 = zfleet::crypto::Sha256BytesHex("agent-binary"),
+              .executable = true,
+          }},
+      });
+  zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
+                              manifest);
+
+  const auto archive_path = root / "agent.zip";
+  zfleet::package::CreateArchive(zfleet::package::CreateArchiveOptions{
+      .package_dir = package_dir,
+      .archive_path = archive_path,
+      .force = true,
+  });
+  return archive_path;
+}
+
+void WriteWebStaticFiles(const std::filesystem::path& root) {
+  zfleet::test::WriteTextFile(root / "index.html", "<title>z-fleet</title>");
+  zfleet::test::WriteTextFile(root / "install.html",
+                              "<title>z-fleet install</title>");
+  zfleet::test::WriteTextFile(root / "agents.html",
+                              "<title>z-fleet agents</title>");
+  zfleet::test::WriteTextFile(root / "admin" / "packages.html",
+                              "<title>z-fleet packages</title>");
+  zfleet::test::WriteTextFile(root / "assets" / "management.css",
+                              "body { color: #102c32; }");
+  zfleet::test::WriteTextFile(root / "assets" / "management.js",
+                              "console.log('z-fleet');");
+}
+
 } // namespace
 
 TEST_CASE("server config loads control listen and database path from toml") {
@@ -300,7 +400,10 @@ TEST_CASE("server config loads control listen and database path from toml") {
     REQUIRE(config_stream);
     config_stream << "[server]\n";
     config_stream << "control_listen = \"127.0.0.1:18081\"\n";
+    config_stream << "management_listen = \"127.0.0.1:18080\"\n";
     config_stream << "database_path = \"data/server.db\"\n";
+    config_stream << "package_repository = \"data/packages\"\n";
+    config_stream << "web_static_dir = \"share/web\"\n";
     config_stream << "\n[log]\n";
     config_stream << "level = \"debug\"\n";
     config_stream << "file = \"logs/server.log\"\n";
@@ -313,7 +416,10 @@ TEST_CASE("server config loads control listen and database path from toml") {
 
   REQUIRE(config.install_dir == test_root.path());
   REQUIRE(config.control_listen == "127.0.0.1:18081");
+  REQUIRE(config.management_listen == "127.0.0.1:18080");
   REQUIRE(config.database_path == test_root / "data" / "server.db");
+  REQUIRE(config.package_repository == test_root / "data" / "packages");
+  REQUIRE(config.web_static_dir == test_root / "share" / "web");
   REQUIRE(config.log.level == zfleet::core::log::Level::kDebug);
   REQUIRE(config.log.file_path == test_root / "logs" / "server.log");
   REQUIRE_FALSE(config.log.enable_console);
@@ -327,7 +433,10 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   zfleet::server::ServerConfig config;
   config.install_dir = test_root.path();
   config.control_listen = "127.0.0.1:18081";
+  config.management_listen = "127.0.0.1:18080";
   config.database_path = "data/custom.db";
+  config.package_repository = "data/packages";
+  config.web_static_dir = "share/web";
   config.log.level = zfleet::core::log::Level::kError;
 
   zfleet::server::SaveConfig(config, config_path);
@@ -339,6 +448,9 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   REQUIRE(saved.find("127.0.0.1:18081") != std::string::npos);
   REQUIRE(saved.find("database_path") != std::string::npos);
   REQUIRE(saved.find("data/custom.db") != std::string::npos);
+  REQUIRE(saved.find("management_listen") != std::string::npos);
+  REQUIRE(saved.find("package_repository") != std::string::npos);
+  REQUIRE(saved.find("web_static_dir") != std::string::npos);
 
   auto loaded = zfleet::server::LoadConfig(config_path);
   loaded.install_dir = test_root.path();
@@ -346,8 +458,16 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
 
   REQUIRE(loaded.install_dir == test_root.path());
   REQUIRE(loaded.control_listen == "127.0.0.1:18081");
+  REQUIRE(loaded.management_listen == "127.0.0.1:18080");
   REQUIRE(loaded.database_path == test_root / "data" / "custom.db");
+  REQUIRE(loaded.package_repository == test_root / "data" / "packages");
+  REQUIRE(loaded.web_static_dir == test_root / "share" / "web");
   REQUIRE(loaded.log.level == zfleet::core::log::Level::kError);
+}
+
+TEST_CASE("server config leaves Web assets on active release unless overridden") {
+  const zfleet::server::ServerConfig config;
+  REQUIRE(config.web_static_dir.empty());
 }
 
 TEST_CASE("server database initializes schema and version") {
@@ -360,13 +480,317 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 4);
+  REQUIRE(database.schema_version() == 5);
   REQUIRE(TableExists(database_path, "agents"));
   REQUIRE_FALSE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
   REQUIRE(TableExists(database_path, "audit_events"));
   REQUIRE(TableExists(database_path, "tasks"));
   REQUIRE(TableExists(database_path, "task_results"));
+  REQUIRE(TableExists(database_path, "agent_packages"));
+  REQUIRE(TableExists(database_path, "package_publications"));
+  REQUIRE(TableExists(database_path, "registration_tokens"));
+}
+
+TEST_CASE("server database exposes web management read models") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-web-1");
+  database.RecordAssetSnapshot(
+      zfleet::protocol::AssetSnapshot{
+          .protocol_version = "v1",
+          .request_id = "asset-web-1",
+          .agent_id = "agent-web-1",
+          .occurred_at = "2026-05-24T10:00:00Z",
+          .hostname = "devbox-web",
+          .os = "linux",
+          .os_version = "6.8",
+          .arch = "x86_64",
+          .agent_version = "0.1.0",
+      },
+      AssetSnapshotEvent("asset-web-1", "agent-web-1",
+                         "2026-05-24T10:00:00Z"));
+
+  const auto agents = database.ListAgents();
+  REQUIRE(agents.size() == 1);
+  REQUIRE(agents.front().agent_id == "agent-web-1");
+  REQUIRE(agents.front().status == "online");
+
+  const auto latest = database.FindLatestAssetSnapshot("agent-web-1");
+  REQUIRE(latest.has_value());
+  REQUIRE(latest->hostname == "devbox-web");
+  REQUIRE(latest->os_version == "6.8");
+}
+
+TEST_CASE("server database stores package channel and registration tokens") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+
+  database.UpsertAgentPackage(zfleet::server::AgentPackageRecord{
+      .package_id = "pkg-1",
+      .component = "agent",
+      .version = "0.1.0",
+      .platform = "linux",
+      .arch = "x86_64",
+      .filename = "agent.zip",
+      .storage_path = test_root / "agent.zip",
+      .size_bytes = 10,
+      .sha256 = std::string(64, 'a'),
+      .manifest_json = "{}",
+      .status = "validated",
+      .uploaded_at = "2026-05-24T10:00:00Z",
+      .validated_at = "2026-05-24T10:00:00Z",
+  });
+  database.PublishAgentPackage("pkg-1", "stable", "linux", "x86_64",
+                               std::optional<std::string>{"admin"},
+                               "2026-05-24T10:01:00Z");
+
+  const auto package =
+      database.FindDefaultPublishedAgentPackage("stable", "linux", "x86_64");
+  REQUIRE(package.has_value());
+  REQUIRE(package->package_id == "pkg-1");
+  REQUIRE(package->status == "published");
+
+  database.CreateRegistrationToken(zfleet::server::RegistrationTokenRecord{
+      .token_id = "token-1",
+      .token_hash = std::string(64, 'b'),
+      .purpose = "agent_register",
+      .channel = std::optional<std::string>{"stable"},
+      .platform = std::optional<std::string>{"linux"},
+      .arch = std::optional<std::string>{"x86_64"},
+      .max_uses = 1,
+      .use_count = 0,
+      .status = "active",
+      .created_at = "2026-05-24T10:02:00Z",
+      .expires_at = "2026-05-25T10:02:00Z",
+  });
+  const auto tokens = database.ListRegistrationTokens();
+  REQUIRE(tokens.size() == 1);
+  REQUIRE(tokens.front().token_id == "token-1");
+  REQUIRE(tokens.front().token_hash == std::string(64, 'b'));
+}
+
+TEST_CASE("management http server serves static UI and agent api") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-http-1");
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root);
+  server.Start();
+
+  const auto page = SendHttpRequest(
+      server.port(),
+      "GET /install HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(page.status == 200);
+  REQUIRE(page.headers.find("text/html") != std::string::npos);
+  REQUIRE(page.body.find("z-fleet") != std::string::npos);
+
+  const auto stylesheet = SendHttpRequest(
+      server.port(),
+      "GET /assets/management.css HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(stylesheet.status == 200);
+  REQUIRE(stylesheet.headers.find("text/css") != std::string::npos);
+  REQUIRE(stylesheet.body.find("#102c32") != std::string::npos);
+
+  const auto traversal = SendHttpRequest(
+      server.port(),
+      "GET /assets/../server.toml HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(traversal.status == 404);
+
+  const auto agents = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/agents HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(agents.status == 200);
+  REQUIRE(agents.body.find("agent-http-1") != std::string::npos);
+
+  server.Stop();
+}
+
+TEST_CASE("management http server refuses missing Web static resources") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      test_root / "missing" / "web");
+
+  REQUIRE_THROWS_AS(server.Start(), std::runtime_error);
+}
+
+TEST_CASE("management http server serves requests while an idle connection waits") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root);
+  server.Start();
+
+  boost::asio::io_context io_context;
+  boost::asio::ip::tcp::socket idle_socket(io_context);
+  idle_socket.connect(
+      {boost::asio::ip::make_address("127.0.0.1"), server.port()});
+
+  const auto page = SendHttpRequest(
+      server.port(),
+      "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(page.status == 200);
+  REQUIRE(page.body.find("z-fleet") != std::string::npos);
+
+  idle_socket.close();
+  server.Stop();
+}
+
+TEST_CASE("management http server bounds incomplete and oversized requests") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .io_threads = 1,
+          .request_timeout = std::chrono::milliseconds(25),
+          .max_header_bytes = 128,
+          .max_body_bytes = 4,
+      });
+  server.Start();
+
+  boost::asio::io_context io_context;
+  boost::asio::ip::tcp::socket idle_socket(io_context);
+  idle_socket.connect(
+      {boost::asio::ip::make_address("127.0.0.1"), server.port()});
+  const auto timeout = ReadHttpResponse(&idle_socket);
+  REQUIRE(timeout.status == 408);
+
+  const auto large_header = SendHttpRequest(
+      server.port(),
+      "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Long: " +
+          std::string(256, 'x') + "\r\n\r\n");
+  REQUIRE(large_header.status == 431);
+
+  const auto large_body = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/install/tokens HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n12345");
+  REQUIRE(large_body.status == 413);
+
+  server.Stop();
+}
+
+TEST_CASE("management http server cleans timed out streamed upload staging") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .io_threads = 1,
+          .request_timeout = std::chrono::milliseconds(25),
+          .max_header_bytes = 1024,
+          .max_body_bytes = 1024,
+      });
+  server.Start();
+
+  boost::asio::io_context io_context;
+  boost::asio::ip::tcp::socket socket(io_context);
+  socket.connect({boost::asio::ip::make_address("127.0.0.1"), server.port()});
+  const std::string partial_upload =
+      "POST /api/v1/admin/packages?platform=linux&arch=x86_64 HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Length: 100\r\n\r\npartial";
+  boost::asio::write(socket, boost::asio::buffer(partial_upload));
+  const auto timeout = ReadHttpResponse(&socket);
+  REQUIRE(timeout.status == 408);
+
+  const auto staging_dir = test_root / "packages" / ".staging";
+  REQUIRE(std::filesystem::is_directory(staging_dir));
+  REQUIRE(std::filesystem::is_empty(staging_dir));
+
+  server.Stop();
+}
+
+TEST_CASE("management http server uploads publishes and resolves package channel") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root);
+  server.Start();
+
+  const auto archive_path = CreateAgentPackageArchive(test_root.path());
+  const auto archive_body = ReadBinaryFile(archive_path);
+  std::string upload_request =
+      "POST /api/v1/admin/packages?platform=linux&arch=x86_64&filename=agent.zip HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Type: application/zip\r\n"
+      "Content-Length: " +
+      std::to_string(archive_body.size()) + "\r\n\r\n";
+  upload_request += archive_body;
+
+  const auto upload = SendHttpRequest(server.port(), upload_request);
+  REQUIRE(upload.status == 201);
+  REQUIRE(upload.body.find("\"status\":\"validated\"") != std::string::npos);
+  REQUIRE(database.ListAgentPackages().size() == 1);
+  const auto package_id = database.ListAgentPackages().front().package_id;
+
+  const std::string publish_body = R"json({"channel":"candidate"})json";
+  std::string publish_request =
+      "POST /api/v1/admin/packages/" + package_id +
+      "/publish HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: " +
+      std::to_string(publish_body.size()) + "\r\n\r\n" + publish_body;
+  const auto publish = SendHttpRequest(server.port(), publish_request);
+  REQUIRE(publish.status == 200);
+  REQUIRE(publish.body.find("\"status\":\"published\"") != std::string::npos);
+
+  const auto options = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/options?channel=candidate&platform=linux&arch=x86_64 HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n\r\n");
+  REQUIRE(options.status == 200);
+  REQUIRE(options.body.find(package_id) != std::string::npos);
+  REQUIRE(options.body.find("\"agent_version\":\"0.1.0\"") != std::string::npos);
+
+  server.Stop();
 }
 
 TEST_CASE("server database claims queued task only once") {
