@@ -241,13 +241,13 @@ channel 约束：
 
 默认行为：
 
-- `--root` 未指定时使用 `/tmp/zfleet-root`。
+- `--root` 未指定时使用 `~/zfleet`。
 - `--preset` 未指定时使用仓库默认 preset。
 - `apply` 可一次指定多个组件；脚本会先构建一次 preset，再为每个组件生成并安装 package。
 - `apply --zip` 生成并安装 ZIP package；未指定 `--zip` 时生成并安装目录 package。
 - `apply --force` 覆盖 `build/packages` 下已存在的同版本 package 输出。
 - `apply --replace` 覆盖本地 root 下已安装的同版本目标组件 release，用于本地开发时重新部署相同版本号的二进制。
-- `status` 和 `rollback` 优先使用已部署的 `<root>/zfleet/installer/bin/zfleet_installer`；不存在时使用当前构建输出中的 installer。
+- `status` 和 `rollback` 优先使用已部署的 `<root>/installer/bin/zfleet_installer`；不存在时使用当前构建输出中的 installer。
 - `status` 和 `rollback` 不接受 `--zip`、`--force`、`--replace`、`--no-build`。
 
 建议首次本地安装顺序：
@@ -261,15 +261,15 @@ channel 约束：
 
 ```bash
 ./build/linux-debug/apps/installer/zfleet_installer apply \
-  --root /tmp/zfleet-root \
+  --root ~/zfleet \
   --package /tmp/packages/agent/0.1.0.zip
 ```
 
 查询和回滚：
 
 ```bash
-./scripts/install-local.sh status agent --root /tmp/zfleet-root
-./scripts/install-local.sh rollback agent --root /tmp/zfleet-root
+./scripts/install-local.sh status agent --root ~/zfleet
+./scripts/install-local.sh rollback agent --root ~/zfleet
 ```
 
 `status` 输出单行 JSON：
@@ -289,7 +289,7 @@ channel 约束：
 组件安装在同一 root 下的独立子目录中，互不共享 active version：
 
 ```text
-<root>/zfleet/
+<root>/
   installer/
   agent/
   server/
@@ -298,7 +298,7 @@ channel 约束：
 单个组件目录结构：
 
 ```text
-<root>/zfleet/<component>/
+<root>/<component>/
   bin/
     zfleet_<component>        # launcher stub
   releases/

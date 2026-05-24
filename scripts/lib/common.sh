@@ -36,6 +36,25 @@ zf_default_preset() {
   fi
 }
 
+zf_expand_home_path() {
+  local path="$1"
+  case "$path" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${path#~/}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+zf_default_install_root() {
+  printf '%s\n' "$HOME/zfleet"
+}
+
 zf_is_safe_segment() {
   local value="$1"
   [[ -n "$value" ]] &&
@@ -46,6 +65,7 @@ zf_is_safe_segment() {
 
 zf_make_absolute_path() {
   local path="$1"
+  path="$(zf_expand_home_path "$path")"
   if [[ "$path" = /* ]]; then
     printf '%s\n' "$path"
     return 0

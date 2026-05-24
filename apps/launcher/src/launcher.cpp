@@ -62,13 +62,12 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
 
   const auto bin_dir = launcher_path.parent_path();
   const auto component_root = bin_dir.parent_path();
-  if (bin_dir.filename() != "bin" || component_root.filename() != *component ||
-      component_root.parent_path().filename() != "zfleet") {
+  if (bin_dir.filename() != "bin" || component_root.filename() != *component) {
     return ResolveResult{
         .ok = false,
         .target = {},
-        .message = "launcher path must match <root>/zfleet/" + *component +
-                   "/bin/" + executable_name,
+        .message = "launcher path must match <root>/" + *component + "/bin/" +
+                   executable_name,
     };
   }
 

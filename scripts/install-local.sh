@@ -20,7 +20,7 @@ copy_launcher_stub() {
   binary_name="$(zf_component_binary_name "$component")"
 
   local launcher_source="$repo_root/build/$preset/apps/launcher/$binary_name"
-  local launcher_target="$root/zfleet/$component/bin/$binary_name"
+  local launcher_target="$root/$component/bin/$binary_name"
   [[ -f "$launcher_source" ]] || zf_fail_exec "launcher stub not found: $launcher_source"
 
   mkdir -p "$(dirname "$launcher_target")" || zf_fail_exec "failed to create launcher target dir"
@@ -33,7 +33,7 @@ resolve_installer_binary() {
   local binary_name
   binary_name="$(zf_component_binary_name installer)"
 
-  local deployed="$root/zfleet/installer/bin/$binary_name"
+  local deployed="$root/installer/bin/$binary_name"
   local build_output="$repo_root/build/$preset/apps/installer/$binary_name"
   if [[ -f "$deployed" ]]; then
     printf '%s\n' "$deployed"
@@ -88,7 +88,7 @@ replace_installed_release_if_requested() {
 
   local version
   version="$(package_version_from_path "$package_path")"
-  local release_dir="$root_abs/zfleet/$component/releases/$version"
+  local release_dir="$root_abs/$component/releases/$version"
   if [[ -e "$release_dir" ]]; then
     zf_log "replacing installed $component release $version"
     rm -rf "$release_dir" ||
@@ -142,7 +142,7 @@ fi
 command_name="$1"
 shift
 
-root="/tmp/zfleet-root"
+root="$(zf_default_install_root)"
 preset="$(zf_default_preset)"
 packages_dir="$repo_root/build/packages"
 components=()

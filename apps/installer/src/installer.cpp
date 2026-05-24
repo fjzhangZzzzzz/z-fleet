@@ -52,7 +52,7 @@ struct ActiveReleaseInfo {
 };
 
 ComponentPaths BuildPaths(const fs::path& root, const std::string& component) {
-  const auto component_root = root / "zfleet" / component;
+  const auto component_root = root / component;
   return ComponentPaths{
       .component_root = component_root,
       .releases_root = component_root / "releases",

@@ -89,7 +89,7 @@ fs::path CreateArchivePackage(const fs::path& package_dir,
 }
 
 fs::path ComponentRoot(const fs::path& root, const std::string& component) {
-  return root / "zfleet" / component;
+  return root / component;
 }
 
 fs::path ActiveVersionPath(const fs::path& root, const std::string& component) {
@@ -124,8 +124,7 @@ TEST_CASE("apply writes release content and active-version") {
   const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
 
   REQUIRE(result.ok);
-  const auto release_root =
-      test_root / "zfleet" / "agent" / "releases" / "0.1.0";
+  const auto release_root = test_root / "agent" / "releases" / "0.1.0";
   REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
   REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
@@ -154,7 +153,7 @@ TEST_CASE("apply accepts a .zip archive and preserves directory install checks")
   REQUIRE(result.component == "agent");
   REQUIRE(result.version == "0.1.0");
   const auto release_root =
-      test_root / "zfleet" / "agent" / "releases" / "0.1.0";
+      test_root / "agent" / "releases" / "0.1.0";
   REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
   REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") == "agent-binary");
@@ -180,7 +179,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
     REQUIRE_FALSE(result.ok);
     REQUIRE_FALSE(
-        fs::exists(test_root / "zfleet" / "agent" / "var" / "active-version"));
+        fs::exists(test_root / "agent" / "var" / "active-version"));
   }
 
   SECTION("size mismatch") {
@@ -208,7 +207,7 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
     const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
     REQUIRE_FALSE(result.ok);
     REQUIRE_FALSE(
-        fs::exists(test_root / "zfleet" / "agent" / "var" / "active-version"));
+        fs::exists(test_root / "agent" / "var" / "active-version"));
   }
 
   SECTION("payload directory symlink") {
@@ -236,8 +235,8 @@ TEST_CASE("apply fails on payload integrity mismatch without writing active-vers
       const auto result =
           zfleet::installer::ApplyPackage(test_root, package_dir);
       REQUIRE_FALSE(result.ok);
-      REQUIRE_FALSE(fs::exists(test_root / "zfleet" / "agent" / "var" /
-                               "active-version"));
+      REQUIRE_FALSE(
+          fs::exists(test_root / "agent" / "var" / "active-version"));
     }
   }
 
@@ -282,12 +281,12 @@ TEST_CASE("new version apply switches active-version and preserves old release")
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
 
-  REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.1.0"));
-  REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.2.0"));
+  REQUIRE(fs::exists(test_root / "agent" / "releases" / "0.1.0"));
+  REQUIRE(fs::exists(test_root / "agent" / "releases" / "0.2.0"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
-  REQUIRE(ReadTextFile(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
-                       "bin" / "zfleet_agent") == "agent-binary-v1");
+  REQUIRE(ReadTextFile(test_root / "agent" / "releases" / "0.1.0" / "bin" /
+                       "zfleet_agent") == "agent-binary-v1");
 
 }
 
@@ -569,8 +568,7 @@ TEST_CASE("status reports installation health") {
   }
 
   SECTION("active release missing") {
-    WriteTextFile(test_root / "zfleet" / "agent" / "var" / "active-version",
-                  "0.1.0\n");
+    WriteTextFile(test_root / "agent" / "var" / "active-version", "0.1.0\n");
 
     const auto status = zfleet::installer::GetStatus(test_root, "agent");
 
@@ -587,8 +585,8 @@ TEST_CASE("status reports installation health") {
                                        .content = "agent-binary",
                                        .executable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
-    WriteTextFile(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
-                      "bin" / "zfleet_agent",
+    WriteTextFile(test_root / "agent" / "releases" / "0.1.0" / "bin" /
+                      "zfleet_agent",
                   "tampered-binary");
 
     const auto status = zfleet::installer::GetStatus(test_root, "agent");
@@ -634,12 +632,12 @@ TEST_CASE("component installs stay isolated under the shared root") {
   REQUIRE(zfleet::installer::ApplyPackage(test_root, agent_package_v2).ok);
   REQUIRE(zfleet::installer::RollbackComponent(test_root, "agent").ok);
 
-  REQUIRE(fs::exists(test_root / "zfleet" / "agent" / "releases" / "0.1.0" /
-                     "bin" / "zfleet_agent"));
-  REQUIRE(fs::exists(test_root / "zfleet" / "server" / "releases" / "0.1.0" /
-                     "bin" / "zfleet_server"));
-  REQUIRE(fs::exists(test_root / "zfleet" / "installer" / "releases" /
-                     "0.1.0" / "bin" / "zfleet_installer"));
+  REQUIRE(fs::exists(test_root / "agent" / "releases" / "0.1.0" / "bin" /
+                     "zfleet_agent"));
+  REQUIRE(fs::exists(test_root / "server" / "releases" / "0.1.0" / "bin" /
+                     "zfleet_server"));
+  REQUIRE(fs::exists(test_root / "installer" / "releases" / "0.1.0" / "bin" /
+                     "zfleet_installer"));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "server")) == "0.1.0\n");

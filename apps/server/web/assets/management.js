@@ -65,7 +65,7 @@
       const packageUrl = window.location.origin + options.download_url;
       const commandText = "curl -fL " + shellQuote(packageUrl) + " -o /tmp/zfleet-agent.zip && \\\n" +
         "sudo zfleet_installer apply --root /opt --package /tmp/zfleet-agent.zip && \\\n" +
-        "sudo env ZFLEET_COMPONENT_ROOT=/opt/zfleet/agent /opt/zfleet/agent/releases/" +
+        "sudo env ZFLEET_COMPONENT_ROOT=/opt/agent /opt/agent/releases/" +
         options.agent_version + "/bin/zfleet_agent --control-url " + shellQuote(controlUrl.value) +
         " --registration-token " + shellQuote(tokenValue);
       command.textContent = commandText;
