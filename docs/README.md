@@ -1,7 +1,7 @@
 # z-fleet 文档
 
 状态：草案
-最后更新：2026-05-24
+最后更新：2026-05-25
 关联里程碑：v0.1, v0.2, v0.3
 
 本目录是 z-fleet 的唯一文档入口。README.md 是项目愿景和边界的设计源文件，本目录用于承接可实现的架构、协议、安全、运维、路线图和 ADR 记录。
@@ -30,6 +30,8 @@
 | [ADR 0008](adr/0008-server-persistence-and-connection-concurrency.md) | 已接受 | Server 持久化边界与连接并发模型 |
 | [ADR 0009](adr/0009-server-async-io-and-store.md) | 已接受 | Server 异步 I/O 与异步 Store 架构 |
 | [ADR 0010](adr/0010-web-management-entry.md) | 已接受 | Server 内置 Web 管理入口、安装包 channel 与注册 token |
+| [ADR 0011](adr/0011-agent-package-install-upgrade.md) | 草案 | Agent 安装包发布、安装与升级模型 |
+| [ADR 0012](adr/0012-cross-platform-script-boundary.md) | 草案 | 跨平台构建、打包与安装脚本边界 |
 
 ## 文档状态枚举
 

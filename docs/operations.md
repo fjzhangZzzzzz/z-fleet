@@ -1,7 +1,7 @@
 # 运维
 
 状态：草案
-最后更新：2026-05-24
+最后更新：2026-05-25
 关联里程碑：v0.1, v0.2, v0.3
 
 ## 范围
@@ -9,6 +9,8 @@
 本文档记录当前可执行的本地构建、测试、运行、打包、安装、状态、回滚和排障流程。安装模型以 [ADR 0006：清单驱动的 zfleet_installer 与 active-version 启动模型](adr/0006-manifest-driven-installer.md) 为决策源。
 
 Server 内置 Web 管理入口、安装包 channel 和注册 token 的运维模型以 [ADR 0010：Server 内置 Web 管理入口](adr/0010-web-management-entry.md) 为决策源。
+
+源码构建与终端首次安装的跨平台脚本边界评估见 [ADR 0012：跨平台构建、打包与安装脚本边界](adr/0012-cross-platform-script-boundary.md)。当前已实现的是 Linux Bash 与 Windows Git Bash 共用的源码编排入口；平台薄 bootstrap 仍属于后续落地范围。
 
 ## 构建与测试
 
