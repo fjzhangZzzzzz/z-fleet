@@ -632,6 +632,10 @@ pre {
   padding-top: 20px;
 }
 
+.drawer-section + .drawer-section {
+  margin-top: 4px;
+}
+
 .drawer dl {
   display: grid;
   gap: 9px;
@@ -737,7 +741,25 @@ pre {
 
 .detail-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  margin-top: 14px;
+}
+
+.detail-actions .button {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.button.button-danger-text {
+  background: transparent;
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.button.button-danger-text:hover {
+  background: rgba(177, 61, 61, 0.08);
+  border-color: rgba(177, 61, 61, 0.14);
+  color: #962f2f;
 }
 
 .summary-card {

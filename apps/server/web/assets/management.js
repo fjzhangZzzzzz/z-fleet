@@ -205,14 +205,15 @@
         return item.component === "agent" && item.status !== "retired" &&
           item.platform === agent.platform && item.arch === asset.arch;
       });
-      function openMaintenanceDialog() {
+      function openMaintenanceDialog(defaultAction) {
         maintenanceAgent.textContent = "目标 Agent: " + agentId;
         maintenancePackage.innerHTML = upgradePackages.map(function (item) {
           return '<option value="' + escapeHtml(item.package_id) + '">' +
             escapeHtml(item.version + " / " + item.build_type) + "</option>";
         }).join("");
-        maintenanceAction.value = "upgrade";
-        maintenancePackageRow.hidden = !upgradePackages.length;
+        maintenanceAction.value = defaultAction || "upgrade";
+        maintenancePackageRow.hidden =
+          maintenanceAction.value !== "upgrade" || !upgradePackages.length;
         maintenanceDialog.showModal();
       }
 
@@ -257,27 +258,35 @@
           return "<li>" + escapeHtml(item) + "</li>";
         }).join("") + "</ul>" : '<p class="muted">暂无数据</p>';
       };
+      const hasUpgradePackages = upgradePackages.length > 0;
+      const maintenanceHint = hasUpgradePackages ?
+        '<button class="button compact" data-open-maintenance>发起升级</button>' :
+        '<button class="button compact" data-open-maintenance disabled>暂无可升级版本</button>';
+      const rollbackAction = '<button class="button compact button-danger-text" data-open-maintenance data-maintenance-mode="rollback">执行回滚</button>';
       detailBody.innerHTML = "<h2>" + escapeHtml(asset.hostname || agent.agent_id) + "</h2>" +
-        '<p class="detail-id">' + escapeHtml(agent.agent_id) + "</p><dl>" +
+        '<p class="detail-id">' + escapeHtml(agent.agent_id) + "</p>" +
+        '<div class="drawer-section"><h3>运行状态</h3><dl>' +
         "<dt>状态</dt><dd>" + escapeHtml(agentStatusLabel(agent.status)) + "</dd>" +
         "<dt>系统</dt><dd>" + formatSystem(asset) + "</dd>" +
         "<dt>架构</dt><dd>" + escapeHtml(asset.arch) + "</dd>" +
-        "<dt>版本</dt><dd>" + escapeHtml(agent.agent_version) + "</dd>" +
-        "<dt>期望版本</dt><dd>" + escapeHtml(agent.desired_version) + "</dd>" +
-        "<dt>升级状态</dt><dd>" + escapeHtml(upgradeStateLabel(agent.upgrade_state)) + "</dd>" +
-        "<dt>最近错误</dt><dd>" + escapeHtml(agent.last_upgrade_error) + "</dd>" +
-        "<dt>最后在线</dt><dd>" + escapeHtml(agent.last_online_at) + "</dd></dl>" +
-        "<h3>维护</h3><div class=\"detail-actions\"><button class=\"button compact\" data-open-maintenance>执行维护</button></div>" +
+        "<dt>最后在线</dt><dd>" + escapeHtml(agent.last_online_at) + "</dd>" +
+        "<dt>最近错误</dt><dd>" + escapeHtml(agent.last_upgrade_error) + "</dd></dl></div>" +
+        '<div class="drawer-section"><h3>版本信息</h3><dl>' +
+        "<dt>当前版本</dt><dd>" + escapeHtml(agent.agent_version) + "</dd>" +
+        "<dt>目标版本</dt><dd>" + escapeHtml(agent.desired_version) + "</dd>" +
+        "<dt>升级状态</dt><dd>" + escapeHtml(upgradeStateLabel(agent.upgrade_state)) + "</dd></dl>" +
+        '<div class="detail-actions">' + maintenanceHint + rollbackAction + "</div></div>" +
         "<h3>应用</h3>" + renderItems(asset.applications) +
         "<h3>服务</h3>" + renderItems(asset.services) +
         "<h3>资产快照</h3><p class=\"muted\">" + history.length + " 条记录，最近采集于 " +
         escapeHtml(asset.occurred_at) + "</p>";
       detail.setAttribute("aria-hidden", "false");
       backdrop.hidden = false;
-      const maintenanceButton = detailBody.querySelector("[data-open-maintenance]");
-      if (maintenanceButton) {
-        maintenanceButton.addEventListener("click", openMaintenanceDialog);
-      }
+      detailBody.querySelectorAll("[data-open-maintenance]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          openMaintenanceDialog(button.dataset.maintenanceMode || "upgrade");
+        });
+      });
     }
 
     function closeDetail() {
