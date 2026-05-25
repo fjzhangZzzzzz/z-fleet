@@ -35,13 +35,18 @@ v0.1 约定如下：
 
 ```text
 GET  /api/v1/install/options
+GET  /api/v1/install/commands
+GET  /api/v1/install/linux.sh
+GET  /api/v1/install/windows.ps1
 POST /api/v1/install/tokens
-GET  /api/v1/packages/agent/{package_id}/download
+GET  /api/v1/packages/{component}/{package_id}/download
 
 GET /api/v1/agents
 GET /api/v1/agents/{agent_id}
 GET /api/v1/agents/{agent_id}/assets/latest
 GET /api/v1/agents/{agent_id}/assets
+POST /api/v1/agents/{agent_id}/upgrade
+POST /api/v1/agents/{agent_id}/rollback
 
 GET  /api/v1/admin/packages
 POST /api/v1/admin/packages
@@ -61,10 +66,24 @@ POST /api/v1/admin/packages/{package_id}/retire
 | `channel` | `string` | yes | 默认安装 channel，例如 `stable` |
 | `platform` | `string` | yes | 平台，例如 `linux`、`windows` |
 | `arch` | `string` | yes | 架构，例如 `x86_64`、`arm64` |
-| `agent_version` | `string` | yes | 当前发布的 Agent 版本 |
-| `package_id` | `string` | yes | 安装包 ID |
-| `sha256` | `string` | yes | 安装包摘要 |
-| `download_url` | `string` | yes | 安装包下载路径 |
+| `build_type` | `string` | yes | 构建类型，`debug` 或 `release` |
+| `agent` | `object` | yes | 已发布 Agent 包信息 |
+| `installer` | `object` | yes | 满足 Agent `min_installer_version` 的 installer 包信息 |
+
+`agent` 与 `installer` 对象均包含 `package_id`、`version`、`sha256`、`download_url`。没有匹配 Agent 包时返回 `no_agent_package`；没有满足最低 installer 版本的包时返回 `no_compatible_installer_package`。
+
+### 安装命令
+
+`GET /api/v1/install/commands` 由后端生成安装命令展示文案，避免前端拼接规则漂移。当前返回：
+
+- `commands.linux`
+- `commands.windows`
+
+必填查询参数：
+
+- `server_url`
+- `control_url`
+- `token`
 
 ### 注册 token
 
@@ -113,8 +132,19 @@ POST /api/v1/admin/packages/{package_id}/retire
 
 - channel 是 Server 侧发布指针，不改变 package manifest、安装包摘要或安装目录中的 `releases/<version>` 语义。
 - package manifest 必须携带 `platform` 与 `arch`；上传和发布接口不得使用请求参数覆盖这两个目标字段。
-- 同一 `component + platform + arch + channel` 同一时间只能有一个默认发布包。
+- package manifest 必须携带 `build_type`，且上传文件名中的元数据必须与 manifest 一致。
+- 同一 `component + channel + platform + arch + build_type` 同一时间只能有一个默认发布包。
+- `debug` package 只能发布到 `candidate` 或 `dev`，不得发布到 `stable`。
 - 上传、校验、发布、退役和下载失败路径必须使用稳定错误码，并写入审计事件。
+
+### Agent 维护操作
+
+`POST /api/v1/agents/{agent_id}/upgrade` 接收 `package_id`，校验 package、目标平台/架构、版本方向和 `high_risk_write` 策略后写入 `agents.desired_*` 并创建 `package_update` 任务。若 Agent manifest 声明 `min_installer_version`，当前实现保守地先创建兼容 installer 的前置任务；前置任务成功后 Agent 包任务才可领取，失败则终止链路。
+
+`POST /api/v1/agents/{agent_id}/rollback` 创建 `package_update` 任务，其输入 `action` 为 `rollback`。Server 在创建任务时清除旧 `desired_version` 与 `desired_package_id`；Agent 回滚后重新上线即确认回滚成功，避免回滚后再次向旧期望版本升级。
+
+`agents` 查询响应包含 `current_package_id`、`desired_version`、`desired_package_id`、`desired_set_at`、`desired_set_by`、`upgrade_state`、`last_upgrade_task_id`、`last_upgrade_error` 与 `last_upgrade_at`。
+进入 `waiting_reconnect` 后 10 分钟仍未由注册事件确认的维护任务，在下一次管理 API 请求时收敛为 `failed / waiting_reconnect_timeout` 并写审计事件。
 
 ## v0.1 消息
 
@@ -362,7 +392,7 @@ v0.1 固定事件类型：
 
 ## v0.2 任务模型
 
-v0.2 目标是在不引入任意 shell 或高风险写入的前提下，建立最小只读任务闭环。
+v0.2 建立最小只读任务闭环；Agent 包维护在其上增加受策略开关控制的 `high_risk_write` 任务。
 
 v0.2 Agent/Server 控制面使用 [ADR 0007](adr/0007-agent-control-channel-http2-protobuf-lite.md)
 定义的 HTTP/2 长连接与 protobuf-lite frame。正式控制面接口为：
@@ -391,7 +421,7 @@ HTTP/2 控制面约束：
 
 - `POST /v1/tasks` 用于创建最小只读任务；v0.2 不涉及复杂调度策略。
 - Agent 在任一时刻只要求串行执行一个任务；v0.2 不要求并发任务调度。
-- Server 只通过 command stream 下发能力等级为 `readonly` 的任务。
+- Server 可通过 command stream 下发 `readonly` 任务；管理 API 创建的包升级/回滚任务仅在启用 `allow_high_risk_write` 时下发。
 - 无可执行任务时 Server 保持 command stream 打开。
 - 任务下发、领取、开始、完成、失败和过期都必须产生审计事件。
 - v0.2 不定义取消、暂停、恢复和任务优先级抢占。
@@ -409,9 +439,7 @@ v0.2 任务契约沿用安全文档中的能力分级，初始只开放 `readonl
 
 任何非 `readonly` 任务进入协议前，都必须先补齐威胁模型、策略开关、审计字段和测试。
 
-当前 `v0.2` 的 Server 只接受 `readonly` 能力等级的任务创建请求。
-任何 `low_risk_write`、`high_risk_write` 或 `shell` 任务都必须返回
-`403 capability_not_allowed`，且不得入队。
+通用任务创建入口只接受 `readonly`。`package_update` 仅可由受控的 Agent 维护 API 创建，并要求 Server 配置 `allow_high_risk_write = true`；否则返回 `403 capability_not_allowed`。
 
 ### 任务类型
 
@@ -420,6 +448,7 @@ v0.2 先固定一个最小只读任务类型：
 | `task_type` | 含义 | 输入 |
 | --- | --- | --- |
 | `collect_basic_inventory` | 读取基础主机信息并回传结果 | 无或空对象 |
+| `package_update` | 安装 Agent/installer 包，或回滚 Agent | `action`、component 与校验元数据 |
 
 说明：
 

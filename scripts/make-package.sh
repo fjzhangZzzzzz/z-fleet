@@ -65,13 +65,25 @@ mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
 binary_name="$(zf_component_binary_name "$component")"
 case "$preset" in
-  linux-*)
+  linux-debug)
     package_platform="linux"
     package_arch="x86_64"
+    package_build_type="debug"
     ;;
-  windows-*)
+  linux-release)
+    package_platform="linux"
+    package_arch="x86_64"
+    package_build_type="release"
+    ;;
+  windows-debug)
     package_platform="windows"
     package_arch="x86_64"
+    package_build_type="debug"
+    ;;
+  windows-release)
+    package_platform="windows"
+    package_arch="x86_64"
+    package_build_type="release"
     ;;
   *)
     zf_fail_arg "cannot infer target platform and architecture from preset: $preset"
@@ -133,6 +145,7 @@ packager_args+=(
   --version "$version"
   --platform "$package_platform"
   --arch "$package_arch"
+  --build-type "$package_build_type"
   --payload-dir "$payload_dir_arg"
   --entry "$entry_path"
   --output-dir "$output_dir_arg"

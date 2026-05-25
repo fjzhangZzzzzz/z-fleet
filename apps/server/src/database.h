@@ -34,6 +34,15 @@ struct AgentSummary {
   std::string platform;
   std::string agent_version;
   std::string status;
+  std::optional<std::string> current_package_id;
+  std::optional<std::string> desired_version;
+  std::optional<std::string> desired_package_id;
+  std::optional<std::string> desired_set_at;
+  std::optional<std::string> desired_set_by;
+  std::optional<std::string> upgrade_state;
+  std::optional<std::string> last_upgrade_task_id;
+  std::optional<std::string> last_upgrade_error;
+  std::optional<std::string> last_upgrade_at;
 };
 
 struct AssetSnapshotSummary {
@@ -55,6 +64,7 @@ struct AgentPackageRecord {
   std::string version;
   std::string platform;
   std::string arch;
+  std::string build_type;
   std::string filename;
   std::filesystem::path storage_path;
   std::uint64_t size_bytes = 0;
@@ -94,6 +104,8 @@ class ServerStore {
   virtual ~ServerStore() = default;
 
   virtual bool AgentExists(const std::string& agent_id) const = 0;
+  virtual std::optional<AgentSummary> FindAgent(
+      const std::string& agent_id) const = 0;
   virtual bool ConsumeRegistrationToken(const std::string& token_hash,
                                         const std::string& platform,
                                         const std::string& arch,
@@ -221,26 +233,47 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
                         const std::optional<std::string>& result_blob,
                         const std::optional<std::string>& error_blob) override;
   std::vector<AgentSummary> ListAgents() const;
-  std::optional<AgentSummary> FindAgent(const std::string& agent_id) const;
+  std::optional<AgentSummary> FindAgent(
+      const std::string& agent_id) const override;
   std::vector<AssetSnapshotSummary> ListAssetSnapshots(
       const std::string& agent_id,
       int limit) const;
   std::optional<AssetSnapshotSummary> FindLatestAssetSnapshot(
       const std::string& agent_id) const;
+  void ScheduleAgentUpgrade(const std::string& agent_id,
+                            const std::string& desired_version,
+                            const std::string& desired_package_id,
+                            const std::optional<std::string>& set_by,
+                            const std::string& set_at,
+                            const zfleet::protocol::Task& task,
+                            const std::optional<zfleet::protocol::Task>&
+                                prerequisite_task = std::nullopt);
+  void ScheduleAgentRollback(const std::string& agent_id,
+                             const std::optional<std::string>& set_by,
+                             const std::string& set_at,
+                             const zfleet::protocol::Task& task);
+  std::vector<std::string> ExpireWaitingReconnect(
+      const std::string& now);
   void UpsertAgentPackage(const AgentPackageRecord& package);
   std::vector<AgentPackageRecord> ListAgentPackages() const;
   std::optional<AgentPackageRecord> FindAgentPackage(
       const std::string& package_id) const;
   void PublishAgentPackage(const std::string& package_id,
+                           const std::string& component,
                            const std::string& channel,
                            const std::string& platform,
                            const std::string& arch,
+                           const std::string& build_type,
                            const std::optional<std::string>& published_by,
                            const std::string& published_at);
+  void RetireAgentPackage(const std::string& package_id,
+                          const std::string& retired_at);
   std::optional<AgentPackageRecord> FindDefaultPublishedAgentPackage(
+      const std::string& component,
       const std::string& channel,
       const std::string& platform,
-      const std::string& arch) const;
+      const std::string& arch,
+      const std::string& build_type) const;
   void CreateRegistrationToken(const RegistrationTokenRecord& token);
   std::vector<RegistrationTokenRecord> ListRegistrationTokens() const;
   void AsyncAgentExists(

@@ -22,6 +22,7 @@ struct Manifest {
   std::string version;
   std::string platform;
   std::string arch;
+  std::string build_type;
   std::string min_installer_version;
   std::vector<ManifestFile> files;
 };

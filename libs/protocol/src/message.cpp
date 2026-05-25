@@ -38,6 +38,28 @@ std::string_view ToString(ErrorCode code) noexcept {
       return "task_execution_failed";
     case ErrorCode::task_result_invalid:
       return "task_result_invalid";
+    case ErrorCode::package_not_found:
+      return "package_not_found";
+    case ErrorCode::package_retired:
+      return "package_retired";
+    case ErrorCode::platform_arch_mismatch:
+      return "platform_arch_mismatch";
+    case ErrorCode::build_type_not_allowed:
+      return "build_type_not_allowed";
+    case ErrorCode::installer_too_old:
+      return "installer_too_old";
+    case ErrorCode::download_failed:
+      return "download_failed";
+    case ErrorCode::checksum_mismatch:
+      return "checksum_mismatch";
+    case ErrorCode::apply_failed:
+      return "apply_failed";
+    case ErrorCode::start_new_agent_failed:
+      return "start_new_agent_failed";
+    case ErrorCode::waiting_reconnect_timeout:
+      return "waiting_reconnect_timeout";
+    case ErrorCode::agent_reported_unexpected_version:
+      return "agent_reported_unexpected_version";
   }
 
   return "unknown";
@@ -53,6 +75,14 @@ std::string_view ToString(AuditEventType type) noexcept {
       return "package.validated";
     case AuditEventType::package_published:
       return "package.published";
+    case AuditEventType::package_retired:
+      return "package.retired";
+    case AuditEventType::agent_upgrade_requested:
+      return "agent.upgrade_requested";
+    case AuditEventType::agent_rollback_requested:
+      return "agent.rollback_requested";
+    case AuditEventType::agent_upgrade_confirmed:
+      return "agent.upgrade_confirmed";
     case AuditEventType::registration_token_created:
       return "registration_token.created";
     case AuditEventType::registration_token_used:
@@ -80,6 +110,8 @@ std::string_view ToString(TaskType type) noexcept {
   switch (type) {
     case TaskType::collect_basic_inventory:
       return "collect_basic_inventory";
+    case TaskType::package_update:
+      return "package_update";
   }
 
   return "unknown";
@@ -178,6 +210,39 @@ std::optional<ErrorCode> ErrorCodeFromString(std::string_view code) noexcept {
   if (code == "task_result_invalid") {
     return ErrorCode::task_result_invalid;
   }
+  if (code == "package_not_found") {
+    return ErrorCode::package_not_found;
+  }
+  if (code == "package_retired") {
+    return ErrorCode::package_retired;
+  }
+  if (code == "platform_arch_mismatch") {
+    return ErrorCode::platform_arch_mismatch;
+  }
+  if (code == "build_type_not_allowed") {
+    return ErrorCode::build_type_not_allowed;
+  }
+  if (code == "installer_too_old") {
+    return ErrorCode::installer_too_old;
+  }
+  if (code == "download_failed") {
+    return ErrorCode::download_failed;
+  }
+  if (code == "checksum_mismatch") {
+    return ErrorCode::checksum_mismatch;
+  }
+  if (code == "apply_failed") {
+    return ErrorCode::apply_failed;
+  }
+  if (code == "start_new_agent_failed") {
+    return ErrorCode::start_new_agent_failed;
+  }
+  if (code == "waiting_reconnect_timeout") {
+    return ErrorCode::waiting_reconnect_timeout;
+  }
+  if (code == "agent_reported_unexpected_version") {
+    return ErrorCode::agent_reported_unexpected_version;
+  }
 
   return std::nullopt;
 }
@@ -195,6 +260,18 @@ std::optional<AuditEventType> AuditEventTypeFromString(
   }
   if (type == "package.published") {
     return AuditEventType::package_published;
+  }
+  if (type == "package.retired") {
+    return AuditEventType::package_retired;
+  }
+  if (type == "agent.upgrade_requested") {
+    return AuditEventType::agent_upgrade_requested;
+  }
+  if (type == "agent.rollback_requested") {
+    return AuditEventType::agent_rollback_requested;
+  }
+  if (type == "agent.upgrade_confirmed") {
+    return AuditEventType::agent_upgrade_confirmed;
   }
   if (type == "registration_token.created") {
     return AuditEventType::registration_token_created;
@@ -230,6 +307,9 @@ std::optional<AuditEventType> AuditEventTypeFromString(
 std::optional<TaskType> TaskTypeFromString(std::string_view type) noexcept {
   if (type == "collect_basic_inventory") {
     return TaskType::collect_basic_inventory;
+  }
+  if (type == "package_update") {
+    return TaskType::package_update;
   }
 
   return std::nullopt;

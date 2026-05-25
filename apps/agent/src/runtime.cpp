@@ -2,6 +2,7 @@
 
 #include "command_decoder.h"
 #include "http2_control_client.h"
+#include "package_updater.h"
 #include "state.h"
 
 #include "zfleet/core/log.h"
@@ -104,6 +105,72 @@ proto::AgentEvent BuildTaskSucceededEvent(
   return event;
 }
 
+proto::ErrorCode ToProtoErrorCode(zfleet::protocol::ErrorCode code) {
+  switch (code) {
+    case zfleet::protocol::ErrorCode::checksum_mismatch:
+      return proto::ERROR_CODE_CHECKSUM_MISMATCH;
+    case zfleet::protocol::ErrorCode::apply_failed:
+      return proto::ERROR_CODE_APPLY_FAILED;
+    case zfleet::protocol::ErrorCode::start_new_agent_failed:
+      return proto::ERROR_CODE_START_NEW_AGENT_FAILED;
+    case zfleet::protocol::ErrorCode::download_failed:
+      return proto::ERROR_CODE_DOWNLOAD_FAILED;
+    default:
+      return proto::ERROR_CODE_INTERNAL_ERROR;
+  }
+}
+
+proto::AgentEvent BuildPackageUpdateResultEvent(
+    const std::string& agent_id,
+    const proto::TaskAssignedCommand& task,
+    const PackageUpdateExecutionResult& execution) {
+  proto::AgentEvent event;
+  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
+  event.set_message_id(zfleet::core::GenerateUuid());
+  event.set_agent_id(agent_id);
+  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
+  auto* result = event.mutable_task_result();
+  result->set_task_id(task.task_id());
+  result->set_task_type(task.task_type());
+  result->set_status(execution.ok ? proto::TASK_EXECUTION_STATUS_SUCCEEDED
+                                  : proto::TASK_EXECUTION_STATUS_FAILED);
+  const auto& input = task.package_update();
+  auto* update = result->mutable_package_update();
+  update->set_component(input.component());
+  update->set_package_id(input.package_id());
+  update->set_version(input.version());
+  update->set_state(execution.ok ? "applied" : "failed");
+  if (!execution.ok) {
+    update->set_error_code(
+        std::string(zfleet::protocol::ToString(execution.error_code)));
+    update->set_error_message(execution.message);
+    auto* error = result->mutable_error();
+    error->set_code(ToProtoErrorCode(execution.error_code));
+    error->set_message(execution.message);
+    error->set_retryable(false);
+  }
+  return event;
+}
+
+zfleet::protocol::PackageUpdateInput ToPackageUpdateInput(
+    const proto::PackageUpdateInput& input) {
+  return {
+      .action = input.action().empty() ? "apply" : input.action(),
+      .component = input.component(),
+      .package_id = input.package_id(),
+      .version = input.version(),
+      .platform = input.platform(),
+      .arch = input.arch(),
+      .build_type = input.build_type(),
+      .package_url = input.package_url(),
+      .package_sha256 = input.package_sha256(),
+      .manifest_sha256 = input.manifest_sha256(),
+      .min_installer_version = input.min_installer_version(),
+      .allow_downgrade = input.allow_downgrade(),
+      .force = input.force(),
+  };
+}
+
 std::vector<std::uint8_t> BuildEnvelopeBody(
     std::initializer_list<proto::AgentEvent> events) {
   std::vector<std::uint8_t> body;
@@ -171,7 +238,8 @@ RuntimeResult AgentRuntime::Run() {
     }
 
     const auto& task = command.task_assigned();
-    if (task.task_type() != proto::TASK_TYPE_COLLECT_BASIC_INVENTORY) {
+    if (task.task_type() != proto::TASK_TYPE_COLLECT_BASIC_INVENTORY &&
+        task.task_type() != proto::TASK_TYPE_PACKAGE_UPDATE) {
       ZFLOG_WARN(logger, "unsupported task type received from server");
       return;
     }
@@ -185,12 +253,25 @@ RuntimeResult AgentRuntime::Run() {
                                running_response.status);
     }
 
-    const auto result_body = BuildEnvelopeBody(
-        {BuildTaskSucceededEvent(state.agent_id, task)});
+    proto::AgentEvent task_result;
+    bool stop_after_result = false;
+    if (task.task_type() == proto::TASK_TYPE_COLLECT_BASIC_INVENTORY) {
+      task_result = BuildTaskSucceededEvent(state.agent_id, task);
+    } else {
+      const auto execution =
+          ExecutePackageUpdate(config_, ToPackageUpdateInput(task.package_update()));
+      task_result =
+          BuildPackageUpdateResultEvent(state.agent_id, task, execution);
+      stop_after_result = execution.ok && execution.stop_agent;
+    }
+    const auto result_body = BuildEnvelopeBody({task_result});
     const auto task_response = client.PostEvents(result_body);
     if (task_response.status != "200") {
       throw std::runtime_error("task result event was rejected with status " +
                                task_response.status);
+    }
+    if (stop_after_result) {
+      RequestStop();
     }
   };
 

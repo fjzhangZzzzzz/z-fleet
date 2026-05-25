@@ -5,6 +5,8 @@ add_library(zfleet_server_app
   src/http2_control_dispatcher.cpp
   src/http2_control_server.cpp
   src/http2_control_service.cpp
+  src/install_script_renderer.cpp
+  src/management_json_codec.cpp
   src/management_http_server.cpp
   src/package_repository.cpp
   src/static_file_service.cpp

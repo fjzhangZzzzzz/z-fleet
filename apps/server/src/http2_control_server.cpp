@@ -131,6 +131,8 @@ proto::TaskType ToProtoTaskType(zfleet::protocol::TaskType type) {
   switch (type) {
     case zfleet::protocol::TaskType::collect_basic_inventory:
       return proto::TASK_TYPE_COLLECT_BASIC_INVENTORY;
+    case zfleet::protocol::TaskType::package_update:
+      return proto::TASK_TYPE_PACKAGE_UPDATE;
   }
   return proto::TASK_TYPE_UNSPECIFIED;
 }
@@ -168,6 +170,23 @@ std::vector<std::uint8_t> EncodeCommandFrame(
   if (std::holds_alternative<zfleet::protocol::CollectBasicInventoryInput>(
           task.input)) {
     assigned->mutable_collect_basic_inventory();
+  } else if (const auto* input =
+                 std::get_if<zfleet::protocol::PackageUpdateInput>(&task.input);
+             input != nullptr) {
+    auto* output = assigned->mutable_package_update();
+    output->set_action(input->action);
+    output->set_component(input->component);
+    output->set_package_id(input->package_id);
+    output->set_version(input->version);
+    output->set_platform(input->platform);
+    output->set_arch(input->arch);
+    output->set_build_type(input->build_type);
+    output->set_package_url(input->package_url);
+    output->set_package_sha256(input->package_sha256);
+    output->set_manifest_sha256(input->manifest_sha256);
+    output->set_min_installer_version(input->min_installer_version);
+    output->set_allow_downgrade(input->allow_downgrade);
+    output->set_force(input->force);
   }
 
   std::string bytes;

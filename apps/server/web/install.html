@@ -8,26 +8,74 @@
   <script defer src="/assets/management.js"></script>
 </head>
 <body data-page="install">
-  <header class="shell-header">
-    <a class="brand" href="/">z-fleet</a>
-    <nav><a class="active" href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
-  </header>
-  <main class="page">
-    <div class="title-row"><div><p class="kicker">BOOTSTRAP</p><h1>Agent 安装</h1></div><span class="status" data-status-for="install">准备就绪</span></div>
-    <section class="grid two install-grid">
-      <article class="panel">
-        <h2>推荐安装</h2>
-        <p class="muted">使用当前推荐版本部署 Agent。执行命令前目标设备需已有 <code>zfleet_installer</code>。</p>
-        <label>Server 控制地址<input name="control_url" data-control-url value="http://127.0.0.1:8081"></label>
-        <dl class="release" data-install-release><dt>推荐版本</dt><dd>-</dd><dt>SHA-256</dt><dd>-</dd></dl>
-      </article>
-      <article class="panel terminal-panel">
-        <div class="panel-heading"><h2>安装命令</h2><button class="button compact" type="button" data-copy-install disabled>复制命令</button></div>
-        <button class="button primary" type="button" data-install-token-button>生成注册 token</button>
-        <p class="secret" data-install-token-output>Token 仅在生成时展示一次。</p>
-        <pre data-install-command><code>生成注册 token 后显示可执行命令。</code></pre>
-      </article>
-    </section>
-  </main>
+  <div class="app-shell">
+    <header class="shell-header">
+      <a class="brand-block" href="/">
+        <span class="brand-mark" aria-hidden="true">ZF</span>
+        <span class="brand">
+          <span class="brand-name">z-fleet</span>
+          <span class="brand-copy">设备控制台</span>
+        </span>
+      </a>
+      <nav><a class="active" href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
+    </header>
+    <main class="page">
+      <section class="page-header">
+        <div>
+          <p class="kicker">安装引导</p>
+          <h1>Agent 安装</h1>
+          <p class="page-intro">选择目标平台和发布通道后，系统会直接生成安装命令。架构检测、安装包解析和版本选择都由脚本与后端自动完成。</p>
+        </div>
+        <span class="status" data-status-for="install" role="status" aria-live="polite">准备就绪</span>
+      </section>
+      <section class="grid two install-layout">
+        <article class="panel">
+          <p class="eyebrow">安装步骤</p>
+          <h2>最少输入，直接执行</h2>
+          <ol class="step-list">
+            <li><strong>选择平台</strong><span>决定输出 Linux 或 Windows 的安装脚本命令。</span></li>
+            <li><strong>选择发布通道</strong><span>按稳定、候选或开发通道获取默认发布版本。</span></li>
+            <li><strong>生成安装命令</strong><span>系统自动创建一次性注册凭证，并拼出完整命令。</span></li>
+            <li><strong>在目标机器执行</strong><span>脚本会检测架构、下载对应安装包并启动 Agent。</span></li>
+          </ol>
+          <div class="fields install-fields">
+            <label>平台
+              <select data-install-platform>
+                <option value="linux">Linux</option>
+                <option value="windows">Windows</option>
+              </select>
+            </label>
+            <label>发布通道
+              <select data-install-channel>
+                <option value="stable">稳定</option>
+                <option value="candidate">候选</option>
+                <option value="dev">开发</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted note">安装脚本会在目标机器上自动识别架构，并向后端请求该平台和通道下的默认安装包。</p>
+        </article>
+        <article class="panel install-command-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">安装命令</p>
+              <h2>一键生成可执行命令</h2>
+            </div>
+            <button class="button primary compact" type="button" data-generate-install-command>生成安装命令</button>
+          </div>
+          <div class="stack-sm">
+            <p class="secret" data-install-token-output>生成命令时会自动创建一次性注册凭证，明文不会单独展示给用户。</p>
+            <div class="code-block">
+              <div class="code-block-head">
+                <span class="code-block-label" data-install-command-label>Linux / 稳定通道</span>
+                <button class="button compact" type="button" data-copy-install disabled>复制</button>
+              </div>
+              <pre data-install-command><code>选择平台和发布通道后，点击“生成安装命令”。</code></pre>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
 </body>
 </html>

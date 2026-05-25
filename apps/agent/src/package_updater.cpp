@@ -1,0 +1,235 @@
+#include "package_updater.h"
+
+#include "zfleet/crypto/sha256.h"
+#include "zfleet/package/archive.h"
+#include "zfleet/platform/file_permissions.h"
+#include "zfleet/transport/http_download.h"
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+namespace zfleet::agent {
+namespace {
+
+namespace fs = std::filesystem;
+
+std::vector<std::uint8_t> DownloadPackage(const std::string& url) {
+  const auto response = zfleet::transport::DownloadHttp(
+      {.url = url, .user_agent = "zfleet_agent"});
+  if (response.status != 200) {
+    throw std::runtime_error("package download returned status " +
+                             std::to_string(response.status));
+  }
+  return response.body;
+}
+
+void WriteBytes(const fs::path& path, const std::vector<std::uint8_t>& bytes) {
+  fs::create_directories(path.parent_path());
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    throw std::runtime_error("failed to open downloaded package");
+  }
+  stream.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  if (!stream) {
+    throw std::runtime_error("failed to write downloaded package");
+  }
+}
+
+fs::path InstallRoot(const AgentConfig& config) {
+  if (!config.install_dir.has_value()) {
+    throw std::runtime_error("agent install root is unavailable");
+  }
+  return config.install_dir->parent_path();
+}
+
+std::string ReadTrimmed(const fs::path& path) {
+  std::ifstream stream(path);
+  if (!stream) {
+    throw std::runtime_error("failed to read active installer version");
+  }
+  std::string value{std::istreambuf_iterator<char>(stream),
+                    std::istreambuf_iterator<char>()};
+  while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+    value.pop_back();
+  }
+  return value;
+}
+
+fs::path InstallerBinary(const fs::path& root) {
+  const auto version = ReadTrimmed(root / "installer" / "var" / "active-version");
+#ifdef _WIN32
+  return root / "installer" / "releases" / version / "bin" /
+         "zfleet_installer.exe";
+#else
+  return root / "installer" / "releases" / version / "bin" /
+         "zfleet_installer";
+#endif
+}
+
+int RunInstaller(const fs::path& installer, const fs::path& root,
+                 const fs::path& package) {
+  if (!zfleet::platform::IsExecutableFile(installer)) {
+    throw std::runtime_error("active installer binary is unavailable");
+  }
+#ifdef _WIN32
+  return static_cast<int>(_spawnl(_P_WAIT, installer.string().c_str(),
+                                  installer.string().c_str(), "apply",
+                                  "--root", root.string().c_str(), "--package",
+                                  package.string().c_str(), nullptr));
+#else
+  const auto child = fork();
+  if (child < 0) {
+    throw std::runtime_error("failed to fork installer process");
+  }
+  if (child == 0) {
+    execl(installer.c_str(), installer.c_str(), "apply", "--root",
+          root.c_str(), "--package", package.c_str(),
+          static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status)) {
+    return 1;
+  }
+  return WEXITSTATUS(status);
+#endif
+}
+
+int RunRollback(const fs::path& installer, const fs::path& root) {
+  if (!zfleet::platform::IsExecutableFile(installer)) {
+    throw std::runtime_error("active installer binary is unavailable");
+  }
+#ifdef _WIN32
+  return static_cast<int>(_spawnl(_P_WAIT, installer.string().c_str(),
+                                  installer.string().c_str(), "rollback",
+                                  "--root", root.string().c_str(),
+                                  "--component", "agent", nullptr));
+#else
+  const auto child = fork();
+  if (child < 0) {
+    throw std::runtime_error("failed to fork installer process");
+  }
+  if (child == 0) {
+    execl(installer.c_str(), installer.c_str(), "rollback", "--root",
+          root.c_str(), "--component", "agent", static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  int status = 0;
+  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status)) {
+    return 1;
+  }
+  return WEXITSTATUS(status);
+#endif
+}
+
+void StartNewAgent(const AgentConfig& config, const fs::path& root,
+                   const std::string& version) {
+#ifdef _WIN32
+  const auto binary =
+      root / "agent" / "releases" / version / "bin" / "zfleet_agent.exe";
+  if (_spawnl(_P_NOWAIT, binary.string().c_str(), binary.string().c_str(),
+              nullptr) == -1) {
+    throw std::runtime_error("failed to start new agent");
+  }
+#else
+  const auto binary =
+      root / "agent" / "releases" / version / "bin" / "zfleet_agent";
+  if (!zfleet::platform::IsExecutableFile(binary)) {
+    throw std::runtime_error("new agent binary is unavailable");
+  }
+  const auto child = fork();
+  if (child < 0) {
+    throw std::runtime_error("failed to fork new agent process");
+  }
+  if (child == 0) {
+    setenv("ZFLEET_COMPONENT_ROOT", (root / "agent").c_str(), 1);
+    execl(binary.c_str(), binary.c_str(), static_cast<char*>(nullptr));
+    _exit(127);
+  }
+#endif
+  (void)config;
+}
+
+} // namespace
+
+PackageUpdateExecutionResult ExecutePackageUpdate(
+    const AgentConfig& config,
+    const zfleet::protocol::PackageUpdateInput& input) {
+  try {
+    if (input.action == "rollback") {
+      const auto root = InstallRoot(config);
+      if (RunRollback(InstallerBinary(root), root) != 0) {
+        return {.error_code = zfleet::protocol::ErrorCode::apply_failed,
+                .message = "installer rollback failed"};
+      }
+      try {
+        StartNewAgent(config, root,
+                      ReadTrimmed(root / "agent" / "var" / "active-version"));
+      } catch (const std::exception& ex) {
+        return {.error_code =
+                    zfleet::protocol::ErrorCode::start_new_agent_failed,
+                .message = ex.what()};
+      }
+      return {.ok = true,
+              .stop_agent = true,
+              .message = "package rollback applied"};
+    }
+    const auto bytes = DownloadPackage(input.package_url);
+    const auto actual_sha = zfleet::crypto::Sha256BytesHex(std::string_view(
+        reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    if (actual_sha != input.package_sha256) {
+      return {.error_code = zfleet::protocol::ErrorCode::checksum_mismatch,
+              .message = "downloaded package SHA-256 mismatch"};
+    }
+    const auto package_path =
+        config.data_dir / "updates" / (input.package_id + ".zip");
+    WriteBytes(package_path, bytes);
+    const auto manifest_bytes =
+        zfleet::package::ReadArchiveFile(package_path, "META/manifest.json");
+    const auto manifest_sha = zfleet::crypto::Sha256BytesHex(std::string_view(
+        reinterpret_cast<const char*>(manifest_bytes.data()),
+        manifest_bytes.size()));
+    if (!input.manifest_sha256.empty() &&
+        manifest_sha != input.manifest_sha256) {
+      return {.error_code = zfleet::protocol::ErrorCode::checksum_mismatch,
+              .message = "downloaded manifest SHA-256 mismatch"};
+    }
+
+    const auto root = InstallRoot(config);
+    if (RunInstaller(InstallerBinary(root), root, package_path) != 0) {
+      return {.error_code = zfleet::protocol::ErrorCode::apply_failed,
+              .message = "installer apply failed"};
+    }
+    if (input.component == "agent") {
+      try {
+        StartNewAgent(config, root, input.version);
+      } catch (const std::exception& ex) {
+        return {.error_code =
+                    zfleet::protocol::ErrorCode::start_new_agent_failed,
+                .message = ex.what()};
+      }
+    }
+    return {.ok = true,
+            .stop_agent = input.component == "agent",
+            .message = "package update applied"};
+  } catch (const std::exception& ex) {
+    return {.error_code = zfleet::protocol::ErrorCode::download_failed,
+            .message = ex.what()};
+  }
+}
+
+} // namespace zfleet::agent

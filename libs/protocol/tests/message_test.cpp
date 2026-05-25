@@ -30,6 +30,8 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           "registration_token.used");
   REQUIRE(zfleet::protocol::ToString(TaskType::collect_basic_inventory) ==
           "collect_basic_inventory");
+  REQUIRE(zfleet::protocol::ToString(TaskType::package_update) ==
+          "package_update");
   REQUIRE(zfleet::protocol::ToString(CapabilityLevel::readonly) == "readonly");
   REQUIRE(zfleet::protocol::ToString(TaskExecutionStatus::expired) ==
           "expired");
@@ -44,8 +46,18 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           AuditEventType::task_expired);
   REQUIRE(zfleet::protocol::AuditEventTypeFromString("package.published") ==
           AuditEventType::package_published);
+  REQUIRE(zfleet::protocol::ToString(AuditEventType::package_retired) ==
+          "package.retired");
+  REQUIRE(zfleet::protocol::ToString(AuditEventType::agent_rollback_requested) ==
+          "agent.rollback_requested");
+  REQUIRE(zfleet::protocol::ToString(AuditEventType::agent_upgrade_confirmed) ==
+          "agent.upgrade_confirmed");
   REQUIRE(zfleet::protocol::TaskTypeFromString("collect_basic_inventory") ==
           TaskType::collect_basic_inventory);
+  REQUIRE(zfleet::protocol::TaskTypeFromString("package_update") ==
+          TaskType::package_update);
+  REQUIRE(zfleet::protocol::ErrorCodeFromString("checksum_mismatch") ==
+          ErrorCode::checksum_mismatch);
   REQUIRE(zfleet::protocol::CapabilityLevelFromString("shell") ==
           CapabilityLevel::shell);
   REQUIRE(zfleet::protocol::TaskExecutionStatusFromString("failed") ==

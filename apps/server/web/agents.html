@@ -8,30 +8,86 @@
   <script defer src="/assets/management.js"></script>
 </head>
 <body data-page="agents">
-  <header class="shell-header">
-    <a class="brand" href="/">z-fleet</a>
-    <nav><a href="/install">Agent 安装</a><a class="active" href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
-  </header>
-  <main class="page">
-    <div class="title-row"><div><p class="kicker">INVENTORY</p><h1>Agent 状态</h1></div></div>
-    <section class="filters" data-agent-filters>
-      <input class="search" name="search" placeholder="搜索主机名或 Agent ID">
-      <select name="status"><option value="">全部状态</option></select>
-      <select name="os"><option value="">全部系统</option></select>
-      <select name="arch"><option value="">全部架构</option></select>
-      <select name="version"><option value="">全部版本</option></select>
-    </section>
-    <article class="panel table-panel">
-      <table class="agent-table">
-        <thead><tr><th>状态</th><th>主机名</th><th>系统</th><th>架构</th><th>Agent 版本</th><th>Agent ID</th><th>最后在线</th></tr></thead>
-        <tbody data-agent-list><tr><td colspan="7" class="muted">正在加载 Agent...</td></tr></tbody>
-      </table>
-    </article>
-    <div class="drawer-backdrop" data-agent-backdrop hidden></div>
-    <aside class="drawer" data-agent-detail aria-hidden="true">
-      <button class="drawer-close" type="button" data-agent-close aria-label="关闭">关闭</button>
-      <div data-agent-detail-body></div>
-    </aside>
-  </main>
+  <div class="app-shell">
+    <header class="shell-header">
+      <a class="brand-block" href="/">
+        <span class="brand-mark" aria-hidden="true">ZF</span>
+        <span class="brand">
+          <span class="brand-name">z-fleet</span>
+          <span class="brand-copy">设备控制台</span>
+        </span>
+      </a>
+      <nav><a href="/install">Agent 安装</a><a class="active" href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
+    </header>
+    <main class="page">
+      <section class="page-header">
+        <div>
+          <p class="kicker">设备状态</p>
+          <h1>Agent 状态</h1>
+          <p class="page-intro">按状态、系统、架构和版本查看当前 fleet，点选单个 Agent 后进入详细资产与维护操作。</p>
+        </div>
+        <span class="status" data-status-for="agents" role="status" aria-live="polite">准备就绪</span>
+      </section>
+      <section class="summary-grid" aria-label="状态摘要">
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">视图</span>
+          <div class="metric-value">实时</div>
+          <div class="metric-copy">状态列表聚焦当前在线、异常与待处理节点。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">筛选</span>
+          <div class="metric-value">组合</div>
+          <div class="metric-copy">支持主机名、Agent ID、状态、系统、架构与版本组合筛选。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">详情</span>
+          <div class="metric-value">抽屉</div>
+          <div class="metric-copy">在同一页面内查看资产快照、应用、服务与升级状态。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">维护</span>
+          <div class="metric-value">操作</div>
+          <div class="metric-copy">在允许高风险写操作的环境中发起升级或回滚。</div>
+        </article>
+      </section>
+      <section class="filters" data-agent-filters>
+        <input class="search" name="search" placeholder="搜索主机名或 Agent ID">
+        <select name="status"><option value="">全部状态</option></select>
+        <select name="os"><option value="">全部系统</option></select>
+        <select name="arch"><option value="">全部架构</option></select>
+        <select name="version"><option value="">全部版本</option></select>
+      </section>
+      <article class="panel table-panel">
+        <table class="agent-table">
+          <thead><tr><th>状态</th><th>主机名</th><th>系统</th><th>架构</th><th>Agent 版本</th><th>Agent ID</th><th>最后在线</th></tr></thead>
+          <tbody data-agent-list><tr><td colspan="7" class="muted">正在加载 Agent...</td></tr></tbody>
+        </table>
+      </article>
+      <div class="drawer-backdrop" data-agent-backdrop hidden></div>
+      <aside class="drawer" data-agent-detail aria-hidden="true">
+        <button class="drawer-close" type="button" data-agent-close aria-label="关闭">关闭</button>
+        <div data-agent-detail-body></div>
+      </aside>
+      <dialog data-maintenance-dialog>
+        <form method="dialog" class="panel">
+          <h3>维护操作</h3>
+          <p class="muted" data-maintenance-agent></p>
+          <label>操作
+            <select data-maintenance-action>
+              <option value="upgrade">升级</option>
+              <option value="rollback">回滚</option>
+            </select>
+          </label>
+          <label data-maintenance-package-row>版本
+            <select data-maintenance-package></select>
+          </label>
+          <div class="fields">
+            <button class="button primary" value="confirm" data-maintenance-confirm>确认</button>
+            <button class="button" value="cancel">取消</button>
+          </div>
+        </form>
+      </dialog>
+    </main>
+  </div>
 </body>
 </html>

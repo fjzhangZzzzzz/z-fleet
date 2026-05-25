@@ -22,6 +22,7 @@ TEST_CASE("manifest json supports serialization and parsing") {
       .version = "0.1.0",
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = "release",
       .min_installer_version = "0.1.0",
       .files = {zfleet::package::ManifestFile{
           .source = "payload/bin/zfleet_agent",
@@ -40,6 +41,7 @@ TEST_CASE("manifest json supports serialization and parsing") {
   REQUIRE(parsed.version == "0.1.0");
   REQUIRE(parsed.platform == "linux");
   REQUIRE(parsed.arch == "x86_64");
+  REQUIRE(parsed.build_type == "release");
   REQUIRE(parsed.min_installer_version == "0.1.0");
   REQUIRE(parsed.files.size() == 1);
   REQUIRE(parsed.files.front().source == "payload/bin/zfleet_agent");
@@ -60,6 +62,7 @@ TEST_CASE("manifest json loader reads from disk") {
           .version = "1.2.3",
           .platform = "linux",
           .arch = "x86_64",
+          .build_type = "debug",
           .min_installer_version = "0.1.0",
           .files = {},
       }));
@@ -68,6 +71,7 @@ TEST_CASE("manifest json loader reads from disk") {
 
   REQUIRE(manifest.component == "server");
   REQUIRE(manifest.version == "1.2.3");
+  REQUIRE(manifest.build_type == "debug");
 }
 
 TEST_CASE("manifest json rejects malformed package metadata") {
@@ -85,6 +89,9 @@ TEST_CASE("manifest json rejects malformed package metadata") {
       "schema_version": 1,
       "component": "worker",
       "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "release",
       "min_installer_version": "0.1.0",
       "files": [],
       "signatures": []
@@ -96,6 +103,9 @@ TEST_CASE("manifest json rejects malformed package metadata") {
       "schema_version": 1,
       "component": "agent",
       "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "release",
       "min_installer_version": "0.1.0",
       "files": [
         {
@@ -115,6 +125,9 @@ TEST_CASE("manifest json rejects malformed package metadata") {
       "schema_version": 1,
       "component": "agent",
       "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "release",
       "min_installer_version": "0.1.0",
       "files": [
         {
@@ -134,6 +147,9 @@ TEST_CASE("manifest json rejects malformed package metadata") {
       "schema_version": 1,
       "component": "agent",
       "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "release",
       "min_installer_version": "0.1.0",
       "files": [
         {
@@ -153,6 +169,9 @@ TEST_CASE("manifest json rejects malformed package metadata") {
       "schema_version": 1,
       "component": "agent",
       "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "release",
       "min_installer_version": "0.1.0",
       "files": [
         {
@@ -171,6 +190,31 @@ TEST_CASE("manifest json rejects malformed package metadata") {
         }
       ],
       "signatures": []
+    })"));
+  }
+
+  SECTION("missing build type") {
+    REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
+      "schema_version": 1,
+      "component": "agent",
+      "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "min_installer_version": "0.1.0",
+      "files": []
+    })"));
+  }
+
+  SECTION("invalid build type") {
+    REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
+      "schema_version": 1,
+      "component": "agent",
+      "version": "0.1.0",
+      "platform": "linux",
+      "arch": "x86_64",
+      "build_type": "profile",
+      "min_installer_version": "0.1.0",
+      "files": []
     })"));
   }
 }

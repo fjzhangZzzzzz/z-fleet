@@ -20,7 +20,7 @@
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 9;
 
 namespace proto = zfleet::protocol::v1;
 
@@ -56,13 +56,43 @@ std::string SerializeProto(const Message& message) {
   return bytes;
 }
 
-std::string SerializeTaskInputBlob(const zfleet::protocol::TaskInput& input) {
-  return std::visit(
-      [](const auto&) {
-        proto::CollectBasicInventoryInput message;
-        return SerializeProto(message);
-      },
-      input);
+std::string SerializeTaskInputBlob(zfleet::protocol::TaskType task_type,
+                                   const zfleet::protocol::TaskInput& input) {
+  switch (task_type) {
+    case zfleet::protocol::TaskType::collect_basic_inventory: {
+      if (!std::holds_alternative<zfleet::protocol::CollectBasicInventoryInput>(
+              input)) {
+        throw std::runtime_error(
+            "task input type mismatch for collect_basic_inventory");
+      }
+      proto::CollectBasicInventoryInput message;
+      return SerializeProto(message);
+    }
+    case zfleet::protocol::TaskType::package_update: {
+      if (!std::holds_alternative<zfleet::protocol::PackageUpdateInput>(
+              input)) {
+        throw std::runtime_error("task input type mismatch for package_update");
+      }
+      const auto& value = std::get<zfleet::protocol::PackageUpdateInput>(input);
+      proto::PackageUpdateInput message;
+      message.set_action(value.action);
+      message.set_component(value.component);
+      message.set_package_id(value.package_id);
+      message.set_version(value.version);
+      message.set_platform(value.platform);
+      message.set_arch(value.arch);
+      message.set_build_type(value.build_type);
+      message.set_package_url(value.package_url);
+      message.set_package_sha256(value.package_sha256);
+      message.set_manifest_sha256(value.manifest_sha256);
+      message.set_min_installer_version(value.min_installer_version);
+      message.set_allow_downgrade(value.allow_downgrade);
+      message.set_force(value.force);
+      return SerializeProto(message);
+    }
+  }
+
+  throw std::runtime_error("unsupported task type for stored task input");
 }
 
 zfleet::protocol::TaskInput ParseTaskInputBlob(
@@ -75,6 +105,27 @@ zfleet::protocol::TaskInput ParseTaskInputBlob(
         throw std::runtime_error("failed to parse stored task input");
       }
       return zfleet::protocol::CollectBasicInventoryInput{};
+    }
+    case zfleet::protocol::TaskType::package_update: {
+      proto::PackageUpdateInput message;
+      if (!message.ParseFromString(input_blob)) {
+        throw std::runtime_error("failed to parse stored package update input");
+      }
+      return zfleet::protocol::PackageUpdateInput{
+          .action = message.action().empty() ? "apply" : message.action(),
+          .component = message.component(),
+          .package_id = message.package_id(),
+          .version = message.version(),
+          .platform = message.platform(),
+          .arch = message.arch(),
+          .build_type = message.build_type(),
+          .package_url = message.package_url(),
+          .package_sha256 = message.package_sha256(),
+          .manifest_sha256 = message.manifest_sha256(),
+          .min_installer_version = message.min_installer_version(),
+          .allow_downgrade = message.allow_downgrade(),
+          .force = message.force(),
+      };
     }
   }
 
@@ -107,6 +158,15 @@ AgentSummary ParseAgentSummary(SQLite::Statement& query) {
       .platform = query.getColumn(5).getString(),
       .agent_version = query.getColumn(6).getString(),
       .status = query.getColumn(7).getString(),
+      .current_package_id = NullableOptionalColumn(query, 8),
+      .desired_version = NullableOptionalColumn(query, 9),
+      .desired_package_id = NullableOptionalColumn(query, 10),
+      .desired_set_at = NullableOptionalColumn(query, 11),
+      .desired_set_by = NullableOptionalColumn(query, 12),
+      .upgrade_state = NullableOptionalColumn(query, 13),
+      .last_upgrade_task_id = NullableOptionalColumn(query, 14),
+      .last_upgrade_error = NullableOptionalColumn(query, 15),
+      .last_upgrade_at = NullableOptionalColumn(query, 16),
   };
 }
 
@@ -134,16 +194,17 @@ AgentPackageRecord ParseAgentPackageRecord(SQLite::Statement& query) {
       .version = query.getColumn(2).getString(),
       .platform = query.getColumn(3).getString(),
       .arch = query.getColumn(4).getString(),
-      .filename = query.getColumn(5).getString(),
-      .storage_path = query.getColumn(6).getString(),
-      .size_bytes = static_cast<std::uint64_t>(query.getColumn(7).getInt64()),
-      .sha256 = query.getColumn(8).getString(),
-      .manifest_json = query.getColumn(9).getString(),
-      .status = query.getColumn(10).getString(),
-      .uploaded_at = query.getColumn(11).getString(),
-      .validated_at = NullableOptionalColumn(query, 12),
-      .published_at = NullableOptionalColumn(query, 13),
-      .retired_at = NullableOptionalColumn(query, 14),
+      .build_type = query.getColumn(5).getString(),
+      .filename = query.getColumn(6).getString(),
+      .storage_path = query.getColumn(7).getString(),
+      .size_bytes = static_cast<std::uint64_t>(query.getColumn(8).getInt64()),
+      .sha256 = query.getColumn(9).getString(),
+      .manifest_json = query.getColumn(10).getString(),
+      .status = query.getColumn(11).getString(),
+      .uploaded_at = query.getColumn(12).getString(),
+      .validated_at = NullableOptionalColumn(query, 13),
+      .published_at = NullableOptionalColumn(query, 14),
+      .retired_at = NullableOptionalColumn(query, 15),
   };
 }
 
@@ -168,6 +229,17 @@ RegistrationTokenRecord ParseRegistrationTokenRecord(SQLite::Statement& query) {
   };
 }
 
+bool ColumnExists(SQLite::Database& db, const std::string& table,
+                  const std::string& column) {
+  SQLite::Statement query(db, "pragma table_info(" + table + ")");
+  while (query.executeStep()) {
+    if (query.getColumn(1).getString() == column) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ExecSchema(SQLite::Database& db) {
   db.exec(R"sql(
     create table if not exists agents (
@@ -178,7 +250,16 @@ void ExecSchema(SQLite::Database& db) {
       last_offline_at text,
       platform text not null,
       agent_version text not null,
-      status text not null
+      status text not null,
+      current_package_id text,
+      desired_version text,
+      desired_package_id text,
+      desired_set_at text,
+      desired_set_by text,
+      upgrade_state text,
+      last_upgrade_task_id text,
+      last_upgrade_error text,
+      last_upgrade_at text
     )
   )sql");
 
@@ -220,6 +301,7 @@ void ExecSchema(SQLite::Database& db) {
       expires_at text not null,
       input_blob blob not null,
       state text not null,
+      prerequisite_task_id text,
       assigned_at text,
       completed_at text
     )
@@ -248,6 +330,7 @@ void ExecSchema(SQLite::Database& db) {
       version text not null,
       platform text not null,
       arch text not null,
+      build_type text not null,
       filename text not null,
       storage_path text not null,
       size_bytes integer not null,
@@ -266,8 +349,10 @@ void ExecSchema(SQLite::Database& db) {
       publication_id text primary key,
       package_id text not null,
       channel text not null,
+      component text not null,
       platform text not null,
       arch text not null,
+      build_type text not null,
       is_default integer not null,
       published_at text not null,
       published_by text,
@@ -292,9 +377,35 @@ void ExecSchema(SQLite::Database& db) {
     )
   )sql");
 
+  for (const auto* column : {"current_package_id", "desired_version",
+                             "desired_package_id", "desired_set_at",
+                             "desired_set_by", "upgrade_state",
+                             "last_upgrade_task_id", "last_upgrade_error",
+                             "last_upgrade_at"}) {
+    if (!ColumnExists(db, "agents", column)) {
+      db.exec(std::string("alter table agents add column ") + column +
+              " text");
+    }
+  }
+  if (!ColumnExists(db, "agent_packages", "build_type")) {
+    db.exec("alter table agent_packages add column build_type text not null "
+            "default 'release'");
+  }
+  if (!ColumnExists(db, "package_publications", "component")) {
+    db.exec("alter table package_publications add column component text not null "
+            "default 'agent'");
+  }
+  if (!ColumnExists(db, "package_publications", "build_type")) {
+    db.exec("alter table package_publications add column build_type text not null "
+            "default 'release'");
+  }
+  if (!ColumnExists(db, "tasks", "prerequisite_task_id")) {
+    db.exec("alter table tasks add column prerequisite_task_id text");
+  }
+  db.exec("drop index if exists package_publications_default_idx");
   db.exec(R"sql(
     create unique index if not exists package_publications_default_idx
-      on package_publications(channel, platform, arch)
+      on package_publications(component, channel, platform, arch, build_type)
       where is_default = 1
   )sql");
 
@@ -644,8 +755,17 @@ void ServerDatabase::UpsertAgent(
           last_offline_at,
           platform,
           agent_version,
-          status
-        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+          status,
+          current_package_id,
+          desired_version,
+          desired_package_id,
+          desired_set_at,
+          desired_set_by,
+          upgrade_state,
+          last_upgrade_task_id,
+          last_upgrade_error,
+          last_upgrade_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(agent_id) do update set
           last_seen_at = case
             when agents.status != 'online' then excluded.last_seen_at
@@ -661,7 +781,55 @@ void ServerDatabase::UpsertAgent(
           end,
           platform = excluded.platform,
           agent_version = excluded.agent_version,
-          status = excluded.status
+          status = excluded.status,
+          current_package_id = case
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version = excluded.agent_version
+              then agents.desired_package_id
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_package_id is null
+              then null
+            else agents.current_package_id
+          end,
+          upgrade_state = case
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version = excluded.agent_version
+              then 'succeeded'
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_package_id is null
+              then 'succeeded'
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version is not null
+              and agents.desired_version != excluded.agent_version
+              then 'failed'
+            else agents.upgrade_state
+          end,
+          last_upgrade_error = case
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version = excluded.agent_version
+              then null
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_package_id is null
+              then null
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version is not null
+              and agents.desired_version != excluded.agent_version
+              then 'agent_reported_unexpected_version'
+            else agents.last_upgrade_error
+          end,
+          last_upgrade_at = case
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version = excluded.agent_version
+              then excluded.last_online_at
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_package_id is null
+              then excluded.last_online_at
+            when agents.upgrade_state = 'waiting_reconnect'
+              and agents.desired_version is not null
+              and agents.desired_version != excluded.agent_version
+              then excluded.last_online_at
+            else agents.last_upgrade_at
+          end
       )sql");
     statement.bind(1, request.agent_id);
     statement.bind(2, request.occurred_at);
@@ -671,6 +839,9 @@ void ServerDatabase::UpsertAgent(
     statement.bind(6, request.os);
     statement.bind(7, request.agent_version);
     statement.bind(8, "online");
+    for (int index = 9; index <= 17; ++index) {
+      statement.bind(index);
+    }
     statement.exec();
   });
 }
@@ -786,7 +957,7 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
         5, std::string(zfleet::protocol::ToString(task.capability_level)));
     statement.bind(6, task.created_at);
     statement.bind(7, task.expires_at);
-    BindBlob(statement, 8, SerializeTaskInputBlob(task.input));
+    BindBlob(statement, 8, SerializeTaskInputBlob(task.task_type, task.input));
     statement.bind(9, std::string(zfleet::protocol::ToString(
                           zfleet::protocol::TaskState::queued)));
     statement.bind(10);
@@ -857,6 +1028,13 @@ std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
         where agent_id = ?
           and state = ?
           and expires_at > ?
+          and (
+            prerequisite_task_id is null or exists (
+              select 1 from tasks prerequisite
+              where prerequisite.task_id = tasks.prerequisite_task_id
+                and prerequisite.state = 'succeeded'
+            )
+          )
         order by created_at asc
         limit 1
       )sql");
@@ -1155,7 +1333,8 @@ void ServerDatabase::AsyncEnqueueTask(
                                       task.capability_level)));
             statement.bind(6, task.created_at);
             statement.bind(7, task.expires_at);
-            BindBlob(statement, 8, SerializeTaskInputBlob(task.input));
+            BindBlob(statement, 8,
+                     SerializeTaskInputBlob(task.task_type, task.input));
             statement.bind(
                 9, std::string(zfleet::protocol::ToString(
                        zfleet::protocol::TaskState::queued)));
@@ -1232,6 +1411,13 @@ void ServerDatabase::AsyncClaimNextTaskForAgent(
         where agent_id = ?
           and state = ?
           and expires_at > ?
+          and (
+            prerequisite_task_id is null or exists (
+              select 1 from tasks prerequisite
+              where prerequisite.task_id = tasks.prerequisite_task_id
+                and prerequisite.state = 'succeeded'
+            )
+          )
         order by created_at asc
         limit 1
       )sql");
@@ -1430,7 +1616,176 @@ void ServerDatabase::RecordTaskResult(
       throw std::runtime_error("task result state transition failed");
     }
 
+    if (request.task_type == zfleet::protocol::TaskType::package_update) {
+      const auto next_state =
+          request.status == zfleet::protocol::TaskExecutionStatus::succeeded
+              ? "waiting_reconnect"
+              : "failed";
+      SQLite::Statement update_agent(
+          db,
+          "update agents set upgrade_state = ?, last_upgrade_error = ?, "
+          "last_upgrade_at = ? where agent_id = ? "
+          "and last_upgrade_task_id = ?");
+      update_agent.bind(1, next_state);
+      if (request.error.has_value()) {
+        update_agent.bind(
+            2, std::string(zfleet::protocol::ToString(
+                   request.error->error_code)));
+      } else {
+        update_agent.bind(2);
+      }
+      update_agent.bind(3, request.occurred_at);
+      update_agent.bind(4, request.agent_id);
+      update_agent.bind(5, request.task_id);
+      update_agent.exec();
+      if (request.status != zfleet::protocol::TaskExecutionStatus::succeeded) {
+        SQLite::Statement fail_dependent(
+            db,
+            "update agents set upgrade_state = 'failed', "
+            "last_upgrade_error = ?, last_upgrade_at = ? "
+            "where agent_id = ? and last_upgrade_task_id in "
+            "(select task_id from tasks where prerequisite_task_id = ?)");
+        if (request.error.has_value()) {
+          fail_dependent.bind(
+              1, std::string(zfleet::protocol::ToString(
+                     request.error->error_code)));
+        } else {
+          fail_dependent.bind(1, "task_execution_failed");
+        }
+        fail_dependent.bind(2, request.occurred_at);
+        fail_dependent.bind(3, request.agent_id);
+        fail_dependent.bind(4, request.task_id);
+        fail_dependent.exec();
+      }
+    }
+
     transaction.commit();
+  });
+  NotifyTaskQueueChanged();
+}
+
+void ServerDatabase::ScheduleAgentUpgrade(
+    const std::string& agent_id,
+    const std::string& desired_version,
+    const std::string& desired_package_id,
+    const std::optional<std::string>& set_by,
+    const std::string& set_at,
+    const zfleet::protocol::Task& task,
+    const std::optional<zfleet::protocol::Task>& prerequisite_task) {
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Transaction transaction(db);
+    SQLite::Statement update(
+        db,
+        R"sql(
+        update agents set
+          desired_version = ?,
+          desired_package_id = ?,
+          desired_set_at = ?,
+          desired_set_by = ?,
+          upgrade_state = 'queued',
+          last_upgrade_task_id = ?,
+          last_upgrade_error = null
+        where agent_id = ?
+      )sql");
+    update.bind(1, desired_version);
+    update.bind(2, desired_package_id);
+    update.bind(3, set_at);
+    if (set_by.has_value()) {
+      update.bind(4, *set_by);
+    } else {
+      update.bind(4);
+    }
+    update.bind(5, task.task_id);
+    update.bind(6, agent_id);
+    update.exec();
+    if (sqlite3_changes(db.getHandle()) != 1) {
+      throw std::runtime_error("agent not found for upgrade");
+    }
+
+    const auto insert_task =
+        [&](const zfleet::protocol::Task& value,
+            const std::optional<std::string>& prerequisite_task_id) {
+          SQLite::Statement insert(
+              db,
+              R"sql(
+        insert into tasks (
+          task_id, protocol_version, agent_id, task_type, capability_level,
+          created_at, expires_at, input_blob, state, prerequisite_task_id,
+          assigned_at, completed_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      )sql");
+          insert.bind(1, value.task_id);
+          insert.bind(2, value.protocol_version);
+          insert.bind(3, value.agent_id);
+          insert.bind(4,
+                      std::string(zfleet::protocol::ToString(value.task_type)));
+          insert.bind(5, std::string(zfleet::protocol::ToString(
+                             value.capability_level)));
+          insert.bind(6, value.created_at);
+          insert.bind(7, value.expires_at);
+          BindBlob(insert, 8,
+                   SerializeTaskInputBlob(value.task_type, value.input));
+          insert.bind(9, "queued");
+          if (prerequisite_task_id.has_value()) {
+            insert.bind(10, *prerequisite_task_id);
+          } else {
+            insert.bind(10);
+          }
+          insert.bind(11);
+          insert.bind(12);
+          insert.exec();
+        };
+    if (prerequisite_task.has_value()) {
+      insert_task(*prerequisite_task, std::nullopt);
+      insert_task(task, prerequisite_task->task_id);
+    } else {
+      insert_task(task, std::nullopt);
+    }
+    transaction.commit();
+  });
+  NotifyTaskQueueChanged();
+}
+
+void ServerDatabase::ScheduleAgentRollback(
+    const std::string& agent_id,
+    const std::optional<std::string>& set_by,
+    const std::string& set_at,
+    const zfleet::protocol::Task& task) {
+  ScheduleAgentUpgrade(agent_id, "", "", set_by, set_at, task);
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Statement update(
+        db,
+        "update agents set desired_version = null, desired_package_id = null "
+        "where agent_id = ? and last_upgrade_task_id = ?");
+    update.bind(1, agent_id);
+    update.bind(2, task.task_id);
+    update.exec();
+  });
+}
+
+std::vector<std::string> ServerDatabase::ExpireWaitingReconnect(
+    const std::string& now) {
+  return SubmitWrite([&](SQLite::Database& db) {
+    std::vector<std::string> expired;
+    SQLite::Statement select(
+        db,
+        "select agent_id from agents where upgrade_state = "
+        "'waiting_reconnect' and last_upgrade_at is not null "
+        "and datetime(last_upgrade_at) <= datetime(?, '-10 minutes')");
+    select.bind(1, now);
+    while (select.executeStep()) {
+      expired.push_back(select.getColumn(0).getString());
+    }
+    SQLite::Statement update(
+        db,
+        "update agents set upgrade_state = 'failed', "
+        "last_upgrade_error = 'waiting_reconnect_timeout' "
+        "where upgrade_state = 'waiting_reconnect' "
+        "and last_upgrade_at is not null "
+        "and datetime(last_upgrade_at) <= datetime(?, '-10 minutes')");
+    update.bind(1, now);
+    update.exec();
+    return expired;
   });
 }
 
@@ -1448,7 +1803,16 @@ std::vector<AgentSummary> ServerDatabase::ListAgents() const {
           last_offline_at,
           platform,
           agent_version,
-          status
+          status,
+          current_package_id,
+          desired_version,
+          desired_package_id,
+          desired_set_at,
+          desired_set_by,
+          upgrade_state,
+          last_upgrade_task_id,
+          last_upgrade_error,
+          last_upgrade_at
         from agents
         order by status desc, last_seen_at desc, agent_id asc
       )sql");
@@ -1475,7 +1839,16 @@ std::optional<AgentSummary> ServerDatabase::FindAgent(
           last_offline_at,
           platform,
           agent_version,
-          status
+          status,
+          current_package_id,
+          desired_version,
+          desired_package_id,
+          desired_set_at,
+          desired_set_by,
+          upgrade_state,
+          last_upgrade_task_id,
+          last_upgrade_error,
+          last_upgrade_at
         from agents
         where agent_id = ?
       )sql");
@@ -1541,6 +1914,7 @@ void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
           version,
           platform,
           arch,
+          build_type,
           filename,
           storage_path,
           size_bytes,
@@ -1551,12 +1925,13 @@ void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
           validated_at,
           published_at,
           retired_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(package_id) do update set
           component = excluded.component,
           version = excluded.version,
           platform = excluded.platform,
           arch = excluded.arch,
+          build_type = excluded.build_type,
           filename = excluded.filename,
           storage_path = excluded.storage_path,
           size_bytes = excluded.size_bytes,
@@ -1573,27 +1948,28 @@ void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
     statement.bind(3, package.version);
     statement.bind(4, package.platform);
     statement.bind(5, package.arch);
-    statement.bind(6, package.filename);
-    statement.bind(7, package.storage_path.string());
-    statement.bind(8, static_cast<std::int64_t>(package.size_bytes));
-    statement.bind(9, package.sha256);
-    statement.bind(10, package.manifest_json);
-    statement.bind(11, package.status);
-    statement.bind(12, package.uploaded_at);
+    statement.bind(6, package.build_type);
+    statement.bind(7, package.filename);
+    statement.bind(8, package.storage_path.string());
+    statement.bind(9, static_cast<std::int64_t>(package.size_bytes));
+    statement.bind(10, package.sha256);
+    statement.bind(11, package.manifest_json);
+    statement.bind(12, package.status);
+    statement.bind(13, package.uploaded_at);
     if (package.validated_at.has_value()) {
-      statement.bind(13, *package.validated_at);
-    } else {
-      statement.bind(13);
-    }
-    if (package.published_at.has_value()) {
-      statement.bind(14, *package.published_at);
+      statement.bind(14, *package.validated_at);
     } else {
       statement.bind(14);
     }
-    if (package.retired_at.has_value()) {
-      statement.bind(15, *package.retired_at);
+    if (package.published_at.has_value()) {
+      statement.bind(15, *package.published_at);
     } else {
       statement.bind(15);
+    }
+    if (package.retired_at.has_value()) {
+      statement.bind(16, *package.retired_at);
+    } else {
+      statement.bind(16);
     }
     statement.exec();
   });
@@ -1611,6 +1987,7 @@ std::vector<AgentPackageRecord> ServerDatabase::ListAgentPackages() const {
           version,
           platform,
           arch,
+          build_type,
           filename,
           storage_path,
           size_bytes,
@@ -1645,6 +2022,7 @@ std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
           version,
           platform,
           arch,
+          build_type,
           filename,
           storage_path,
           size_bytes,
@@ -1668,9 +2046,11 @@ std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
 
 void ServerDatabase::PublishAgentPackage(
     const std::string& package_id,
+    const std::string& component,
     const std::string& channel,
     const std::string& platform,
     const std::string& arch,
+    const std::string& build_type,
     const std::optional<std::string>& published_by,
     const std::string& published_at) {
   SubmitWrite([&](SQLite::Database& db) {
@@ -1678,14 +2058,18 @@ void ServerDatabase::PublishAgentPackage(
     SQLite::Statement clear(
         db,
         "update package_publications set is_default = 0 "
-        "where channel = ? and platform = ? and arch = ? and is_default = 1");
-    clear.bind(1, channel);
-    clear.bind(2, platform);
-    clear.bind(3, arch);
+        "where component = ? and channel = ? and platform = ? and arch = ? "
+        "and build_type = ? and is_default = 1");
+    clear.bind(1, component);
+    clear.bind(2, channel);
+    clear.bind(3, platform);
+    clear.bind(4, arch);
+    clear.bind(5, build_type);
     clear.exec();
 
     const auto publication_id =
-        package_id + ":" + channel + ":" + platform + ":" + arch;
+        package_id + ":" + channel + ":" + platform + ":" + arch + ":" +
+        build_type;
     SQLite::Statement publish(
         db,
         R"sql(
@@ -1693,17 +2077,21 @@ void ServerDatabase::PublishAgentPackage(
           publication_id,
           package_id,
           channel,
+          component,
           platform,
           arch,
+          build_type,
           is_default,
           published_at,
           published_by
-        ) values (?, ?, ?, ?, ?, 1, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         on conflict(publication_id) do update set
           package_id = excluded.package_id,
           channel = excluded.channel,
+          component = excluded.component,
           platform = excluded.platform,
           arch = excluded.arch,
+          build_type = excluded.build_type,
           is_default = excluded.is_default,
           published_at = excluded.published_at,
           published_by = excluded.published_by
@@ -1711,13 +2099,15 @@ void ServerDatabase::PublishAgentPackage(
     publish.bind(1, publication_id);
     publish.bind(2, package_id);
     publish.bind(3, channel);
-    publish.bind(4, platform);
-    publish.bind(5, arch);
-    publish.bind(6, published_at);
+    publish.bind(4, component);
+    publish.bind(5, platform);
+    publish.bind(6, arch);
+    publish.bind(7, build_type);
+    publish.bind(8, published_at);
     if (published_by.has_value()) {
-      publish.bind(7, *published_by);
+      publish.bind(9, *published_by);
     } else {
-      publish.bind(7);
+      publish.bind(9);
     }
     publish.exec();
 
@@ -1736,11 +2126,35 @@ void ServerDatabase::PublishAgentPackage(
   });
 }
 
+void ServerDatabase::RetireAgentPackage(const std::string& package_id,
+                                        const std::string& retired_at) {
+  SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Transaction transaction(db);
+    SQLite::Statement update_package(
+        db,
+        "update agent_packages set status = 'retired', retired_at = ? "
+        "where package_id = ?");
+    update_package.bind(1, retired_at);
+    update_package.bind(2, package_id);
+    update_package.exec();
+    if (sqlite3_changes(db.getHandle()) != 1) {
+      throw std::runtime_error("agent package not found for retire");
+    }
+    SQLite::Statement disable_publications(
+        db, "update package_publications set is_default = 0 where package_id = ?");
+    disable_publications.bind(1, package_id);
+    disable_publications.exec();
+    transaction.commit();
+  });
+}
+
 std::optional<AgentPackageRecord>
 ServerDatabase::FindDefaultPublishedAgentPackage(
+    const std::string& component,
     const std::string& channel,
     const std::string& platform,
-    const std::string& arch) const {
+    const std::string& arch,
+    const std::string& build_type) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
     SQLite::Statement query(
@@ -1752,6 +2166,7 @@ ServerDatabase::FindDefaultPublishedAgentPackage(
           p.version,
           p.platform,
           p.arch,
+          p.build_type,
           p.filename,
           p.storage_path,
           p.size_bytes,
@@ -1764,17 +2179,21 @@ ServerDatabase::FindDefaultPublishedAgentPackage(
           p.retired_at
         from agent_packages p
         join package_publications pub on pub.package_id = p.package_id
-        where pub.channel = ?
+        where pub.component = ?
+          and pub.channel = ?
           and pub.platform = ?
           and pub.arch = ?
+          and pub.build_type = ?
           and pub.is_default = 1
           and p.status = 'published'
         order by pub.published_at desc
         limit 1
       )sql");
-    query.bind(1, channel);
-    query.bind(2, platform);
-    query.bind(3, arch);
+    query.bind(1, component);
+    query.bind(2, channel);
+    query.bind(3, platform);
+    query.bind(4, arch);
+    query.bind(5, build_type);
     if (!query.executeStep()) {
       return std::optional<AgentPackageRecord>{};
     }

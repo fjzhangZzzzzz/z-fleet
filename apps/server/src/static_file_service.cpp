@@ -12,13 +12,15 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::array<std::string_view, 6> kRequiredFiles = {
+constexpr std::array<std::string_view, 8> kRequiredFiles = {
     "index.html",
     "install.html",
     "agents.html",
     "admin/packages.html",
     "assets/management.css",
     "assets/management.js",
+    "scripts/install/linux.sh",
+    "scripts/install/windows.ps1",
 };
 
 bool IsPermittedAssetExtension(const fs::path& path) {
@@ -50,6 +52,12 @@ std::string ContentTypeForPath(const fs::path& path) {
   }
   if (extension == ".woff2") {
     return "font/woff2";
+  }
+  if (extension == ".sh") {
+    return "text/plain; charset=utf-8";
+  }
+  if (extension == ".ps1") {
+    return "text/plain; charset=utf-8";
   }
   return "application/octet-stream";
 }
@@ -98,6 +106,10 @@ StaticFileResponse StaticFileService::Read(std::string_view request_path) const 
     return {};
   }
   return ReadFile(relative_file);
+}
+
+const fs::path& StaticFileService::root() const noexcept {
+  return root_;
 }
 
 bool StaticFileService::IsRegularFileWithoutSymlinks(

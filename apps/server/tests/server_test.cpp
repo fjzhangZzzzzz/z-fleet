@@ -165,14 +165,15 @@ std::string ReadAssetSnapshotBlob(
 proto::AgentEvent RegisterEvent(std::string message_id,
                                 std::string agent_id,
                                 std::string occurred_at,
-                                std::string registration_token = {}) {
+                                std::string registration_token = {},
+                                std::string agent_version = "0.1.0") {
   proto::AgentEvent event;
   event.set_protocol_version("v1");
   event.set_message_id(std::move(message_id));
   event.set_agent_id(std::move(agent_id));
   event.set_occurred_at(std::move(occurred_at));
   auto* payload = event.mutable_register_();
-  payload->set_agent_version("0.1.0");
+  payload->set_agent_version(std::move(agent_version));
   payload->set_hostname("devbox-01");
   payload->set_os("linux");
   payload->set_arch("x86_64");
@@ -347,32 +348,54 @@ std::string ReadBinaryFile(const std::filesystem::path& path) {
   return contents.str();
 }
 
-std::filesystem::path CreateAgentPackageArchive(
-    const std::filesystem::path& root) {
-  const auto package_dir = root / "package";
-  const auto payload_file = package_dir / "payload" / "bin" / "zfleet_agent";
-  zfleet::test::WriteTextFile(payload_file, "agent-binary");
+std::filesystem::path FindRepoWebRoot() {
+  auto current = std::filesystem::current_path();
+  for (int depth = 0; depth < 8; ++depth) {
+    const auto candidate = current / "apps" / "server" / "web";
+    if (std::filesystem::exists(candidate / "install.html") &&
+        std::filesystem::exists(candidate / "agents.html") &&
+        std::filesystem::exists(candidate / "assets" / "management.js")) {
+      return candidate;
+    }
+    if (current == current.root_path()) {
+      break;
+    }
+    current = current.parent_path();
+  }
+  throw std::runtime_error("failed to locate apps/server/web from test cwd");
+}
+
+std::filesystem::path CreatePackageArchive(
+    const std::filesystem::path& root, const std::string& component,
+    const std::string& version, const std::string& build_type,
+    const std::string& min_installer_version = "0.1.0") {
+  const auto package_dir = root / ("package-" + component);
+  const auto binary = "zfleet_" + component;
+  const auto contents = component + "-binary";
+  const auto payload_file = package_dir / "payload" / "bin" / binary;
+  zfleet::test::WriteTextFile(payload_file, contents);
 
   const auto manifest = zfleet::package::SerializeManifestJson(
       zfleet::package::Manifest{
           .schema_version = 1,
-          .component = "agent",
-          .version = "0.1.0",
+          .component = component,
+          .version = version,
           .platform = "linux",
           .arch = "x86_64",
-          .min_installer_version = "0.1.0",
+          .build_type = build_type,
+          .min_installer_version = min_installer_version,
           .files = {zfleet::package::ManifestFile{
-              .source = "payload/bin/zfleet_agent",
-              .target = "bin/zfleet_agent",
-              .size = 12,
-              .sha256 = zfleet::crypto::Sha256BytesHex("agent-binary"),
+              .source = "payload/bin/" + binary,
+              .target = "bin/" + binary,
+              .size = static_cast<std::uint64_t>(contents.size()),
+              .sha256 = zfleet::crypto::Sha256BytesHex(contents),
               .executable = true,
           }},
       });
   zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
                               manifest);
 
-  const auto archive_path = root / "agent.zip";
+  const auto archive_path = root / (component + ".zip");
   zfleet::package::CreateArchive(zfleet::package::CreateArchiveOptions{
       .package_dir = package_dir,
       .archive_path = archive_path,
@@ -393,6 +416,10 @@ void WriteWebStaticFiles(const std::filesystem::path& root) {
                               "body { color: #102c32; }");
   zfleet::test::WriteTextFile(root / "assets" / "management.js",
                               "console.log('z-fleet');");
+  zfleet::test::WriteTextFile(root / "scripts" / "install" / "linux.sh",
+                              "#!/usr/bin/env bash\nsha256sum -c\n");
+  zfleet::test::WriteTextFile(root / "scripts" / "install" / "windows.ps1",
+                              "Get-FileHash\n");
 }
 
 } // namespace
@@ -407,9 +434,11 @@ TEST_CASE("server config loads control listen and database path from toml") {
     config_stream << "[server]\n";
     config_stream << "control_listen = \"127.0.0.1:18081\"\n";
     config_stream << "management_listen = \"127.0.0.1:18080\"\n";
+    config_stream << "management_public_url = \"http://server.example:18080\"\n";
     config_stream << "database_path = \"data/server.db\"\n";
     config_stream << "package_repository = \"data/packages\"\n";
     config_stream << "web_static_dir = \"share/web\"\n";
+    config_stream << "allow_high_risk_write = true\n";
     config_stream << "\n[log]\n";
     config_stream << "level = \"debug\"\n";
     config_stream << "file = \"logs/server.log\"\n";
@@ -423,9 +452,11 @@ TEST_CASE("server config loads control listen and database path from toml") {
   REQUIRE(config.install_dir == test_root.path());
   REQUIRE(config.control_listen == "127.0.0.1:18081");
   REQUIRE(config.management_listen == "127.0.0.1:18080");
+  REQUIRE(config.management_public_url == "http://server.example:18080");
   REQUIRE(config.database_path == test_root / "data" / "server.db");
   REQUIRE(config.package_repository == test_root / "data" / "packages");
   REQUIRE(config.web_static_dir == test_root / "share" / "web");
+  REQUIRE(config.allow_high_risk_write);
   REQUIRE(config.log.level == zfleet::core::log::Level::kDebug);
   REQUIRE(config.log.file_path == test_root / "logs" / "server.log");
   REQUIRE_FALSE(config.log.enable_console);
@@ -440,9 +471,11 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   config.install_dir = test_root.path();
   config.control_listen = "127.0.0.1:18081";
   config.management_listen = "127.0.0.1:18080";
+  config.management_public_url = "http://server.example:18080";
   config.database_path = "data/custom.db";
   config.package_repository = "data/packages";
   config.web_static_dir = "share/web";
+  config.allow_high_risk_write = true;
   config.log.level = zfleet::core::log::Level::kError;
 
   zfleet::server::SaveConfig(config, config_path);
@@ -455,8 +488,10 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   REQUIRE(saved.find("database_path") != std::string::npos);
   REQUIRE(saved.find("data/custom.db") != std::string::npos);
   REQUIRE(saved.find("management_listen") != std::string::npos);
+  REQUIRE(saved.find("management_public_url") != std::string::npos);
   REQUIRE(saved.find("package_repository") != std::string::npos);
   REQUIRE(saved.find("web_static_dir") != std::string::npos);
+  REQUIRE(saved.find("allow_high_risk_write") != std::string::npos);
 
   auto loaded = zfleet::server::LoadConfig(config_path);
   loaded.install_dir = test_root.path();
@@ -465,9 +500,11 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   REQUIRE(loaded.install_dir == test_root.path());
   REQUIRE(loaded.control_listen == "127.0.0.1:18081");
   REQUIRE(loaded.management_listen == "127.0.0.1:18080");
+  REQUIRE(loaded.management_public_url == "http://server.example:18080");
   REQUIRE(loaded.database_path == test_root / "data" / "custom.db");
   REQUIRE(loaded.package_repository == test_root / "data" / "packages");
   REQUIRE(loaded.web_static_dir == test_root / "share" / "web");
+  REQUIRE(loaded.allow_high_risk_write);
   REQUIRE(loaded.log.level == zfleet::core::log::Level::kError);
 }
 
@@ -486,7 +523,7 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 6);
+  REQUIRE(database.schema_version() == 9);
   REQUIRE(TableExists(database_path, "agents"));
   REQUIRE_FALSE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
@@ -548,7 +585,8 @@ TEST_CASE("server database stores package channel and registration tokens") {
       .version = "0.1.0",
       .platform = "linux",
       .arch = "x86_64",
-      .filename = "agent.zip",
+      .build_type = "release",
+      .filename = "zfleet_agent-v0.1.0-linux-x86_64-release.zip",
       .storage_path = test_root / "agent.zip",
       .size_bytes = 10,
       .sha256 = std::string(64, 'a'),
@@ -557,12 +595,14 @@ TEST_CASE("server database stores package channel and registration tokens") {
       .uploaded_at = "2026-05-24T10:00:00Z",
       .validated_at = "2026-05-24T10:00:00Z",
   });
-  database.PublishAgentPackage("pkg-1", "stable", "linux", "x86_64",
+  database.PublishAgentPackage("pkg-1", "agent", "stable", "linux", "x86_64",
+                               "release",
                                std::optional<std::string>{"admin"},
                                "2026-05-24T10:01:00Z");
 
   const auto package =
-      database.FindDefaultPublishedAgentPackage("stable", "linux", "x86_64");
+      database.FindDefaultPublishedAgentPackage("agent", "stable", "linux",
+                                                "x86_64", "release");
   REQUIRE(package.has_value());
   REQUIRE(package->package_id == "pkg-1");
   REQUIRE(package->status == "published");
@@ -600,7 +640,10 @@ TEST_CASE("management http server serves static UI and agent api") {
       "127.0.0.1:0",
       &database,
       test_root / "packages",
-      web_root);
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .control_url = "http://127.0.0.1:8081",
+      });
   server.Start();
 
   const auto page = SendHttpRequest(
@@ -615,7 +658,8 @@ TEST_CASE("management http server serves static UI and agent api") {
       "GET /assets/management.css HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(stylesheet.status == 200);
   REQUIRE(stylesheet.headers.find("text/css") != std::string::npos);
-  REQUIRE(stylesheet.body.find("#102c32") != std::string::npos);
+  REQUIRE(stylesheet.body.find("body { color: #102c32; }") !=
+          std::string::npos);
 
   const auto traversal = SendHttpRequest(
       server.port(),
@@ -628,7 +672,66 @@ TEST_CASE("management http server serves static UI and agent api") {
   REQUIRE(agents.status == 200);
   REQUIRE(agents.body.find("agent-http-1") != std::string::npos);
 
+  const auto forbidden_upgrade = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/agents/agent-http-1/upgrade HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Length: 0\r\n\r\n");
+  REQUIRE(forbidden_upgrade.status == 403);
+  REQUIRE(forbidden_upgrade.body.find("capability_not_allowed") !=
+          std::string::npos);
+  const auto forbidden_rollback = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/agents/agent-http-1/rollback HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Length: 0\r\n\r\n");
+  REQUIRE(forbidden_rollback.status == 403);
+  REQUIRE(forbidden_rollback.body.find("capability_not_allowed") !=
+          std::string::npos);
+
+  const auto linux_script = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/linux.sh HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(linux_script.status == 200);
+  REQUIRE(linux_script.body.find("sha256sum -c") != std::string::npos);
+
+  const auto windows_script = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/windows.ps1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(windows_script.status == 200);
+  REQUIRE(windows_script.body.find("Get-FileHash") != std::string::npos);
+
+  const auto install_commands = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/commands?server_url=http%3A%2F%2F127.0.0.1%3A8080&token=abc&channel=stable HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(install_commands.status == 200);
+  REQUIRE(install_commands.body.find("\"commands\"") != std::string::npos);
+  REQUIRE(install_commands.body.find("/api/v1/install/linux.sh") !=
+          std::string::npos);
+  REQUIRE(install_commands.body.find("--control-url") != std::string::npos);
+
   server.Stop();
+}
+
+TEST_CASE("web management assets expose install filters and maintenance dialog hooks") {
+  const auto web_root = FindRepoWebRoot();
+  const auto install_html = ReadBinaryFile(web_root / "install.html");
+  const auto agents_html = ReadBinaryFile(web_root / "agents.html");
+  const auto management_js = ReadBinaryFile(web_root / "assets" / "management.js");
+
+  REQUIRE(install_html.find("data-install-platform") != std::string::npos);
+  REQUIRE(install_html.find("data-install-channel") != std::string::npos);
+  REQUIRE(install_html.find("data-generate-install-command") !=
+          std::string::npos);
+
+  REQUIRE(agents_html.find("data-status-for=\"agents\"") != std::string::npos);
+  REQUIRE(agents_html.find("data-maintenance-dialog") != std::string::npos);
+  REQUIRE(agents_html.find("data-maintenance-action") != std::string::npos);
+  REQUIRE(agents_html.find("data-maintenance-package") != std::string::npos);
+  REQUIRE(agents_html.find("data-maintenance-confirm") != std::string::npos);
+
+  REQUIRE(management_js.find("capability_not_allowed") != std::string::npos);
+  REQUIRE(management_js.find("data-open-maintenance") != std::string::npos);
+  REQUIRE(management_js.find("/api/v1/install/commands?server_url=") !=
+          std::string::npos);
 }
 
 TEST_CASE("management http server refuses missing Web static resources") {
@@ -761,13 +864,32 @@ TEST_CASE("management http server uploads publishes and resolves package channel
       "127.0.0.1:0",
       &database,
       test_root / "packages",
-      web_root);
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .allow_high_risk_write = true,
+          .package_download_base_url = "http://127.0.0.1:8080",
+      });
   server.Start();
+  SeedAgent(&database, "agent-upgrade-1");
+  database.RecordAssetSnapshot(
+      zfleet::protocol::AssetSnapshot{
+          .protocol_version = "v1",
+          .request_id = "asset-agent-upgrade-1",
+          .agent_id = "agent-upgrade-1",
+          .occurred_at = "2026-05-24T10:00:00Z",
+          .hostname = "devbox-01",
+          .os = "linux",
+          .arch = "x86_64",
+          .agent_version = "0.1.0",
+      },
+      AssetSnapshotEvent("asset-agent-upgrade-1", "agent-upgrade-1",
+                         "2026-05-24T10:00:00Z"));
 
-  const auto archive_path = CreateAgentPackageArchive(test_root.path());
+  const auto archive_path =
+      CreatePackageArchive(test_root.path(), "agent", "0.2.0", "release");
   const auto archive_body = ReadBinaryFile(archive_path);
   std::string upload_request =
-      "POST /api/v1/admin/packages?platform=windows&arch=arm64&filename=agent.zip HTTP/1.1\r\n"
+      "POST /api/v1/admin/packages?filename=zfleet_agent-v0.2.0-linux-x86_64-release.zip HTTP/1.1\r\n"
       "Host: 127.0.0.1\r\n"
       "Content-Type: application/zip\r\n"
       "Content-Length: " +
@@ -780,6 +902,7 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   REQUIRE(database.ListAgentPackages().size() == 1);
   REQUIRE(database.ListAgentPackages().front().platform == "linux");
   REQUIRE(database.ListAgentPackages().front().arch == "x86_64");
+  REQUIRE(database.ListAgentPackages().front().build_type == "release");
   const auto package_id = database.ListAgentPackages().front().package_id;
 
   const std::string publish_body = R"json({"channel":"candidate"})json";
@@ -794,13 +917,155 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   REQUIRE(publish.status == 200);
   REQUIRE(publish.body.find("\"status\":\"published\"") != std::string::npos);
 
+  const std::string upgrade_body =
+      "{\"package_id\":\"" + package_id + "\",\"set_by\":\"admin\"}";
+  std::string upgrade_request =
+      "POST /api/v1/agents/agent-upgrade-1/upgrade HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: " +
+      std::to_string(upgrade_body.size()) + "\r\n\r\n" + upgrade_body;
+  const auto upgrade = SendHttpRequest(server.port(), upgrade_request);
+  REQUIRE(upgrade.status == 409);
+  REQUIRE(upgrade.body.find("installer_too_old") !=
+          std::string::npos);
+
+  const auto missing_installer = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/options?channel=candidate&platform=linux&arch=x86_64&build_type=release HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n\r\n");
+  REQUIRE(missing_installer.status == 409);
+  REQUIRE(missing_installer.body.find("no_compatible_installer_package") !=
+          std::string::npos);
+
+  const auto installer_archive =
+      CreatePackageArchive(test_root.path(), "installer", "0.1.0", "release");
+  const auto installer_body = ReadBinaryFile(installer_archive);
+  std::string installer_upload_request =
+      "POST /api/v1/admin/packages?filename=zfleet_installer-v0.1.0-linux-x86_64-release.zip HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Type: application/zip\r\nContent-Length: " +
+      std::to_string(installer_body.size()) + "\r\n\r\n" + installer_body;
+  const auto installer_upload =
+      SendHttpRequest(server.port(), installer_upload_request);
+  REQUIRE(installer_upload.status == 201);
+  const auto records = database.ListAgentPackages();
+  const auto installer_it =
+      std::find_if(records.begin(), records.end(), [](const auto& record) {
+        return record.component == "installer";
+      });
+  REQUIRE(installer_it != records.end());
+  const auto installer_id = installer_it->package_id;
+  std::string installer_publish_request =
+      "POST /api/v1/admin/packages/" + installer_id +
+      "/publish HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Content-Type: application/json\r\nContent-Length: " +
+      std::to_string(publish_body.size()) + "\r\n\r\n" + publish_body;
+  REQUIRE(SendHttpRequest(server.port(), installer_publish_request).status ==
+          200);
+
+  const auto chained_upgrade = SendHttpRequest(server.port(), upgrade_request);
+  REQUIRE(chained_upgrade.status == 201);
+  REQUIRE(chained_upgrade.body.find("\"upgrade_state\":\"queued\"") !=
+          std::string::npos);
+  REQUIRE(chained_upgrade.body.find("\"prerequisite_task_id\":\"\"") ==
+          std::string::npos);
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-1", "desired_version") ==
+          "0.2.0");
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-1",
+                         "desired_package_id") == package_id);
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-1", "upgrade_state") ==
+          "queued");
+  const auto task_id =
+      ReadAgentField(database_path, "agent-upgrade-1", "last_upgrade_task_id");
+  const auto upgrade_task = database.FindTaskById(task_id);
+  REQUIRE(upgrade_task.has_value());
+  REQUIRE(upgrade_task->task.task_type ==
+          zfleet::protocol::TaskType::package_update);
+  REQUIRE(upgrade_task->task.capability_level ==
+          zfleet::protocol::CapabilityLevel::high_risk_write);
+  const auto update_input =
+      std::get<zfleet::protocol::PackageUpdateInput>(upgrade_task->task.input);
+  REQUIRE(update_input.package_id == package_id);
+  REQUIRE(update_input.build_type == "release");
+  REQUIRE(update_input.package_url.find("http://127.0.0.1:8080/api/v1/") ==
+          0);
+  const auto first_task = database.ClaimNextTaskForAgent(
+      "agent-upgrade-1", "2026-05-24T11:00:00Z");
+  REQUIRE(first_task.has_value());
+  const auto first_input =
+      std::get<zfleet::protocol::PackageUpdateInput>(first_task->input);
+  REQUIRE(first_input.component == "installer");
+  REQUIRE_FALSE(database.ClaimNextTaskForAgent(
+                    "agent-upgrade-1", "2026-05-24T11:00:01Z")
+                    .has_value());
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResult{
+          .protocol_version = "v1",
+          .request_id = "installer-complete",
+          .task_id = first_task->task_id,
+          .agent_id = "agent-upgrade-1",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .occurred_at = "2026-05-24T11:00:02Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::PackageUpdateResult{
+              .component = "installer",
+              .package_id = first_input.package_id,
+              .version = first_input.version,
+              .state = "applied",
+          },
+      },
+      std::nullopt, std::nullopt);
+  const auto agent_task = database.ClaimNextTaskForAgent(
+      "agent-upgrade-1", "2026-05-24T11:00:03Z");
+  REQUIRE(agent_task.has_value());
+  REQUIRE(agent_task->task_id == task_id);
+
   const auto options = SendHttpRequest(
       server.port(),
-      "GET /api/v1/install/options?channel=candidate&platform=linux&arch=x86_64 HTTP/1.1\r\n"
+      "GET /api/v1/install/options?channel=candidate&platform=linux&arch=x86_64&build_type=release HTTP/1.1\r\n"
       "Host: 127.0.0.1\r\n\r\n");
   REQUIRE(options.status == 200);
   REQUIRE(options.body.find(package_id) != std::string::npos);
-  REQUIRE(options.body.find("\"agent_version\":\"0.1.0\"") != std::string::npos);
+  REQUIRE(options.body.find(installer_id) != std::string::npos);
+  REQUIRE(options.body.find("\"agent\"") != std::string::npos);
+  REQUIRE(options.body.find("\"installer\"") != std::string::npos);
+
+  const auto retire = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/admin/packages/" + package_id +
+          "/retire HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n");
+  REQUIRE(retire.status == 200);
+  REQUIRE(retire.body.find("\"status\":\"retired\"") != std::string::npos);
+  REQUIRE(SendHttpRequest(server.port(), publish_request).status == 409);
+  const auto no_retired_default = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/options?channel=candidate&platform=linux&arch=x86_64&build_type=release HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n\r\n");
+  REQUIRE(no_retired_default.status == 404);
+
+  const auto debug_archive =
+      CreatePackageArchive(test_root.path(), "agent", "0.1.1", "debug");
+  const auto debug_body = ReadBinaryFile(debug_archive);
+  std::string debug_upload_request =
+      "POST /api/v1/admin/packages?filename=zfleet_agent-v0.1.1-linux-x86_64-debug.zip HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\nContent-Type: application/zip\r\nContent-Length: " +
+      std::to_string(debug_body.size()) + "\r\n\r\n" + debug_body;
+  REQUIRE(SendHttpRequest(server.port(), debug_upload_request).status == 201);
+  const auto updated_records = database.ListAgentPackages();
+  const auto debug_it =
+      std::find_if(updated_records.begin(), updated_records.end(),
+                   [](const auto& record) {
+                     return record.build_type == "debug";
+                   });
+  REQUIRE(debug_it != updated_records.end());
+  const std::string stable_body = R"json({"channel":"stable"})json";
+  std::string stable_request =
+      "POST /api/v1/admin/packages/" + debug_it->package_id +
+      "/publish HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Content-Type: application/json\r\nContent-Length: " +
+      std::to_string(stable_body.size()) + "\r\n\r\n" + stable_body;
+  const auto stable_debug = SendHttpRequest(server.port(), stable_request);
+  REQUIRE(stable_debug.status == 400);
+  REQUIRE(stable_debug.body.find("build_type_not_allowed") !=
+          std::string::npos);
 
   server.Stop();
 }
@@ -1067,6 +1332,29 @@ TEST_CASE("server database async submission reports stopped actor on executor") 
 
   REQUIRE(completed);
   REQUIRE(completion_error != nullptr);
+}
+
+TEST_CASE("server database rejects mismatched task type and input payload") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+
+  const zfleet::protocol::Task mismatched{
+      .protocol_version = "v1",
+      .task_id = "task-mismatched-input",
+      .agent_id = "agent-1",
+      .task_type = zfleet::protocol::TaskType::collect_basic_inventory,
+      .capability_level = zfleet::protocol::CapabilityLevel::readonly,
+      .created_at = "2026-05-25T10:00:00Z",
+      .expires_at = "2099-05-25T10:10:00Z",
+      .input = zfleet::protocol::PackageUpdateInput{
+          .action = "apply",
+          .component = "agent",
+      },
+  };
+
+  REQUIRE_THROWS(database.EnqueueTask(mismatched));
 }
 
 TEST_CASE("http2 control worker pool runs tasks and rejects submissions after stop") {
@@ -1357,6 +1645,163 @@ TEST_CASE("http2 control service stores failed task error columns and blob") {
       ReadTaskResultBlob(database_path, "task-failed-1", "error_blob")));
   REQUIRE(stored_error.retryable());
   REQUIRE(stored_error.message() == "inventory failed");
+}
+
+TEST_CASE("agent reconnect confirms desired package version") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-upgrade-confirm");
+  database.ScheduleAgentUpgrade(
+      "agent-upgrade-confirm", "0.2.0", "pkg-confirm",
+      std::optional<std::string>{"admin"}, "2026-05-24T10:00:00Z",
+      zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-confirm",
+          .agent_id = "agent-upgrade-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .capability_level = zfleet::protocol::CapabilityLevel::high_risk_write,
+          .created_at = "2026-05-24T10:00:00Z",
+          .expires_at = "2099-05-24T10:00:00Z",
+          .input = zfleet::protocol::PackageUpdateInput{
+              .component = "agent",
+              .package_id = "pkg-confirm",
+              .version = "0.2.0",
+          },
+      });
+  const zfleet::server::Http2ControlService service(&database);
+  REQUIRE(service.HandleAgentEvent(RegisterEvent(
+              "reconnect-before-apply", "agent-upgrade-confirm",
+              "2026-05-24T10:00:00Z"))
+              .status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-confirm",
+                         "upgrade_state") == "queued");
+  REQUIRE(database.ClaimNextTaskForAgent("agent-upgrade-confirm",
+                                         "2026-05-24T10:00:01Z")
+              .has_value());
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResult{
+          .protocol_version = "v1",
+          .request_id = "update-complete",
+          .task_id = "task-confirm",
+          .agent_id = "agent-upgrade-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .occurred_at = "2026-05-24T10:00:02Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::PackageUpdateResult{
+              .component = "agent",
+              .package_id = "pkg-confirm",
+              .version = "0.2.0",
+              .state = "applied",
+          },
+      },
+      std::nullopt, std::nullopt);
+
+  REQUIRE(service.HandleAgentEvent(RegisterEvent(
+              "reconnect-confirm", "agent-upgrade-confirm",
+              "2026-05-24T10:01:00Z", {}, "0.2.0"))
+              .status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-confirm",
+                         "upgrade_state") == "succeeded");
+  REQUIRE(ReadAgentField(database_path, "agent-upgrade-confirm",
+                         "current_package_id") == "pkg-confirm");
+}
+
+TEST_CASE("agent rollback clears desired target and completes on reconnect") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  SeedAgent(&database, "agent-rollback-confirm");
+  database.ScheduleAgentRollback(
+      "agent-rollback-confirm", std::optional<std::string>{"admin"},
+      "2026-05-24T10:00:00Z",
+      zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-rollback",
+          .agent_id = "agent-rollback-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .capability_level = zfleet::protocol::CapabilityLevel::high_risk_write,
+          .created_at = "2026-05-24T10:00:00Z",
+          .expires_at = "2099-05-24T10:00:00Z",
+          .input = zfleet::protocol::PackageUpdateInput{
+              .action = "rollback",
+              .component = "agent",
+          },
+      });
+  REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
+                         "desired_version")
+              .empty());
+  REQUIRE(database.ClaimNextTaskForAgent("agent-rollback-confirm",
+                                         "2026-05-24T10:00:01Z")
+              .has_value());
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResult{
+          .protocol_version = "v1",
+          .request_id = "rollback-complete",
+          .task_id = "task-rollback",
+          .agent_id = "agent-rollback-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .occurred_at = "2026-05-24T10:00:02Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::PackageUpdateResult{
+              .component = "agent",
+              .state = "applied",
+          },
+      },
+      std::nullopt, std::nullopt);
+  REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
+                         "upgrade_state") == "waiting_reconnect");
+
+  const zfleet::server::Http2ControlService service(&database);
+  REQUIRE(service.HandleAgentEvent(RegisterEvent(
+              "reconnect-rollback", "agent-rollback-confirm",
+              "2026-05-24T10:01:00Z"))
+              .status == zfleet::server::ControlEventStatus::kAccepted);
+  REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
+                         "upgrade_state") == "succeeded");
+
+  database.ScheduleAgentRollback(
+      "agent-rollback-confirm", std::optional<std::string>{"admin"},
+      "2026-05-24T11:00:00Z",
+      zfleet::protocol::Task{
+          .protocol_version = "v1",
+          .task_id = "task-rollback-timeout",
+          .agent_id = "agent-rollback-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .capability_level = zfleet::protocol::CapabilityLevel::high_risk_write,
+          .created_at = "2026-05-24T11:00:00Z",
+          .expires_at = "2099-05-24T10:00:00Z",
+          .input = zfleet::protocol::PackageUpdateInput{
+              .action = "rollback",
+              .component = "agent",
+          },
+      });
+  REQUIRE(database.ClaimNextTaskForAgent("agent-rollback-confirm",
+                                         "2026-05-24T11:00:01Z")
+              .has_value());
+  database.RecordTaskResult(
+      zfleet::protocol::TaskResult{
+          .protocol_version = "v1",
+          .request_id = "rollback-awaiting-timeout",
+          .task_id = "task-rollback-timeout",
+          .agent_id = "agent-rollback-confirm",
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .occurred_at = "2026-05-24T11:00:02Z",
+          .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+          .result = zfleet::protocol::PackageUpdateResult{
+              .component = "agent",
+              .state = "applied",
+          },
+      },
+      std::nullopt, std::nullopt);
+  REQUIRE(database.ExpireWaitingReconnect("2026-05-24T11:05:00Z").empty());
+  REQUIRE(database.ExpireWaitingReconnect("2026-05-24T11:11:00Z").size() ==
+          1);
+  REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
+                         "last_upgrade_error") ==
+          "waiting_reconnect_timeout");
 }
 
 TEST_CASE("http2 control service rejects running event before assignment") {

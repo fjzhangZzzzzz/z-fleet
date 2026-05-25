@@ -1,21 +1,92 @@
 #include "config.h"
 #include "command_decoder.h"
+#include "package_updater.h"
 #include "state.h"
 
 #include "test_util.h"
 
 #include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/crypto/sha256.h"
+#include "zfleet/package/archive.h"
+#include "zfleet/platform/file_permissions.h"
 #include "zfleet/transport/frame_codec.h"
 
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
+
+namespace {
+
+class SingleResponseServer {
+ public:
+  explicit SingleResponseServer(std::string body)
+      : acceptor_(io_context_,
+                  {boost::asio::ip::make_address("127.0.0.1"), 0}),
+        body_(std::move(body)),
+        thread_([this]() { Serve(); }) {}
+
+  ~SingleResponseServer() {
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  std::string url() const {
+    return "http://127.0.0.1:" +
+           std::to_string(acceptor_.local_endpoint().port()) + "/package.zip";
+  }
+
+ private:
+  void Serve() {
+    boost::asio::ip::tcp::socket socket(io_context_);
+    acceptor_.accept(socket);
+    std::array<char, 4096> request{};
+    boost::system::error_code ignored;
+    socket.read_some(boost::asio::buffer(request), ignored);
+    const auto response =
+        "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: " +
+        std::to_string(body_.size()) + "\r\nConnection: close\r\n\r\n" + body_;
+    boost::asio::write(socket, boost::asio::buffer(response));
+  }
+
+  boost::asio::io_context io_context_;
+  boost::asio::ip::tcp::acceptor acceptor_;
+  std::string body_;
+  std::thread thread_;
+};
+
+std::string ReadBytes(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(stream),
+          std::istreambuf_iterator<char>()};
+}
+
+std::filesystem::path MakePackageArchive(const std::filesystem::path& root) {
+  const auto package_dir = root / "package";
+  zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
+                              "{\"test\":true}\n");
+  zfleet::test::WriteTextFile(package_dir / "payload" / "bin" / "payload",
+                              "payload");
+  const auto archive = root / "installer.zip";
+  zfleet::package::CreateArchive({
+      .package_dir = package_dir,
+      .archive_path = archive,
+      .force = true,
+  });
+  return archive;
+}
+
+} // namespace
 
 TEST_CASE("agent config loads values from toml and resolves state path") {
   const zfleet::test::ScopedTestDir test_dir("agent");
@@ -152,3 +223,118 @@ TEST_CASE("agent command decoder waits for truncated frames") {
   REQUIRE(complete.front().payload_case() ==
           zfleet::protocol::v1::ServerCommand::kError);
 }
+
+#ifndef _WIN32
+TEST_CASE("package updater downloads verifies and invokes active installer") {
+  const zfleet::test::ScopedTestDir test_dir("agent-updater");
+  const auto root = test_dir.path();
+  const auto archive = MakePackageArchive(root);
+  const auto body = ReadBytes(archive);
+  SingleResponseServer server(body);
+  const auto marker = root / "applied";
+  const auto installer =
+      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  zfleet::test::WriteTextFile(installer,
+                              "#!/bin/sh\ntouch \"" + marker.string() +
+                                  "\"\nexit 0\n");
+  zfleet::platform::SetExecutable(installer, true);
+  zfleet::test::WriteTextFile(root / "installer" / "var" / "active-version",
+                              "0.1.0\n");
+  const auto manifest =
+      zfleet::package::ReadArchiveFile(archive, "META/manifest.json");
+
+  zfleet::agent::AgentConfig config{
+      .install_dir = root / "agent",
+      .data_dir = root / "agent-data",
+  };
+  const auto result = zfleet::agent::ExecutePackageUpdate(
+      config, zfleet::protocol::PackageUpdateInput{
+                  .component = "installer",
+                  .package_id = "installer-1",
+                  .version = "0.1.0",
+                  .package_url = server.url(),
+                  .package_sha256 = zfleet::crypto::Sha256BytesHex(body),
+                  .manifest_sha256 = zfleet::crypto::Sha256BytesHex(
+                      std::string_view(
+                          reinterpret_cast<const char*>(manifest.data()),
+                          manifest.size())),
+              });
+
+  REQUIRE(result.ok);
+  REQUIRE_FALSE(result.stop_agent);
+  REQUIRE(std::filesystem::exists(marker));
+}
+
+TEST_CASE("package updater rejects checksum mismatch before apply") {
+  const zfleet::test::ScopedTestDir test_dir("agent-updater");
+  const auto root = test_dir.path();
+  const auto archive = MakePackageArchive(root);
+  SingleResponseServer server(ReadBytes(archive));
+  const auto marker = root / "applied";
+  const auto installer =
+      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  zfleet::test::WriteTextFile(installer,
+                              "#!/bin/sh\ntouch \"" + marker.string() +
+                                  "\"\nexit 0\n");
+  zfleet::platform::SetExecutable(installer, true);
+  zfleet::test::WriteTextFile(root / "installer" / "var" / "active-version",
+                              "0.1.0\n");
+
+  const auto result = zfleet::agent::ExecutePackageUpdate(
+      zfleet::agent::AgentConfig{
+          .install_dir = root / "agent",
+          .data_dir = root / "agent-data",
+      },
+      zfleet::protocol::PackageUpdateInput{
+          .component = "installer",
+          .package_id = "installer-bad",
+          .version = "0.1.0",
+          .package_url = server.url(),
+          .package_sha256 = std::string(64, '0'),
+      });
+
+  REQUIRE_FALSE(result.ok);
+  REQUIRE(result.error_code == zfleet::protocol::ErrorCode::checksum_mismatch);
+  REQUIRE_FALSE(std::filesystem::exists(marker));
+}
+
+TEST_CASE("package updater rolls back agent and starts restored release") {
+  const zfleet::test::ScopedTestDir test_dir("agent-updater");
+  const auto root = test_dir.path();
+  const auto started = root / "started";
+  const auto installer =
+      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  zfleet::test::WriteTextFile(
+      installer, "#!/bin/sh\nmkdir -p \"" +
+                     (root / "agent" / "var").string() + "\"\nprintf '0.0.9\\n' > \"" +
+                     (root / "agent" / "var" / "active-version").string() +
+                     "\"\nexit 0\n");
+  zfleet::platform::SetExecutable(installer, true);
+  zfleet::test::WriteTextFile(root / "installer" / "var" / "active-version",
+                              "0.1.0\n");
+  const auto restored_agent =
+      root / "agent" / "releases" / "0.0.9" / "bin" / "zfleet_agent";
+  zfleet::test::WriteTextFile(restored_agent,
+                              "#!/bin/sh\ntouch \"" + started.string() +
+                                  "\"\nexit 0\n");
+  zfleet::platform::SetExecutable(restored_agent, true);
+
+  const auto result = zfleet::agent::ExecutePackageUpdate(
+      zfleet::agent::AgentConfig{
+          .install_dir = root / "agent",
+          .data_dir = root / "agent-data",
+      },
+      zfleet::protocol::PackageUpdateInput{
+          .action = "rollback",
+          .component = "agent",
+      });
+
+  REQUIRE(result.ok);
+  REQUIRE(result.stop_agent);
+  for (int attempt = 0; attempt < 20 && !std::filesystem::exists(started);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  REQUIRE(std::filesystem::exists(started));
+}
+#endif

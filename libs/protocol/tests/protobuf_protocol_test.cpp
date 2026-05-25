@@ -37,6 +37,34 @@ TEST_CASE("agent control event supports protobuf-lite round trip") {
   REQUIRE(parsed.register_().registration_token() == "token-once");
 }
 
+TEST_CASE("package update task contract carries verified package metadata") {
+  proto::ServerCommand command;
+  auto* task = command.mutable_task_assigned();
+  task->set_task_id("upgrade-1");
+  task->set_task_type(proto::TASK_TYPE_PACKAGE_UPDATE);
+  task->set_capability_level(proto::CAPABILITY_LEVEL_HIGH_RISK_WRITE);
+  auto* input = task->mutable_package_update();
+  input->set_action("apply");
+  input->set_component("agent");
+  input->set_package_id("pkg-agent-1");
+  input->set_version("0.2.0");
+  input->set_platform("linux");
+  input->set_arch("x86_64");
+  input->set_build_type("release");
+  input->set_package_sha256(std::string(64, 'a'));
+
+  std::string bytes;
+  REQUIRE(command.SerializeToString(&bytes));
+  proto::ServerCommand parsed;
+  REQUIRE(parsed.ParseFromString(bytes));
+  REQUIRE(parsed.task_assigned().task_type() == proto::TASK_TYPE_PACKAGE_UPDATE);
+  REQUIRE(parsed.task_assigned().package_update().package_id() ==
+          "pkg-agent-1");
+  REQUIRE(parsed.task_assigned().package_update().action() == "apply");
+  REQUIRE(parsed.task_assigned().capability_level() ==
+          proto::CAPABILITY_LEVEL_HIGH_RISK_WRITE);
+}
+
 TEST_CASE("server command supports protobuf-lite enum names") {
   proto::ServerCommand command;
   command.set_protocol_version("v1");

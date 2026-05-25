@@ -10,6 +10,7 @@ struct PackOptions {
   std::string version;
   std::string platform;
   std::string arch;
+  std::string build_type;
   std::filesystem::path payload_dir;
   std::filesystem::path entry_path;
   std::filesystem::path output_dir;

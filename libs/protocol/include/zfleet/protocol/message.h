@@ -24,6 +24,17 @@ enum class ErrorCode {
   capability_not_allowed,
   task_execution_failed,
   task_result_invalid,
+  package_not_found,
+  package_retired,
+  platform_arch_mismatch,
+  build_type_not_allowed,
+  installer_too_old,
+  download_failed,
+  checksum_mismatch,
+  apply_failed,
+  start_new_agent_failed,
+  waiting_reconnect_timeout,
+  agent_reported_unexpected_version,
 };
 
 enum class AuditEventType {
@@ -31,6 +42,10 @@ enum class AuditEventType {
   agent_asset_snapshot,
   package_validated,
   package_published,
+  package_retired,
+  agent_upgrade_requested,
+  agent_rollback_requested,
+  agent_upgrade_confirmed,
   registration_token_created,
   registration_token_used,
   registration_token_rejected,
@@ -44,6 +59,7 @@ enum class AuditEventType {
 
 enum class TaskType {
   collect_basic_inventory,
+  package_update,
 };
 
 enum class CapabilityLevel {
@@ -121,8 +137,34 @@ struct CollectBasicInventoryResult {
   std::string agent_version;
 };
 
-using TaskInput = std::variant<CollectBasicInventoryInput>;
-using TaskResultData = std::variant<CollectBasicInventoryResult>;
+struct PackageUpdateInput {
+  std::string action = "apply";
+  std::string component;
+  std::string package_id;
+  std::string version;
+  std::string platform;
+  std::string arch;
+  std::string build_type;
+  std::string package_url;
+  std::string package_sha256;
+  std::string manifest_sha256;
+  std::string min_installer_version;
+  bool allow_downgrade = false;
+  bool force = false;
+};
+
+struct PackageUpdateResult {
+  std::string component;
+  std::string package_id;
+  std::string version;
+  std::string state;
+  std::string error_code;
+  std::string error_message;
+};
+
+using TaskInput = std::variant<CollectBasicInventoryInput, PackageUpdateInput>;
+using TaskResultData =
+    std::variant<CollectBasicInventoryResult, PackageUpdateResult>;
 
 struct Task {
   std::string protocol_version;

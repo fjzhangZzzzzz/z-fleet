@@ -1,5 +1,5 @@
 find_package(CLI11 CONFIG REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS beast system)
 find_package(tomlplusplus CONFIG REQUIRED)
 
 set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
@@ -8,6 +8,7 @@ add_library(zfleet_agent_app
   src/command_decoder.cpp
   src/config.cpp
   src/http2_control_client.cpp
+  src/package_updater.cpp
   src/runtime.cpp
   src/state.cpp
 )
@@ -15,8 +16,11 @@ add_library(zfleet_agent_app
 target_link_libraries(zfleet_agent_app
   PUBLIC
     Boost::system
+    Boost::beast
     tomlplusplus::tomlplusplus
     zfleet::core
+    zfleet::crypto
+    zfleet::package
     zfleet::protocol
     zfleet::platform
     zfleet::transport

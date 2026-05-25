@@ -70,6 +70,7 @@ message TaskResultEvent {
   TaskExecutionStatus status = 3;
   CollectBasicInventoryResult collect_basic_inventory = 4;
   AgentError error = 5;
+  PackageUpdateResult package_update = 6;
 }
 
 message AgentErrorEvent {
@@ -85,6 +86,7 @@ message TaskAssignedCommand {
   string created_at = 4;
   string expires_at = 5;
   CollectBasicInventoryInput collect_basic_inventory = 6;
+  PackageUpdateInput package_update = 7;
 }
 
 message CancelTaskCommand {
@@ -145,6 +147,31 @@ message CollectBasicInventoryResult {
   string agent_version = 4;
 }
 
+message PackageUpdateInput {
+  string component = 1;
+  string package_id = 2;
+  string version = 3;
+  string platform = 4;
+  string arch = 5;
+  string build_type = 6;
+  string package_url = 7;
+  string package_sha256 = 8;
+  string manifest_sha256 = 9;
+  string min_installer_version = 10;
+  bool allow_downgrade = 11;
+  bool force = 12;
+  string action = 13;
+}
+
+message PackageUpdateResult {
+  string component = 1;
+  string package_id = 2;
+  string version = 3;
+  string state = 4;
+  string error_code = 5;
+  string error_message = 6;
+}
+
 message AgentError {
   ErrorCode code = 1;
   string message = 2;
@@ -154,6 +181,7 @@ message AgentError {
 enum TaskType {
   TASK_TYPE_UNSPECIFIED = 0;
   TASK_TYPE_COLLECT_BASIC_INVENTORY = 1;
+  TASK_TYPE_PACKAGE_UPDATE = 2;
 }
 
 enum CapabilityLevel {
@@ -181,4 +209,15 @@ enum ErrorCode {
   ERROR_CODE_TASK_EXPIRED = 6;
   ERROR_CODE_UNSUPPORTED_TASK_TYPE = 7;
   ERROR_CODE_CAPABILITY_NOT_ALLOWED = 8;
+  ERROR_CODE_PACKAGE_NOT_FOUND = 9;
+  ERROR_CODE_PACKAGE_RETIRED = 10;
+  ERROR_CODE_PLATFORM_ARCH_MISMATCH = 11;
+  ERROR_CODE_BUILD_TYPE_NOT_ALLOWED = 12;
+  ERROR_CODE_INSTALLER_TOO_OLD = 13;
+  ERROR_CODE_DOWNLOAD_FAILED = 14;
+  ERROR_CODE_CHECKSUM_MISMATCH = 15;
+  ERROR_CODE_APPLY_FAILED = 16;
+  ERROR_CODE_START_NEW_AGENT_FAILED = 17;
+  ERROR_CODE_WAITING_RECONNECT_TIMEOUT = 18;
+  ERROR_CODE_AGENT_REPORTED_UNEXPECTED_VERSION = 19;
 }

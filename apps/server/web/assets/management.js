@@ -5,7 +5,9 @@
     const response = await fetch(url, options);
     const body = await response.json();
     if (!response.ok) {
-      throw new Error(body.error && body.error.message ? body.error.message : "Request failed");
+      const error = new Error(body.error && body.error.message ? body.error.message : "Request failed");
+      error.code = body.error && body.error.code ? body.error.code : "";
+      throw error;
     }
     return body;
   }
@@ -26,6 +28,57 @@
     return parts.map(escapeHtml).join(" ");
   }
 
+  function channelLabel(value) {
+    return value === "stable" ? "稳定" :
+      value === "candidate" ? "候选" :
+      value === "dev" ? "开发" : value;
+  }
+
+  function platformLabel(value) {
+    return value === "windows" ? "Windows" :
+      value === "linux" ? "Linux" : value;
+  }
+
+  function agentStatusLabel(value) {
+    return value === "online" ? "在线" :
+      value === "offline" ? "离线" :
+      value === "stale" ? "失联" : value;
+  }
+
+  function upgradeStateLabel(value) {
+    return value === "queued" ? "已排队" :
+      value === "waiting_reconnect" ? "等待重连" :
+      value === "succeeded" ? "成功" :
+      value === "failed" ? "失败" : value;
+  }
+
+  function packageStatusLabel(value) {
+    return value === "published" ? "已发布" :
+      value === "retired" ? "已退役" :
+      value === "uploaded" ? "已上传" : value;
+  }
+
+  function buildTypeLabel(value) {
+    return value === "release" ? "发布版" :
+      value === "debug" ? "调试版" : value;
+  }
+
+  function localizeInstallError(error) {
+    if (!error || !error.message) {
+      return "请求失败";
+    }
+    if (error.code === "missing_required_field") {
+      return "生成安装命令失败：缺少必要参数。";
+    }
+    if (error.code === "control_url_not_configured") {
+      return "服务端未配置控制地址，暂时无法生成安装命令。";
+    }
+    if (error.code === "token_expiry_required") {
+      return "生成注册凭证失败：缺少过期时间。";
+    }
+    return error.message;
+  }
+
   function setStatus(page, text, ok) {
     const node = document.querySelector('[data-status-for="' + page + '"]');
     if (!node) return;
@@ -37,70 +90,73 @@
     await navigator.clipboard.writeText(value);
   }
 
-  function shellQuote(value) {
-    return "'" + String(value).replace(/'/g, "'\"'\"'") + "'";
-  }
-
   async function initInstall() {
-    const release = document.querySelector("[data-install-release]");
     const output = document.querySelector("[data-install-token-output]");
     const command = document.querySelector("[data-install-command] code");
-    const tokenButton = document.querySelector("[data-install-token-button]");
+    const commandLabel = document.querySelector("[data-install-command-label]");
+    const generateButton = document.querySelector("[data-generate-install-command]");
     const copyButton = document.querySelector("[data-copy-install]");
-    const controlUrl = document.querySelector("[data-control-url]");
-    let options;
-    let tokenValue = "";
+    const platform = document.querySelector("[data-install-platform]");
+    const channel = document.querySelector("[data-install-channel]");
 
-    function renderCommand() {
-      if (!options || !options.download_url) {
-        command.textContent = "当前没有可部署的推荐版本。";
-        copyButton.disabled = true;
-        return;
-      }
-      if (!tokenValue) {
-        command.textContent = "生成注册 token 后显示可执行命令。";
-        copyButton.disabled = true;
-        return;
-      }
-      const packageUrl = window.location.origin + options.download_url;
-      const commandText = "curl -fL " + shellQuote(packageUrl) + " -o /tmp/zfleet-agent.zip && \\\n" +
-        "sudo zfleet_installer apply --root /opt --package /tmp/zfleet-agent.zip && \\\n" +
-        "sudo env ZFLEET_COMPONENT_ROOT=/opt/agent /opt/agent/releases/" +
-        options.agent_version + "/bin/zfleet_agent --control-url " + shellQuote(controlUrl.value) +
-        " --registration-token " + shellQuote(tokenValue);
-      command.textContent = commandText;
-      copyButton.disabled = false;
+    function updateCommandLabel() {
+      commandLabel.textContent = platformLabel(platform.value) + " / " +
+        channelLabel(channel.value) + " 通道";
     }
 
-    async function refresh() {
-      options = await request("/api/v1/install/options");
-      release.innerHTML = "<dt>推荐版本</dt><dd>" + escapeHtml(options.agent_version) +
-        "</dd><dt>SHA-256</dt><dd>" + escapeHtml(options.sha256) + "</dd>";
-      renderCommand();
+    function resetCommandHint() {
+      updateCommandLabel();
+      command.textContent = "选择平台和发布通道后，点击“生成安装命令”。";
+      output.textContent = "生成命令时会自动创建一次性注册凭证，明文不会单独展示给用户。";
+      copyButton.disabled = true;
+      setStatus("install", "准备就绪", false);
     }
 
-    controlUrl.addEventListener("input", renderCommand);
+    [platform, channel].forEach(function (node) {
+      node.addEventListener("change", function () {
+        resetCommandHint();
+      });
+    });
+
     copyButton.addEventListener("click", async function () {
       await copyText(command.textContent);
       setStatus("install", "命令已复制", true);
     });
-    tokenButton.addEventListener("click", async function () {
+
+    generateButton.addEventListener("click", async function () {
       try {
+        updateCommandLabel();
+        command.textContent = "正在生成安装命令...";
+        output.textContent = "正在创建一次性注册凭证，请稍候。";
+        copyButton.disabled = true;
+        generateButton.disabled = true;
         const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
         const token = await request("/api/v1/install/tokens", {
           method: "POST",
           headers: {"content-type": "application/json"},
           body: JSON.stringify({purpose: "agent_register", expires_at: expiresAt, max_uses: 1})
         });
-        tokenValue = token.token;
-        output.textContent = "有效期至 " + token.expires_at + "，明文仅展示本次。";
-        renderCommand();
-        setStatus("install", "Token 已生成", true);
+        const payload = await request("/api/v1/install/commands?server_url=" +
+          encodeURIComponent(window.location.origin) +
+          "&token=" + encodeURIComponent(token.token) +
+          "&channel=" + encodeURIComponent(channel.value));
+        command.textContent =
+          platform.value === "windows" ? payload.commands.windows : payload.commands.linux;
+        output.textContent = "命令中的注册凭证有效期至 " + token.expires_at + "，请尽快在目标机器执行。";
+        copyButton.disabled = false;
+        setStatus("install", "安装命令已生成", true);
       } catch (error) {
-        setStatus("install", error.message, false);
+        const message = localizeInstallError(error);
+        command.textContent = message;
+        output.textContent = "生成失败后不会保留可复用凭证，请修正问题后重新生成。";
+        copyButton.disabled = true;
+        setStatus("install", message, false);
+      } finally {
+        generateButton.disabled = false;
       }
     });
-    await refresh();
+
+    resetCommandHint();
   }
 
   async function initAgents() {
@@ -110,6 +166,12 @@
     const detailBody = document.querySelector("[data-agent-detail-body]");
     const close = document.querySelector("[data-agent-close]");
     const backdrop = document.querySelector("[data-agent-backdrop]");
+    const maintenanceDialog = document.querySelector("[data-maintenance-dialog]");
+    const maintenanceAgent = document.querySelector("[data-maintenance-agent]");
+    const maintenanceAction = document.querySelector("[data-maintenance-action]");
+    const maintenancePackageRow = document.querySelector("[data-maintenance-package-row]");
+    const maintenancePackage = document.querySelector("[data-maintenance-package]");
+    const maintenanceConfirm = document.querySelector("[data-maintenance-confirm]");
     let agents = [];
 
     function assetOf(agent) {
@@ -137,7 +199,59 @@
     async function show(agentId) {
       const agent = await request("/api/v1/agents/" + encodeURIComponent(agentId));
       const history = (await request("/api/v1/agents/" + encodeURIComponent(agentId) + "/assets")).assets;
+      const packages = (await request("/api/v1/admin/packages")).packages;
       const asset = agent.latest_asset || {};
+      const upgradePackages = packages.filter(function (item) {
+        return item.component === "agent" && item.status !== "retired" &&
+          item.platform === agent.platform && item.arch === asset.arch;
+      });
+      function openMaintenanceDialog() {
+        maintenanceAgent.textContent = "目标 Agent: " + agentId;
+        maintenancePackage.innerHTML = upgradePackages.map(function (item) {
+          return '<option value="' + escapeHtml(item.package_id) + '">' +
+            escapeHtml(item.version + " / " + item.build_type) + "</option>";
+        }).join("");
+        maintenanceAction.value = "upgrade";
+        maintenancePackageRow.hidden = !upgradePackages.length;
+        maintenanceDialog.showModal();
+      }
+
+      maintenanceAction.onchange = function () {
+        maintenancePackageRow.hidden = maintenanceAction.value !== "upgrade";
+      };
+      maintenanceConfirm.onclick = async function (event) {
+        event.preventDefault();
+        try {
+          if (maintenanceAction.value === "rollback") {
+            await request("/api/v1/agents/" + encodeURIComponent(agentId) + "/rollback", {
+              method: "POST",
+              headers: {"content-type": "application/json"},
+              body: JSON.stringify({set_by: "web-admin"})
+            });
+            setStatus("agents", "回滚任务已创建", true);
+          } else {
+            if (!maintenancePackage.value) {
+              setStatus("agents", "没有可用升级版本，请先发布匹配包", false);
+              return;
+            }
+            await request("/api/v1/agents/" + encodeURIComponent(agentId) + "/upgrade", {
+              method: "POST",
+              headers: {"content-type": "application/json"},
+              body: JSON.stringify({package_id: maintenancePackage.value, set_by: "web-admin"})
+            });
+            setStatus("agents", "升级任务已创建", true);
+          }
+          maintenanceDialog.close();
+          await show(agentId);
+        } catch (error) {
+          if (error.code === "capability_not_allowed") {
+            setStatus("agents", "当前环境禁用了高风险写操作（allow_high_risk_write=false），无法升级/回滚。", false);
+          } else {
+            setStatus("agents", error.message, false);
+          }
+        }
+      };
+
       const renderItems = function (items) {
         return items && items.length ? "<ul>" + items.map(function (item) {
           return "<li>" + escapeHtml(item) + "</li>";
@@ -145,17 +259,25 @@
       };
       detailBody.innerHTML = "<h2>" + escapeHtml(asset.hostname || agent.agent_id) + "</h2>" +
         '<p class="detail-id">' + escapeHtml(agent.agent_id) + "</p><dl>" +
-        "<dt>状态</dt><dd>" + escapeHtml(agent.status) + "</dd>" +
+        "<dt>状态</dt><dd>" + escapeHtml(agentStatusLabel(agent.status)) + "</dd>" +
         "<dt>系统</dt><dd>" + formatSystem(asset) + "</dd>" +
         "<dt>架构</dt><dd>" + escapeHtml(asset.arch) + "</dd>" +
         "<dt>版本</dt><dd>" + escapeHtml(agent.agent_version) + "</dd>" +
+        "<dt>期望版本</dt><dd>" + escapeHtml(agent.desired_version) + "</dd>" +
+        "<dt>升级状态</dt><dd>" + escapeHtml(upgradeStateLabel(agent.upgrade_state)) + "</dd>" +
+        "<dt>最近错误</dt><dd>" + escapeHtml(agent.last_upgrade_error) + "</dd>" +
         "<dt>最后在线</dt><dd>" + escapeHtml(agent.last_online_at) + "</dd></dl>" +
+        "<h3>维护</h3><div class=\"detail-actions\"><button class=\"button compact\" data-open-maintenance>执行维护</button></div>" +
         "<h3>应用</h3>" + renderItems(asset.applications) +
         "<h3>服务</h3>" + renderItems(asset.services) +
         "<h3>资产快照</h3><p class=\"muted\">" + history.length + " 条记录，最近采集于 " +
         escapeHtml(asset.occurred_at) + "</p>";
       detail.setAttribute("aria-hidden", "false");
       backdrop.hidden = false;
+      const maintenanceButton = detailBody.querySelector("[data-open-maintenance]");
+      if (maintenanceButton) {
+        maintenanceButton.addEventListener("click", openMaintenanceDialog);
+      }
     }
 
     function closeDetail() {
@@ -187,7 +309,7 @@
       list.innerHTML = visible.map(function (agent) {
         const asset = assetOf(agent);
         return '<tr class="agent-row" data-agent="' + escapeHtml(agent.agent_id) + '"><td><span class="tag ' +
-          escapeHtml(agent.status) + '">' + escapeHtml(agent.status) + "</span></td><td><strong>" +
+          escapeHtml(agent.status) + '">' + escapeHtml(agentStatusLabel(agent.status)) + "</span></td><td><strong>" +
           escapeHtml(asset.hostname) + "</strong></td><td>" + escapeHtml(asset.os) + "</td><td>" +
           escapeHtml(asset.arch) + "</td><td>" + escapeHtml(agent.agent_version) + "</td><td class=\"mono\">" +
           escapeHtml(agent.agent_id) + "</td><td>" + escapeHtml(agent.last_online_at) + "</td></tr>";
@@ -212,12 +334,16 @@
     async function refresh() {
       const packages = (await request("/api/v1/admin/packages")).packages;
       list.innerHTML = packages.map(function (item) {
-        return '<section class="package-row"><div class="row-head"><strong>' + escapeHtml(item.version) +
-          '</strong><span class="tag">' + escapeHtml(item.status) + '</span></div><span class="muted">' +
-          escapeHtml(item.platform) + " / " + escapeHtml(item.arch) +
+        const stableButton = item.build_type === "debug" ? "" :
+          '<button class="button" data-channel="stable">发布到稳定</button>';
+        return '<section class="package-row"><div class="row-head"><strong>' + escapeHtml(item.component) +
+          " " + escapeHtml(item.version) +
+          '</strong><span class="tag">' + escapeHtml(packageStatusLabel(item.status)) + '</span></div><span class="muted">' +
+          escapeHtml(platformLabel(item.platform)) + " / " + escapeHtml(item.arch) + " / " + escapeHtml(buildTypeLabel(item.build_type)) +
           '</span><div class="release-actions" data-package="' + escapeHtml(item.package_id) + '">' +
-          '<button class="button" data-channel="stable">发布 stable</button><button class="button" data-channel="candidate">发布 candidate</button>' +
-          '<button class="button" data-channel="dev">发布 dev</button></div></section>';
+          stableButton + '<button class="button" data-channel="candidate">发布到候选</button>' +
+          '<button class="button" data-channel="dev">发布到开发</button>' +
+          '<button class="button" data-retire>退役</button></div></section>';
       }).join("") || '<p class="muted">尚无已上传安装包。</p>';
       list.querySelectorAll("[data-channel]").forEach(function (button) {
         button.addEventListener("click", async function () {
@@ -226,7 +352,15 @@
             method: "POST", headers: {"content-type": "application/json"},
             body: JSON.stringify({channel: button.dataset.channel})
           });
-          setStatus("packages", "已发布到 " + button.dataset.channel, true);
+          setStatus("packages", "已发布到" + channelLabel(button.dataset.channel) + "通道", true);
+          await refresh();
+        });
+      });
+      list.querySelectorAll("[data-retire]").forEach(function (button) {
+        button.addEventListener("click", async function () {
+          const id = button.parentElement.dataset.package;
+          await request("/api/v1/admin/packages/" + id + "/retire", {method: "POST"});
+          setStatus("packages", "安装包已退役", true);
           await refresh();
         });
       });

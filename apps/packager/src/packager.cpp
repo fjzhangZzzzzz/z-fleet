@@ -47,6 +47,7 @@ std::string BuildManifestJson(const std::string& component,
                               const std::string& version,
                               const std::string& platform,
                               const std::string& arch,
+                              const std::string& build_type,
                               const std::string& min_installer_version,
                               const std::vector<PayloadFile>& files) {
   zfleet::package::Manifest manifest{
@@ -55,6 +56,7 @@ std::string BuildManifestJson(const std::string& component,
       .version = version,
       .platform = platform,
       .arch = arch,
+      .build_type = build_type,
       .min_installer_version = min_installer_version,
       .files = {},
   };
@@ -95,10 +97,11 @@ PackagePaths BuildPackagePaths(const std::string& component,
   };
 }
 
-fs::path ArchivePathForPackageDir(const fs::path& package_dir) {
-  auto archive_name = package_dir.filename();
-  archive_name += ".zip";
-  return package_dir.parent_path() / archive_name;
+fs::path ArchivePath(const fs::path& output_dir, const std::string& component,
+                     const std::string& version, const std::string& platform,
+                     const std::string& arch, const std::string& build_type) {
+  return output_dir / ("zfleet_" + component + "-v" + version + "-" +
+                       platform + "-" + arch + "-" + build_type + ".zip");
 }
 
 void ValidatePayloadDir(const fs::path& payload_dir) {
@@ -216,6 +219,9 @@ PackResult PackToDirectory(const PackOptions& options,
   if (!platform.ok || !arch.ok) {
     throw std::invalid_argument("platform and arch must be safe non-empty values");
   }
+  if (options.build_type != "debug" && options.build_type != "release") {
+    throw std::invalid_argument("--build-type must be debug or release");
+  }
 
   const auto payload_dir = NormalizePath(options.payload_dir);
   ValidatePayloadDir(payload_dir);
@@ -244,7 +250,7 @@ PackResult PackToDirectory(const PackOptions& options,
 
   const auto manifest_text =
       BuildManifestJson(component, options.version, options.platform, options.arch,
-                        options.min_installer_version, files);
+                        options.build_type, options.min_installer_version, files);
   std::ofstream manifest_stream(paths.manifest_path, std::ios::binary);
   if (!manifest_stream) {
     throw std::runtime_error("failed to open manifest for write: " +
@@ -274,7 +280,8 @@ PackResult Pack(const PackOptions& options) {
   }
 
   const auto archive_path =
-      ArchivePathForPackageDir(output_dir_abs / component / options.version);
+      ArchivePath(output_dir_abs, component, options.version, options.platform,
+                  options.arch, options.build_type);
   fs::create_directories(archive_path.parent_path());
   if (fs::exists(archive_path) && !options.force) {
     throw std::runtime_error("archive already exists: " + archive_path.string() +
@@ -288,6 +295,7 @@ PackResult Pack(const PackOptions& options) {
                           .version = options.version,
                           .platform = options.platform,
                           .arch = options.arch,
+                          .build_type = options.build_type,
                           .payload_dir = options.payload_dir,
                           .entry_path = options.entry_path,
                           .output_dir = temp_root.path(),

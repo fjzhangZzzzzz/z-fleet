@@ -14,6 +14,7 @@ int main(int argc, char** argv) {
   std::string version_arg;
   std::string platform_arg;
   std::string arch_arg;
+  std::string build_type_arg;
   std::string payload_dir_arg;
   std::string entry_arg;
   std::string output_dir_arg;
@@ -29,6 +30,9 @@ int main(int argc, char** argv) {
   pack_command->add_option("--platform", platform_arg, "Target platform")
       ->required();
   pack_command->add_option("--arch", arch_arg, "Target architecture")
+      ->required();
+  pack_command->add_option("--build-type", build_type_arg,
+                           "Build type (debug or release)")
       ->required();
   pack_command->add_option("--payload-dir", payload_dir_arg,
                            "Payload directory")
@@ -56,6 +60,7 @@ int main(int argc, char** argv) {
         .version = version_arg,
         .platform = platform_arg,
         .arch = arch_arg,
+        .build_type = build_type_arg,
         .payload_dir = payload_dir_arg,
         .entry_path = entry_arg,
         .output_dir = output_dir_arg,

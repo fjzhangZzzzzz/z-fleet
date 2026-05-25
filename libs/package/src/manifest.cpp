@@ -87,6 +87,13 @@ std::string ValidatePackageTarget(std::string_view value, const char* field_name
   return validation.value;
 }
 
+std::string ValidateBuildType(std::string_view build_type) {
+  if (build_type != "debug" && build_type != "release") {
+    throw std::invalid_argument("build_type must be debug or release");
+  }
+  return std::string(build_type);
+}
+
 }  // namespace
 
 Manifest ParseManifestJson(std::string_view manifest_json) {
@@ -101,6 +108,7 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
       .version = Required<std::string>(parsed, "version"),
       .platform = Required<std::string>(parsed, "platform"),
       .arch = Required<std::string>(parsed, "arch"),
+      .build_type = Required<std::string>(parsed, "build_type"),
       .min_installer_version =
           Required<std::string>(parsed, "min_installer_version"),
       .files = {},
@@ -115,6 +123,7 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
   manifest.version = ValidateVersion(manifest.version);
   manifest.platform = ValidatePackageTarget(manifest.platform, "platform");
   manifest.arch = ValidatePackageTarget(manifest.arch, "arch");
+  manifest.build_type = ValidateBuildType(manifest.build_type);
 
   const auto component_validation =
       zfleet::core::ValidateComponent(manifest.component);
@@ -167,6 +176,7 @@ std::string SerializeManifestJson(const Manifest& manifest) {
   payload["version"] = manifest.version;
   payload["platform"] = manifest.platform;
   payload["arch"] = manifest.arch;
+  payload["build_type"] = ValidateBuildType(manifest.build_type);
   payload["min_installer_version"] = manifest.min_installer_version;
 
   ordered_json files = ordered_json::array();

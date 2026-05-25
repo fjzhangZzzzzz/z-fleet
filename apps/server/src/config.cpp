@@ -89,6 +89,12 @@ ServerConfig LoadConfig(
       config.management_listen = *value;
     }
   }
+  if (const auto* node = server->get("management_public_url");
+      node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.management_public_url = *value;
+    }
+  }
 
   if (const auto* node = server->get("database_path"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
@@ -105,6 +111,12 @@ ServerConfig LoadConfig(
   if (const auto* node = server->get("web_static_dir"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.web_static_dir = *value;
+    }
+  }
+  if (const auto* node = server->get("allow_high_risk_write");
+      node != nullptr) {
+    if (const auto value = node->value<bool>(); value.has_value()) {
+      config.allow_high_risk_write = *value;
     }
   }
 
@@ -131,9 +143,11 @@ void SaveConfig(const ServerConfig& config,
       toml::table{
           {"control_listen", config.control_listen},
           {"management_listen", config.management_listen},
+          {"management_public_url", config.management_public_url},
           {"database_path", PathToConfigString(config.database_path)},
           {"package_repository", PathToConfigString(config.package_repository)},
           {"web_static_dir", PathToConfigString(config.web_static_dir)},
+          {"allow_high_risk_write", config.allow_high_risk_write},
       });
   root.insert("log",
               toml::table{

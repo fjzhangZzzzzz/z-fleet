@@ -20,7 +20,9 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::string_view kManifestPath = "META/manifest.json";
-constexpr std::string_view kAgentComponent = "agent";
+bool SupportedPackageComponent(std::string_view component) {
+  return component == "agent" || component == "installer";
+}
 
 std::string BytesToString(const std::vector<std::uint8_t>& bytes) {
   return std::string(bytes.begin(), bytes.end());
@@ -87,7 +89,8 @@ void ValidateManifestFile(const fs::path& archive_path,
 }  // namespace
 
 AgentPackageMetadata ValidateAgentPackageUpload(
-    const fs::path& staged_package_path) {
+    const fs::path& staged_package_path,
+    const std::string& filename) {
   if (!fs::exists(staged_package_path)) {
     throw std::runtime_error("package archive does not exist: " +
                              staged_package_path.string());
@@ -112,8 +115,17 @@ AgentPackageMetadata ValidateAgentPackageUpload(
 
   const auto manifest_json = ReadArchiveText(staged_package_path, kManifestPath);
   const auto manifest = zfleet::package::ParseManifestJson(manifest_json);
-  if (manifest.component != kAgentComponent) {
-    throw std::invalid_argument("manifest component must be agent");
+  if (!SupportedPackageComponent(manifest.component)) {
+    throw std::invalid_argument("manifest component must be agent or installer");
+  }
+  const auto expected_filename =
+      "zfleet_" + manifest.component + "-v" + manifest.version + "-" +
+      manifest.platform + "-" + manifest.arch + "-" + manifest.build_type +
+      ".zip";
+  if (filename != expected_filename) {
+    throw std::invalid_argument(
+        "package filename metadata does not match manifest: expected " +
+        expected_filename);
   }
 
   for (const auto& file : manifest.files) {
@@ -125,6 +137,7 @@ AgentPackageMetadata ValidateAgentPackageUpload(
       .version = std::move(manifest.version),
       .platform = std::move(manifest.platform),
       .arch = std::move(manifest.arch),
+      .build_type = std::move(manifest.build_type),
       .min_installer_version = std::move(manifest.min_installer_version),
       .size_bytes = FileSizeBytes(staged_package_path),
       .sha256 = zfleet::crypto::Sha256FileHex(staged_package_path),

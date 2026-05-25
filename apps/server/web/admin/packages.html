@@ -8,26 +8,65 @@
   <script defer src="/assets/management.js"></script>
 </head>
 <body data-page="packages">
-  <header class="shell-header">
-    <a class="brand" href="/">z-fleet</a>
-    <nav><a href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a class="active" href="/admin/packages">安装包管理</a></nav>
-  </header>
-  <main class="page">
-    <div class="title-row"><div><p class="kicker">RELEASE CONTROL</p><h1>安装包管理</h1></div><span class="status" data-status-for="packages">待上传</span></div>
-    <section class="grid two">
-      <article class="panel">
-        <h2>上传 Agent Package</h2>
-        <form class="fields" data-package-upload-form>
-          <label>ZIP Package<input type="file" name="package" accept=".zip" required></label>
-          <button class="button primary" type="submit">上传并校验</button>
-        </form>
-        <p class="muted note">平台与架构由安装包清单自动识别，上传后不可修改。</p>
-      </article>
-      <article class="panel">
-        <h2>已入库版本</h2>
-        <div class="packages" data-package-list><p class="muted">正在加载安装包...</p></div>
-      </article>
-    </section>
-  </main>
+  <div class="app-shell">
+    <header class="shell-header">
+      <a class="brand-block" href="/">
+        <span class="brand-mark" aria-hidden="true">ZF</span>
+        <span class="brand">
+          <span class="brand-name">z-fleet</span>
+          <span class="brand-copy">设备控制台</span>
+        </span>
+      </a>
+      <nav><a href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a class="active" href="/admin/packages">安装包管理</a></nav>
+    </header>
+    <main class="page">
+      <section class="page-header">
+        <div>
+          <p class="kicker">发布管理</p>
+          <h1>安装包管理</h1>
+          <p class="page-intro">集中管理 Agent 与 Installer 安装包的上传、校验、channel 发布和退役，维持部署来源清晰可控。</p>
+        </div>
+        <span class="status" data-status-for="packages" role="status" aria-live="polite">待上传</span>
+      </section>
+      <section class="summary-grid" aria-label="发布摘要">
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">输入</span>
+          <div class="metric-value">ZIP</div>
+          <div class="metric-copy">上传包文件后自动识别平台、架构与组件类型。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">校验</span>
+          <div class="metric-value">验证</div>
+          <div class="metric-copy">入库前完成校验，减少错误包直接进入发布链路。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">通道</span>
+          <div class="metric-value">3</div>
+          <div class="metric-copy">按 stable、candidate、dev 管理不同阶段的发布目标。</div>
+        </article>
+        <article class="panel panel-subtle metric-card">
+          <span class="metric-label">生命周期</span>
+          <div class="metric-value">退役</div>
+          <div class="metric-copy">支持对过期或替换版本进行退役，保持发布面干净。</div>
+        </article>
+      </section>
+      <section class="grid two">
+        <article class="panel">
+          <p class="eyebrow">上传</p>
+          <h2>上传 Agent / Installer Package</h2>
+          <form class="fields" data-package-upload-form>
+            <label>ZIP Package<input type="file" name="package" accept=".zip" required></label>
+            <button class="button primary" type="submit">上传并校验</button>
+          </form>
+          <p class="muted note">平台与架构由安装包清单自动识别，上传后不可修改。</p>
+        </article>
+        <article class="panel">
+          <p class="eyebrow">仓库</p>
+          <h2>已入库版本</h2>
+          <div class="packages" data-package-list><p class="muted">正在加载安装包...</p></div>
+        </article>
+      </section>
+    </main>
+  </div>
 </body>
 </html>

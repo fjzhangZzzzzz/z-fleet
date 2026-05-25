@@ -20,6 +20,14 @@ namespace {
 
 constexpr char kComponentRootEnvVar[] = "ZFLEET_COMPONENT_ROOT";
 
+std::string NormalizeControlUrl(const std::string& listen_address) {
+  if (listen_address.rfind("http://", 0) == 0 ||
+      listen_address.rfind("https://", 0) == 0) {
+    return listen_address;
+  }
+  return "http://" + listen_address;
+}
+
 std::filesystem::path DetectInstallDir() {
   if (const char* value = std::getenv(kComponentRootEnvVar);
       value != nullptr && value[0] != '\0') {
@@ -116,7 +124,12 @@ int main(int argc, char** argv) {
         config.management_listen,
         &database,
         config.package_repository,
-        config.web_static_dir);
+        config.web_static_dir,
+        zfleet::server::ManagementHttpServerOptions{
+            .allow_high_risk_write = config.allow_high_risk_write,
+            .package_download_base_url = config.management_public_url,
+            .control_url = NormalizeControlUrl(config.control_listen),
+        });
     management_server.Start();
 
     ZFLOG_INFO(logger,

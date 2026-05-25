@@ -33,6 +33,7 @@ struct ExpectedFile {
 
 std::string ExpectedManifestJson(const std::string& component,
                                  const std::string& version,
+                                 const std::string& build_type,
                                  const std::string& min_installer_version,
                                  const std::vector<ExpectedFile>& files) {
   zfleet::package::Manifest manifest{
@@ -41,6 +42,7 @@ std::string ExpectedManifestJson(const std::string& component,
       .version = version,
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = build_type,
       .min_installer_version = min_installer_version,
       .files = {},
   };
@@ -78,6 +80,7 @@ TEST_CASE("pack creates package layout from payload directory") {
       .version = "1.2.3",
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = "debug",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_agent",
       .output_dir = output_dir,
@@ -99,7 +102,7 @@ TEST_CASE("pack creates package layout from payload directory") {
           "config");
   REQUIRE(zfleet::test::ReadTextFile(package_dir / "META" / "manifest.json") ==
           ExpectedManifestJson(
-              "agent", "1.2.3", "0.1.0",
+              "agent", "1.2.3", "debug", "0.1.0",
               {ExpectedFile{.relative_path = "bin/zfleet_agent",
                             .path = binary_path,
                             .executable = true},
@@ -132,6 +135,7 @@ TEST_CASE("pack creates a zip archive from payload directory") {
       .version = "3.4.5",
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = "release",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_server",
       .output_dir = output_dir,
@@ -140,7 +144,8 @@ TEST_CASE("pack creates a zip archive from payload directory") {
   });
 
   const auto archive_path =
-      fs::absolute(output_dir).lexically_normal() / "server" / "3.4.5.zip";
+      fs::absolute(output_dir).lexically_normal() /
+      "zfleet_server-v3.4.5-linux-x86_64-release.zip";
   REQUIRE(result.archive);
   REQUIRE(result.package_path == archive_path);
   REQUIRE(fs::exists(archive_path));
@@ -155,7 +160,7 @@ TEST_CASE("pack creates a zip archive from payload directory") {
           "server-library");
   REQUIRE(zfleet::test::ReadTextFile(extracted_dir / "META" / "manifest.json") ==
           ExpectedManifestJson(
-              "server", "3.4.5", "0.1.0",
+              "server", "3.4.5", "release", "0.1.0",
               {ExpectedFile{.relative_path = "bin/zfleet_server",
                             .path = binary_path,
                             .executable = true},
@@ -185,6 +190,7 @@ TEST_CASE("pack rejects existing output unless force is set") {
                         .version = "2.0.0",
                         .platform = "linux",
                         .arch = "x86_64",
+                        .build_type = "debug",
                         .payload_dir = payload_dir,
                         .entry_path = "bin/zfleet_installer",
                         .output_dir = output_dir,
@@ -196,6 +202,7 @@ TEST_CASE("pack rejects existing output unless force is set") {
       .version = "2.0.0",
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = "debug",
       .payload_dir = payload_dir,
       .entry_path = "bin/zfleet_installer",
       .output_dir = output_dir,
@@ -223,6 +230,7 @@ TEST_CASE("pack rejects invalid inputs") {
                           .version = "1.0.0",
                           .platform = "linux",
                           .arch = "x86_64",
+                          .build_type = "debug",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -236,6 +244,7 @@ TEST_CASE("pack rejects invalid inputs") {
                           .version = "../bad",
                           .platform = "linux",
                           .arch = "x86_64",
+                          .build_type = "debug",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -249,6 +258,7 @@ TEST_CASE("pack rejects invalid inputs") {
                           .version = "1.0.0",
                           .platform = "linux",
                           .arch = "x86_64",
+                          .build_type = "debug",
                           .payload_dir = payload_dir,
                           .entry_path = "../zfleet_agent",
                           .output_dir = test_root / "packages",
@@ -262,6 +272,7 @@ TEST_CASE("pack rejects invalid inputs") {
                           .version = "1.0.0",
                           .platform = "linux",
                           .arch = "x86_64",
+                          .build_type = "debug",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/missing",
                           .output_dir = test_root / "packages",
@@ -276,11 +287,26 @@ TEST_CASE("pack rejects invalid inputs") {
                           .version = "1.0.0",
                           .platform = "linux",
                           .arch = "x86_64",
+                          .build_type = "debug",
                           .payload_dir = payload_dir,
                           .entry_path = "bin/zfleet_agent",
                           .output_dir = test_root / "packages",
                       }),
                       std::runtime_error);
+  }
+
+  SECTION("invalid build type") {
+    REQUIRE_THROWS_AS(zfleet::packager::Pack(zfleet::packager::PackOptions{
+                          .component = "agent",
+                          .version = "1.0.0",
+                          .platform = "linux",
+                          .arch = "x86_64",
+                          .build_type = "profile",
+                          .payload_dir = payload_dir,
+                          .entry_path = "bin/zfleet_agent",
+                          .output_dir = test_root / "packages",
+                      }),
+                      std::invalid_argument);
   }
 }
 
@@ -307,6 +333,7 @@ TEST_CASE("pack rejects symlinks in payload directory") {
                         .version = "1.0.0",
                         .platform = "linux",
                         .arch = "x86_64",
+                        .build_type = "debug",
                         .payload_dir = payload_dir,
                         .entry_path = "bin/zfleet_agent",
                         .output_dir = test_root / "packages",

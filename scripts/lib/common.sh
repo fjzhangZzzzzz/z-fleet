@@ -162,6 +162,7 @@ zf_run_in_msvc_env() {
     zf_fail_exec "failed to create temporary Visual Studio environment script"
   cat > "$env_script" <<EOF
 @echo off
+set VSLANG=1033
 call "$devcmd_native" -arch=x64 -host_arch=x64 >nul
 if errorlevel 1 exit /b 1
 %*

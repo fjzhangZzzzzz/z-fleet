@@ -21,6 +21,7 @@ target_link_libraries(zfleet_nghttp2 INTERFACE
 
 add_library(zfleet_transport
   src/frame_codec.cpp
+  src/http_download.cpp
   src/http2_session.cpp
 )
 

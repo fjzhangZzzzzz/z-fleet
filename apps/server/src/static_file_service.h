@@ -18,6 +18,7 @@ class StaticFileService {
 
   void ValidateRequiredFiles() const;
   StaticFileResponse Read(std::string_view request_path) const;
+  const std::filesystem::path& root() const noexcept;
 
  private:
   bool IsRegularFileWithoutSymlinks(

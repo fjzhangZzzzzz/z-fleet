@@ -21,6 +21,10 @@ struct ManagementHttpServerOptions {
   std::chrono::milliseconds request_timeout = std::chrono::seconds(10);
   std::size_t max_header_bytes = 16 * 1024;
   std::size_t max_body_bytes = 128 * 1024 * 1024;
+  bool allow_high_risk_write = false;
+  std::string package_download_base_url;
+  std::string control_url;
+  std::filesystem::path web_static_root;
 };
 
 class ManagementHttpServer {

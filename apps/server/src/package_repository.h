@@ -11,6 +11,7 @@ struct AgentPackageMetadata {
   std::string version;
   std::string platform;
   std::string arch;
+  std::string build_type;
   std::string min_installer_version;
   std::uint64_t size_bytes = 0;
   std::string sha256;
@@ -18,6 +19,7 @@ struct AgentPackageMetadata {
 };
 
 AgentPackageMetadata ValidateAgentPackageUpload(
-    const std::filesystem::path& staged_package_path);
+    const std::filesystem::path& staged_package_path,
+    const std::string& filename);
 
 }  // namespace zfleet::server

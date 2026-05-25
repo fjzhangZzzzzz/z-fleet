@@ -38,6 +38,7 @@ std::string BuildManifestJson(
       .version = version,
       .platform = "linux",
       .arch = "x86_64",
+      .build_type = "debug",
       .min_installer_version = "0.1.0",
       .files = files,
   });
