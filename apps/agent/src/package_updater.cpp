@@ -26,27 +26,16 @@ namespace {
 
 namespace fs = std::filesystem;
 
-std::vector<std::uint8_t> DownloadPackage(const std::string& url) {
-  const auto response = zfleet::transport::DownloadHttp(
-      {.url = url, .user_agent = "zfleet_agent"});
-  if (response.status != 200) {
+fs::path DownloadPackageToFile(const std::string& url,
+                               const fs::path& package_path) {
+  fs::create_directories(package_path.parent_path());
+  const auto status = zfleet::transport::DownloadHttpToFile(
+      {.url = url, .user_agent = "zfleet_agent"}, package_path);
+  if (status != 200) {
     throw std::runtime_error("package download returned status " +
-                             std::to_string(response.status));
+                             std::to_string(status));
   }
-  return response.body;
-}
-
-void WriteBytes(const fs::path& path, const std::vector<std::uint8_t>& bytes) {
-  fs::create_directories(path.parent_path());
-  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-  if (!stream) {
-    throw std::runtime_error("failed to open downloaded package");
-  }
-  stream.write(reinterpret_cast<const char*>(bytes.data()),
-               static_cast<std::streamsize>(bytes.size()));
-  if (!stream) {
-    throw std::runtime_error("failed to write downloaded package");
-  }
+  return package_path;
 }
 
 fs::path InstallRoot(const AgentConfig& config) {
@@ -188,16 +177,14 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
               .stop_agent = true,
               .message = "package rollback applied"};
     }
-    const auto bytes = DownloadPackage(input.package_url);
-    const auto actual_sha = zfleet::crypto::Sha256BytesHex(std::string_view(
-        reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    const auto package_path =
+        config.data_dir / "updates" / (input.package_id + ".zip");
+    DownloadPackageToFile(input.package_url, package_path);
+    const auto actual_sha = zfleet::crypto::Sha256FileHex(package_path);
     if (actual_sha != input.package_sha256) {
       return {.error_code = zfleet::protocol::ErrorCode::checksum_mismatch,
               .message = "downloaded package SHA-256 mismatch"};
     }
-    const auto package_path =
-        config.data_dir / "updates" / (input.package_id + ".zip");
-    WriteBytes(package_path, bytes);
     const auto manifest_bytes =
         zfleet::package::ReadArchiveFile(package_path, "META/manifest.json");
     const auto manifest_sha = zfleet::crypto::Sha256BytesHex(std::string_view(

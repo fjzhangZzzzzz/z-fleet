@@ -45,6 +45,7 @@ if(BUILD_TESTING)
 
   add_executable(zfleet_transport_tests
     tests/frame_codec_test.cpp
+    tests/http_download_test.cpp
   )
 
   target_link_libraries(zfleet_transport_tests

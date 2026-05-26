@@ -6,7 +6,11 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 
+#include <array>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
+#include <span>
 #include <string_view>
 
 namespace zfleet::transport {
@@ -47,6 +51,17 @@ HttpEndpoint ParseHttpUrl(std::string_view url) {
 }  // namespace
 
 HttpDownloadResponse DownloadHttp(const HttpDownloadRequest& request) {
+  HttpDownloadResponse response;
+  const auto status = DownloadHttpStream(
+      request, [&response](std::span<const std::uint8_t> chunk) {
+        response.body.insert(response.body.end(), chunk.begin(), chunk.end());
+      });
+  response.status = status;
+  return response;
+}
+
+int DownloadHttpStream(const HttpDownloadRequest& request,
+                       const HttpDownloadChunkCallback& on_chunk) {
   const auto endpoint = ParseHttpUrl(request.url);
   asio::io_context io_context;
   tcp::resolver resolver(io_context);
@@ -60,12 +75,49 @@ HttpDownloadResponse DownloadHttp(const HttpDownloadRequest& request) {
   http::write(stream, outbound);
 
   beast::flat_buffer buffer;
-  http::response<http::vector_body<std::uint8_t>> inbound;
-  http::read(stream, buffer, inbound);
-  return HttpDownloadResponse{
-      .status = static_cast<int>(inbound.result_int()),
-      .body = std::move(inbound.body()),
-  };
+  http::response_parser<http::buffer_body> parser;
+  parser.eager(false);
+  http::read_header(stream, buffer, parser);
+
+  std::array<std::uint8_t, 64 * 1024> chunk_buffer{};
+  boost::system::error_code error;
+  while (!parser.is_done()) {
+    parser.get().body().data = chunk_buffer.data();
+    parser.get().body().size = chunk_buffer.size();
+    http::read(stream, buffer, parser, error);
+    if (error == http::error::need_buffer) {
+      const auto bytes = chunk_buffer.size() - parser.get().body().size;
+      if (bytes > 0) {
+        on_chunk(std::span<const std::uint8_t>{chunk_buffer.data(), bytes});
+      }
+      continue;
+    }
+    if (error) {
+      throw boost::system::system_error(error);
+    }
+    const auto bytes = chunk_buffer.size() - parser.get().body().size;
+    if (bytes > 0) {
+      on_chunk(std::span<const std::uint8_t>{chunk_buffer.data(), bytes});
+    }
+  }
+  return static_cast<int>(parser.get().result_int());
+}
+
+int DownloadHttpToFile(const HttpDownloadRequest& request,
+                       const std::filesystem::path& file_path) {
+  std::filesystem::create_directories(file_path.parent_path());
+  std::ofstream stream(file_path, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    throw std::runtime_error("failed to open download target file");
+  }
+  return DownloadHttpStream(
+      request, [&stream](std::span<const std::uint8_t> chunk) {
+        stream.write(reinterpret_cast<const char*>(chunk.data()),
+                     static_cast<std::streamsize>(chunk.size()));
+        if (!stream) {
+          throw std::runtime_error("failed to write downloaded file");
+        }
+      });
 }
 
 }  // namespace zfleet::transport
