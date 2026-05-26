@@ -138,7 +138,7 @@ Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--
 日常和 CI 优先使用 `scripts/make-package.sh`。脚本负责构建组件、准备 staging payload、读取组件 CMake 版本文件并调用 C++ packager；manifest 生成、SHA-256 计算和 ZIP 归档由 `zfleet_packager` 完成。
 
 ```bash
-./scripts/make-package.sh <agent|server|installer> [--preset <preset>] [--out <dir>] [--no-build] [--force] [--zip]
+./scripts/make-package.sh <agent|server|installer>... [--preset <preset>] [--out <dir>] [--no-build] [--force] [--zip]
 ```
 
 默认行为：
@@ -154,8 +154,8 @@ Agent 支持 `-c, --config` 指定配置文件，并可通过 `--data-dir`、`--
 示例：
 
 ```bash
-./scripts/make-package.sh agent --zip
-./scripts/make-package.sh server --preset linux-release --out /tmp/zfleet-packages --force
+./scripts/make-package.sh agent server --zip
+./scripts/make-package.sh server installer --preset linux-release --out /tmp/zfleet-packages --force
 ```
 
 需要对已准备好的 payload 目录打包时，可直接调用 packager：
@@ -275,6 +275,7 @@ Agent 维护流程：
 - `--root` 未指定时使用 `~/zfleet`。
 - `--preset` 未指定时使用仓库默认 preset。
 - `apply` 可一次指定多个组件；脚本会先构建一次 preset，再为每个组件生成并安装 package。
+- 如果目标组件已在本地运行，`apply` 会先停止当前进程，安装完成后自动重新启动该组件。
 - `apply --zip` 生成并安装 ZIP package；未指定 `--zip` 时生成并安装目录 package。
 - `apply --force` 覆盖 `build/packages` 下已存在的同版本 package 输出。
 - `apply --replace` 覆盖本地 root 下已安装的同版本目标组件 release，用于本地开发时重新部署相同版本号的二进制。

@@ -42,6 +42,120 @@ resolve_installer_binary() {
   fi
 }
 
+component_launcher_path() {
+  local root="$1"
+  local component="$2"
+  local binary_name
+  binary_name="$(zf_component_binary_name "$component")"
+  printf '%s/%s/bin/%s\n' "$root" "$component" "$binary_name"
+}
+
+component_target_path() {
+  local root="$1"
+  local component="$2"
+  local binary_name
+  binary_name="$(zf_component_binary_name "$component")"
+  local active_version_path="$root/$component/var/active-version"
+  if [[ -f "$active_version_path" ]]; then
+    local version
+    version="$(tr -d '[:space:]' < "$active_version_path")"
+    if zf_is_safe_segment "$version"; then
+      printf '%s/%s/releases/%s/bin/%s\n' "$root" "$component" "$version" "$binary_name"
+      return 0
+    fi
+  fi
+  printf '%s\n' ""
+}
+
+is_component_running() {
+  local root="$1"
+  local component="$2"
+  local launcher_path
+  launcher_path="$(component_launcher_path "$root" "$component")"
+  local target_path
+  target_path="$(component_target_path "$root" "$component")"
+
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f -- "$launcher_path" >/dev/null 2>&1 && return 0
+    [[ -n "$target_path" ]] && pgrep -f -- "$target_path" >/dev/null 2>&1
+    return $?
+  fi
+
+  if ps -eo args= | grep -F -- "$launcher_path" | grep -v grep >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -n "$target_path" ]] &&
+    ps -eo args= | grep -F -- "$target_path" | grep -v grep >/dev/null 2>&1
+}
+
+stop_component_if_running() {
+  local root="$1"
+  local component="$2"
+  local launcher_path
+  launcher_path="$(component_launcher_path "$root" "$component")"
+  local target_path
+  target_path="$(component_target_path "$root" "$component")"
+
+  if ! is_component_running "$root" "$component"; then
+    return 0
+  fi
+
+  zf_log "stopping running $component process"
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f -- "$launcher_path" || true
+    [[ -n "$target_path" ]] && pkill -f -- "$target_path" || true
+  else
+    ps -eo pid=,args= | awk -v launcher="$launcher_path" '$0 ~ launcher {print $1}' |
+      while read -r pid; do
+        [[ -n "$pid" ]] || continue
+        kill "$pid" 2>/dev/null || true
+      done
+    if [[ -n "$target_path" ]]; then
+      ps -eo pid=,args= | awk -v target="$target_path" '$0 ~ target {print $1}' |
+        while read -r pid; do
+          [[ -n "$pid" ]] || continue
+          kill "$pid" 2>/dev/null || true
+        done
+    fi
+  fi
+
+  for _ in {1..50}; do
+    if ! is_component_running "$root" "$component"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  zf_fail_exec "failed to stop running $component process"
+}
+
+start_component_if_needed() {
+  local root="$1"
+  local component="$2"
+  local launcher_path
+  launcher_path="$(component_launcher_path "$root" "$component")"
+
+  if is_component_running "$root" "$component"; then
+    return 0
+  fi
+
+  [[ -x "$launcher_path" ]] ||
+    zf_fail_exec "component launcher not found or not executable: $launcher_path"
+
+  zf_log "starting $component process"
+  if zf_is_windows_host; then
+    (
+      cd "$(dirname "$launcher_path")/.." &&
+        env ZFLEET_COMPONENT_ROOT="$root/$component" "$launcher_path" >/dev/null 2>&1
+    ) &
+  else
+    (
+      cd "$(dirname "$launcher_path")/.." &&
+        env ZFLEET_COMPONENT_ROOT="$root/$component" "$launcher_path" >/dev/null 2>&1 &
+    )
+  fi
+}
+
 run_installer() {
   local installer_path="$1"
   shift
@@ -98,6 +212,11 @@ replace_installed_release_if_requested() {
 
 apply_component() {
   local component="$1"
+  local was_running=0
+  if is_component_running "$root_abs" "$component"; then
+    was_running=1
+    stop_component_if_running "$root_abs" "$component"
+  fi
 
   package_args=(
     "$component"
@@ -130,6 +249,10 @@ apply_component() {
 
   zf_log "copying $component launcher stub"
   copy_launcher_stub "$component" "$preset" "$root_abs"
+
+  if [[ $was_running -eq 1 ]]; then
+    start_component_if_needed "$root_abs" "$component"
+  fi
 }
 
 repo_root="$ZF_REPO_ROOT"
