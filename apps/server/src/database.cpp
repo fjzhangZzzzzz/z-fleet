@@ -20,7 +20,7 @@
 namespace zfleet::server {
 namespace {
 
-constexpr int kSchemaVersion = 9;
+constexpr int kSchemaVersion = 10;
 
 namespace proto = zfleet::protocol::v1;
 
@@ -291,6 +291,7 @@ void ExecSchema(SQLite::Database& db) {
       agent_id text,
       event_type text not null,
       request_id text,
+      result text not null,
       payload_json text not null
     )
   )sql");
@@ -404,6 +405,10 @@ void ExecSchema(SQLite::Database& db) {
     db.exec(
         "alter table package_publications add column build_type text not null "
         "default 'release'");
+  }
+  if (!ColumnExists(db, "audit_events", "result")) {
+    db.exec(
+        "alter table audit_events add column result text not null default ''");
   }
   if (!ColumnExists(db, "tasks", "prerequisite_task_id")) {
     db.exec("alter table tasks add column prerequisite_task_id text");
@@ -895,8 +900,9 @@ void ServerDatabase::RecordAuditEvent(
           agent_id,
           event_type,
           request_id,
+          result,
           payload_json
-        ) values (?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?)
       )sql");
     statement.bind(1, event.audit_id);
     statement.bind(2, event.occurred_at);
@@ -908,7 +914,8 @@ void ServerDatabase::RecordAuditEvent(
     statement.bind(4,
                    std::string(zfleet::protocol::ToString(event.event_type)));
     statement.bind(5, event.request_id);
-    statement.bind(6, event.payload_json);
+    statement.bind(6, event.result);
+    statement.bind(7, event.payload_json);
     statement.exec();
   });
 }
@@ -1035,6 +1042,35 @@ std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
     if (sqlite3_changes(db.getHandle()) != 1) {
       return std::optional<zfleet::protocol::Task>{};
     }
+    SQLite::Statement audit(
+        db,
+        R"sql(
+        insert into audit_events (
+          audit_id,
+          occurred_at,
+          agent_id,
+          event_type,
+          request_id,
+          result,
+          payload_json
+        ) values (?, ?, ?, ?, ?, ?, ?)
+      )sql");
+    audit.bind(1, zfleet::core::GenerateUuid());
+    audit.bind(2, assigned_at);
+    audit.bind(3, agent_id);
+    audit.bind(4, std::string(zfleet::protocol::ToString(
+                      zfleet::protocol::AuditEventType::task_assigned)));
+    audit.bind(5, task.task_id);
+    audit.bind(6, "success");
+    audit.bind(
+        7,
+        zfleet::protocol::SerializeAuditPayload(
+            {{"agent_id", agent_id},
+             {"task_id", task.task_id},
+             {"task_type",
+              std::string(zfleet::protocol::ToString(task.task_type))},
+             {"task_state", std::string("assigned")}}));
+    audit.exec();
     transaction.commit();
     return std::optional<zfleet::protocol::Task>{task};
   });
@@ -1243,8 +1279,9 @@ void ServerDatabase::AsyncRecordAuditEvent(
           agent_id,
           event_type,
           request_id,
+          result,
           payload_json
-        ) values (?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?)
       )sql");
             statement.bind(1, event.audit_id);
             statement.bind(2, event.occurred_at);
@@ -1256,7 +1293,8 @@ void ServerDatabase::AsyncRecordAuditEvent(
             statement.bind(
                 4, std::string(zfleet::protocol::ToString(event.event_type)));
             statement.bind(5, event.request_id);
-            statement.bind(6, event.payload_json);
+            statement.bind(6, event.result);
+            statement.bind(7, event.payload_json);
             statement.exec();
           },
           completion_executor, std::move(completion))) {

@@ -1607,10 +1607,17 @@ TEST_CASE("http2 control service stores task running and result events") {
   REQUIRE(ReadTaskField(database_path, "task-1", "completed_at") ==
           "2026-05-21T10:00:03Z");
   REQUIRE(CountRows(database_path, "task_results") == 1);
+  REQUIRE(ReadAuditField(database_path, "task-1", "event_type") ==
+          "task.assigned");
+  REQUIRE(ReadAuditField(database_path, "task-1", "result") == "success");
   REQUIRE(ReadAuditField(database_path, "task-running-1", "event_type") ==
           "task.running");
+  REQUIRE(ReadAuditField(database_path, "task-running-1", "result") ==
+          "success");
   REQUIRE(ReadAuditField(database_path, "task-result-1", "event_type") ==
           "task.succeeded");
+  REQUIRE(ReadAuditField(database_path, "task-result-1", "result") ==
+          "success");
   proto::CollectBasicInventoryResult stored_result;
   REQUIRE(stored_result.ParseFromString(
       ReadTaskResultBlob(database_path, "task-1", "result_blob")));
@@ -1658,6 +1665,14 @@ TEST_CASE("http2 control service stores failed task error columns and blob") {
       ReadTaskResultBlob(database_path, "task-failed-1", "error_blob")));
   REQUIRE(stored_error.retryable());
   REQUIRE(stored_error.message() == "inventory failed");
+  REQUIRE(ReadAuditField(database_path, "task-running-failed-1", "event_type") ==
+          "task.running");
+  REQUIRE(ReadAuditField(database_path, "task-running-failed-1", "result") ==
+          "success");
+  REQUIRE(ReadAuditField(database_path, "task-result-failed-1", "event_type") ==
+          "task.failed");
+  REQUIRE(ReadAuditField(database_path, "task-result-failed-1", "result") ==
+          "success");
 }
 
 TEST_CASE("agent reconnect confirms desired package version") {
