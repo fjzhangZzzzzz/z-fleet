@@ -730,6 +730,29 @@ TEST_CASE("management http server serves static UI and agent api") {
       "GET /api/v1/agents HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(agents.status == 200);
   REQUIRE(agents.body.find("agent-http-1") != std::string::npos);
+  REQUIRE(agents.body.find("\"latest_asset\":null") != std::string::npos);
+
+  const auto agent_detail = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/agents/agent-http-1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(agent_detail.status == 200);
+  REQUIRE(agent_detail.body.find("\"agent_id\":\"agent-http-1\"") !=
+          std::string::npos);
+  REQUIRE(agent_detail.body.find("\"latest_asset\":null") !=
+          std::string::npos);
+
+  const auto asset_list = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/agents/agent-http-1/assets HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(asset_list.status == 200);
+  REQUIRE(asset_list.body.find("\"assets\"") != std::string::npos);
+
+  const auto missing_latest_asset = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/agents/agent-http-1/assets/latest HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(missing_latest_asset.status == 404);
+  REQUIRE(missing_latest_asset.body.find("asset_snapshot_not_found") !=
+          std::string::npos);
 
   const auto forbidden_upgrade = SendHttpRequest(
       server.port(),
