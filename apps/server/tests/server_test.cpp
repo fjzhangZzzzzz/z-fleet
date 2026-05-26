@@ -634,6 +634,14 @@ TEST_CASE("server database stores package channel and registration tokens") {
   REQUIRE(tokens.size() == 1);
   REQUIRE(tokens.front().token_id == "token-1");
   REQUIRE(tokens.front().token_hash == std::string(64, 'b'));
+  REQUIRE(tokens.front().status == "active");
+
+  REQUIRE(database.RevokeRegistrationToken("token-1",
+                                           "2026-05-24T10:03:00Z"));
+  const auto revoked_tokens = database.ListRegistrationTokens();
+  REQUIRE(revoked_tokens.front().status == "revoked");
+  REQUIRE(revoked_tokens.front().revoked_at ==
+          std::optional<std::string>{"2026-05-24T10:03:00Z"});
 }
 
 TEST_CASE("server package validation checks archive metadata and filename") {
@@ -771,6 +779,72 @@ TEST_CASE("management http server serves static UI and agent api") {
           std::string::npos);
 
   server.Stop();
+}
+
+TEST_CASE("management http server creates scoped registration tokens") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .control_url = "http://127.0.0.1:8081",
+      });
+  server.Start();
+
+  const std::string token_body =
+      "{\"purpose\":\"agent_register\",\"expires_at\":\"2026-05-25T10:00:00Z\","
+      "\"channel\":\"stable\",\"platform\":\"linux\",\"arch\":\"x86_64\","
+      "\"max_uses\":1}";
+  const auto response = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/install/tokens HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Content-Type: application/json\r\nContent-Length: " +
+      std::to_string(token_body.size()) + "\r\n\r\n" + token_body);
+  REQUIRE(response.status == 201);
+  REQUIRE(response.body.find("\"token\"") != std::string::npos);
+  REQUIRE(response.body.find("\"status\":\"active\"") != std::string::npos);
+  REQUIRE(response.body.find("\"purpose\":\"agent_register\"") !=
+          std::string::npos);
+  REQUIRE(response.body.find("\"max_uses\":1") != std::string::npos);
+}
+
+TEST_CASE("management http server rejects invalid token requests") {
+  const zfleet::test::ScopedTestDir test_root("server");
+
+  const auto database_path = test_root / "zfleet.db";
+  zfleet::server::ServerDatabase database(database_path);
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+
+  zfleet::server::ManagementHttpServer server(
+      "127.0.0.1:0",
+      &database,
+      test_root / "packages",
+      web_root,
+      zfleet::server::ManagementHttpServerOptions{
+          .control_url = "http://127.0.0.1:8081",
+      });
+  server.Start();
+
+  const std::string invalid_body =
+      "{\"purpose\":\"agent_register\",\"max_uses\":0}";
+  const auto response = SendHttpRequest(
+      server.port(),
+      "POST /api/v1/install/tokens HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Content-Type: application/json\r\nContent-Length: " +
+      std::to_string(invalid_body.size()) + "\r\n\r\n" + invalid_body);
+  REQUIRE(response.status == 400);
+  REQUIRE(response.body.find("token_max_uses_invalid") != std::string::npos);
 }
 
 TEST_CASE("web management assets expose install filters and maintenance dialog hooks") {

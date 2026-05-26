@@ -731,6 +731,24 @@ bool ServerDatabase::ConsumeRegistrationToken(const std::string& token_hash,
   });
 }
 
+bool ServerDatabase::RevokeRegistrationToken(const std::string& token_id,
+                                             const std::string& revoked_at) {
+  return SubmitWrite([&](SQLite::Database& db) {
+    SQLite::Statement statement(db,
+                                R"sql(
+        update registration_tokens
+        set status = 'revoked',
+            revoked_at = ?
+        where token_id = ?
+          and status = 'active'
+      )sql");
+    statement.bind(1, revoked_at);
+    statement.bind(2, token_id);
+    statement.exec();
+    return db.getChanges() == 1;
+  });
+}
+
 void ServerDatabase::UpsertAgent(
     const zfleet::protocol::AgentRegistration& request) {
   SubmitWrite([&](SQLite::Database& db) {

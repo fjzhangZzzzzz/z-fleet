@@ -112,7 +112,11 @@ POST /api/v1/admin/packages/{package_id}/retire
 | --- | --- | --- | --- |
 | `token_id` | `string` | yes | token 标识 |
 | `token` | `string` | yes | token 明文，只返回一次 |
+| `purpose` | `string` | yes | token 用途 |
 | `expires_at` | `string` | yes | 过期时间 |
+| `max_uses` | `integer` | yes | 最大使用次数 |
+| `use_count` | `integer` | yes | 当前使用次数 |
+| `status` | `string` | yes | token 状态，例如 `active`、`consumed`、`revoked` |
 
 ### 安装包管理
 

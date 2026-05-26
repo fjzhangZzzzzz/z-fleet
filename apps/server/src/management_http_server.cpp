@@ -527,9 +527,21 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
 
   if (request.method == "POST" && request.path == "/api/v1/install/tokens") {
     const auto input = ParseTokenCreateRequestBody(request.body);
+    if (input.purpose.empty()) {
+      return ErrorResponse(400, "token_purpose_required",
+                           "purpose is required");
+    }
+    if (input.purpose != "agent_register") {
+      return ErrorResponse(400, "token_purpose_unsupported",
+                           "purpose must be agent_register");
+    }
     if (input.expires_at.empty()) {
       return ErrorResponse(400, "token_expiry_required",
                            "expires_at is required");
+    }
+    if (!input.max_uses.has_value() || *input.max_uses <= 0) {
+      return ErrorResponse(400, "token_max_uses_invalid",
+                           "max_uses must be greater than zero");
     }
     const auto now = zfleet::core::NowUtcRfc3339();
     const auto token_id = zfleet::core::GenerateUuid();
@@ -552,10 +564,18 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
         database, zfleet::protocol::AuditEventType::registration_token_created,
         token_id, "success",
         zfleet::protocol::SerializeAuditPayload(
-            {{"token_id", token_id}, {"purpose", token.purpose}}));
+            {{"token_id", token_id},
+             {"purpose", token.purpose},
+             {"channel", token.channel.value_or("")},
+             {"platform", token.platform.value_or("")},
+             {"arch", token.arch.value_or("")}}));
     return JsonResponse({{"token_id", token_id},
                          {"token", token_value},
-                         {"expires_at", token.expires_at}},
+                         {"purpose", token.purpose},
+                         {"expires_at", token.expires_at},
+                         {"max_uses", *token.max_uses},
+                         {"use_count", token.use_count},
+                         {"status", token.status}},
                         201);
   }
 

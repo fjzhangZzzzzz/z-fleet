@@ -111,6 +111,8 @@ class ServerStore {
                                         const std::string& platform,
                                         const std::string& arch,
                                         const std::string& used_at) = 0;
+  virtual bool RevokeRegistrationToken(const std::string& token_id,
+                                       const std::string& revoked_at) = 0;
   virtual void UpsertAgent(
       const zfleet::protocol::AgentRegistration& request) = 0;
   virtual void MarkAgentOffline(const std::string& agent_id,
@@ -211,6 +213,8 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
                                 const std::string& platform,
                                 const std::string& arch,
                                 const std::string& used_at) override;
+  bool RevokeRegistrationToken(const std::string& token_id,
+                               const std::string& revoked_at) override;
   void UpsertAgent(const zfleet::protocol::AgentRegistration& request) override;
   void MarkAgentOffline(const std::string& agent_id,
                         const std::string& disconnected_at) override;
