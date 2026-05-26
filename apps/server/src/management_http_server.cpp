@@ -324,12 +324,12 @@ HttpResponse CommitAgentPackageUpload(
   const auto filename = QueryValue(request, "filename", "");
   const auto now = zfleet::core::NowUtcRfc3339();
   try {
-    const auto metadata = ValidateAgentPackageUpload(staging_path, filename);
     std::filesystem::create_directories(package_repository);
     const auto storage_path =
         SafePackageStoragePath(package_repository, package_id);
     std::filesystem::rename(staging_path, storage_path);
-    AgentPackageRecord record{
+    const auto metadata = ValidateAgentPackageUpload(storage_path, filename);
+    AgentPackageRecord uploaded_record{
         .package_id = package_id,
         .component = metadata.component,
         .version = metadata.version,
@@ -341,11 +341,14 @@ HttpResponse CommitAgentPackageUpload(
         .size_bytes = metadata.size_bytes,
         .sha256 = metadata.sha256,
         .manifest_json = metadata.manifest_json,
-        .status = "validated",
+        .status = "uploaded",
         .uploaded_at = now,
-        .validated_at = now,
     };
-    database->UpsertAgentPackage(record);
+    database->UpsertAgentPackage(uploaded_record);
+    AgentPackageRecord validated_record = uploaded_record;
+    validated_record.status = "validated";
+    validated_record.validated_at = now;
+    database->UpsertAgentPackage(validated_record);
     RecordManagementAudit(database,
                           zfleet::protocol::AuditEventType::package_validated,
                           package_id, "success",
@@ -356,7 +359,7 @@ HttpResponse CommitAgentPackageUpload(
                                {"arch", metadata.arch},
                                {"build_type", metadata.build_type},
                                {"component", metadata.component}}));
-    return JsonResponse(ToJson(record), 201);
+    return JsonResponse(ToJson(validated_record), 201);
   } catch (const std::exception& ex) {
     std::error_code ignored;
     std::filesystem::remove(staging_path, ignored);
@@ -768,6 +771,61 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
 
   if (request.method == "POST" &&
       request.path.rfind("/api/v1/admin/packages/", 0) == 0 &&
+      request.path.ends_with("/validate")) {
+    const auto prefix = std::string("/api/v1/admin/packages/");
+    const auto suffix = std::string("/validate");
+    const auto package_id = request.path.substr(
+        prefix.size(), request.path.size() - prefix.size() - suffix.size());
+    const auto package = database->FindAgentPackage(package_id);
+    if (!package.has_value()) {
+      return ErrorResponse(404, "package_not_found", "package was not found");
+    }
+    if (package->status == "retired") {
+      return ErrorResponse(409, "package_retired",
+                           "retired package cannot be validated");
+    }
+    try {
+      const auto metadata =
+          ValidateAgentPackageUpload(package->storage_path, package->filename);
+      const auto validated_at = zfleet::core::NowUtcRfc3339();
+      AgentPackageRecord validated = *package;
+      validated.component = metadata.component;
+      validated.version = metadata.version;
+      validated.platform = metadata.platform;
+      validated.arch = metadata.arch;
+      validated.build_type = metadata.build_type;
+      validated.size_bytes = metadata.size_bytes;
+      validated.sha256 = metadata.sha256;
+      validated.manifest_json = metadata.manifest_json;
+      validated.status = "validated";
+      validated.validated_at = validated_at;
+      database->UpsertAgentPackage(validated);
+      RecordManagementAudit(
+          database, zfleet::protocol::AuditEventType::package_validated,
+          package_id, "success",
+          zfleet::protocol::SerializeAuditPayload(
+              {{"package_id", package_id},
+               {"version", metadata.version},
+               {"platform", metadata.platform},
+               {"arch", metadata.arch},
+               {"build_type", metadata.build_type},
+               {"component", metadata.component}}));
+      return JsonResponse(ToJson(*database->FindAgentPackage(package_id)));
+    } catch (const std::exception& ex) {
+      AgentPackageRecord rejected = *package;
+      rejected.status = "rejected";
+      database->UpsertAgentPackage(rejected);
+      RecordManagementAudit(
+          database, zfleet::protocol::AuditEventType::package_validated,
+          package_id, "failure",
+          zfleet::protocol::SerializeAuditPayload(
+              {{"package_id", package_id}, {"error", ex.what()}}));
+      return ErrorResponse(400, "package_validation_failed", ex.what());
+    }
+  }
+
+  if (request.method == "POST" &&
+      request.path.rfind("/api/v1/admin/packages/", 0) == 0 &&
       request.path.ends_with("/publish")) {
     const auto prefix = std::string("/api/v1/admin/packages/");
     const auto suffix = std::string("/publish");
@@ -776,6 +834,10 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
     const auto package = database->FindAgentPackage(package_id);
     if (!package.has_value()) {
       return ErrorResponse(404, "package_not_found", "package was not found");
+    }
+    if (package->status != "validated" && package->status != "published") {
+      return ErrorResponse(409, "package_not_validated",
+                           "package must be validated before publishing");
     }
     const auto input = ParsePublishRequestBody(request.body);
     const auto channel = input.channel.empty() ? "stable" : input.channel;
@@ -804,7 +866,7 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
     return JsonResponse(ToJson(*published));
   }
 
-  if (request.method == "POST" &&
+    if (request.method == "POST" &&
       request.path.rfind("/api/v1/admin/packages/", 0) == 0 &&
       request.path.ends_with("/retire")) {
     const auto prefix = std::string("/api/v1/admin/packages/");

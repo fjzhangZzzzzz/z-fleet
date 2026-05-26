@@ -610,6 +610,13 @@ TEST_CASE("server database stores package channel and registration tokens") {
   REQUIRE(stored_package.has_value());
   REQUIRE(stored_package->published_channels == std::vector<std::string>{"stable"});
 
+  database.RetireAgentPackage("pkg-1", "2026-05-24T10:02:00Z");
+  const auto retired_package = database.FindAgentPackage("pkg-1");
+  REQUIRE(retired_package.has_value());
+  REQUIRE(retired_package->status == "retired");
+  REQUIRE(retired_package->retired_at == "2026-05-24T10:02:00Z");
+  REQUIRE(retired_package->published_channels.empty());
+
   database.CreateRegistrationToken(zfleet::server::RegistrationTokenRecord{
       .token_id = "token-1",
       .token_hash = std::string(64, 'b'),
@@ -627,6 +634,47 @@ TEST_CASE("server database stores package channel and registration tokens") {
   REQUIRE(tokens.size() == 1);
   REQUIRE(tokens.front().token_id == "token-1");
   REQUIRE(tokens.front().token_hash == std::string(64, 'b'));
+}
+
+TEST_CASE("server package validation checks archive metadata and filename") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  const auto package_dir = test_root / "package";
+  zfleet::test::WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent",
+                              "agent-binary");
+  const auto manifest = zfleet::package::SerializeManifestJson(
+      zfleet::package::Manifest{
+          .schema_version = 1,
+          .component = "agent",
+          .version = "0.1.0",
+          .platform = "linux",
+          .arch = "x86_64",
+          .build_type = "release",
+          .min_installer_version = "0.1.0",
+          .files = {zfleet::package::ManifestFile{
+              .source = "payload/bin/zfleet_agent",
+              .target = "bin/zfleet_agent",
+              .size = 12,
+              .sha256 = zfleet::crypto::Sha256BytesHex("agent-binary"),
+              .executable = true,
+          }},
+      });
+  zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
+                              manifest);
+  const auto archive_path =
+      test_root / "zfleet_agent-v0.1.0-linux-x86_64-release.zip";
+  zfleet::package::CreateArchive(zfleet::package::CreateArchiveOptions{
+      .package_dir = package_dir,
+      .archive_path = archive_path,
+      .force = true,
+  });
+
+  const auto metadata = zfleet::server::ValidateAgentPackageUpload(
+      archive_path, "zfleet_agent-v0.1.0-linux-x86_64-release.zip");
+  REQUIRE(metadata.component == "agent");
+  REQUIRE(metadata.version == "0.1.0");
+  REQUIRE(metadata.platform == "linux");
+  REQUIRE(metadata.arch == "x86_64");
+  REQUIRE(metadata.build_type == "release");
 }
 
 TEST_CASE("management http server serves static UI and agent api") {
