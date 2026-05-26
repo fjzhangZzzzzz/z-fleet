@@ -19,65 +19,54 @@
       </a>
       <nav><a href="/install">Agent 安装</a><a href="/agents">Agent 状态</a><a href="/admin/packages">安装包管理</a></nav>
     </header>
-    <main class="hero">
-      <section class="hero-header">
-        <p class="kicker">控制平面</p>
-        <h1>设备接入、状态可见、版本发布统一归口</h1>
-        <p class="lede">面向小而稳的基础设施控制平面，聚焦 Agent 安装、设备状态巡检与安装包发布，保持流程清晰、界面克制、操作可追踪。</p>
-      </section>
-      <section class="hero-layout" aria-label="控制台概览">
-        <div class="hero-overview">
-          <article class="panel summary-card">
-            <p class="eyebrow">安装流程</p>
-            <strong>01</strong>
-            <p>生成一次性注册 token，按平台输出推荐安装命令，适合首批接入和标准化部署。</p>
-          </article>
-          <article class="panel summary-card">
-            <p class="eyebrow">设备视图</p>
-            <strong>02</strong>
-            <p>按状态、系统、架构和版本筛选 Agent，快速定位异常节点和待维护对象。</p>
-          </article>
-          <article class="panel summary-card">
-            <p class="eyebrow">发布管理</p>
-            <strong>03</strong>
-            <p>安装包上传后自动校验，支持多 channel 发布与退役，维持发布来源和版本边界。</p>
-          </article>
-          <article class="panel summary-card">
-            <p class="eyebrow">运维模型</p>
-            <strong>04</strong>
-            <p>以控制地址、平台、架构、channel 为核心维度，适合持续迭代中的轻量 fleet 管理。</p>
-          </article>
-        </div>
-        <aside class="panel hero-summary">
-          <p class="eyebrow">概览</p>
-          <h2>控制平面入口</h2>
-          <p class="metric-copy">当前 Web 前端覆盖部署、巡检、发布三条主链路，适合作为 server 侧管理入口的第一版统一控制台。</p>
-          <dl>
-            <dt>主页面</dt><dd>首页 / 安装 / 状态 / 发布</dd>
-            <dt>交互模式</dt><dd>表格、抽屉、命令面板、状态胶囊</dd>
-            <dt>设计方向</dt><dd>简洁、克制、偏基础设施操作台</dd>
-          </dl>
+    <main class="hero home-page">
+      <section class="home-hero panel">
+        <div class="home-hero-main">
+          <p class="kicker">控制平面</p>
+          <h1>设备接入、状态巡检与版本发布统一归口</h1>
+          <p class="lede">聚焦安装、巡检、发布三条主链路，让操作入口、状态判断和维护动作保持在同一套紧凑控制台结构内。</p>
           <div class="actions">
-            <a class="button primary" href="/install">开始部署</a>
-            <a class="button" href="/agents">查看设备</a>
+            <a class="button primary" href="/install">生成安装命令</a>
+            <a class="button" href="/agents">查看 Agent 状态</a>
+            <a class="button" href="/admin/packages">管理安装包</a>
           </div>
+        </div>
+        <aside class="home-hero-side">
+          <p class="eyebrow">使用路径</p>
+          <ol class="home-sequence">
+            <li><strong>安装</strong><span>选择平台与通道，生成最终安装命令。</span></li>
+            <li><strong>巡检</strong><span>按状态、系统、架构与版本定位目标设备。</span></li>
+            <li><strong>发布</strong><span>上传安装包并发布到具体通道。</span></li>
+          </ol>
         </aside>
       </section>
-      <section class="highlights" aria-label="产品亮点">
-        <article class="panel panel-subtle">
-          <p class="eyebrow">可见性</p>
-          <h2>状态先于动作</h2>
-          <p>先看在线状态、最后活跃时间和版本，再进入维护动作，减少误操作。</p>
+      <section class="home-entry-grid" aria-label="控制台入口">
+        <article class="panel home-entry-card">
+          <div class="home-entry-head">
+            <p class="eyebrow">安装</p>
+            <span class="home-entry-index">01</span>
+          </div>
+          <h2>安装新设备</h2>
+          <p>平台和通道并列可选，直接生成可执行命令。</p>
+          <a class="button" href="/install">进入安装页</a>
         </article>
-        <article class="panel panel-subtle">
-          <p class="eyebrow">一致性</p>
-          <h2>统一信息骨架</h2>
-          <p>所有管理页都使用同一套标题区、摘要区和主操作区，降低理解成本。</p>
+        <article class="panel home-entry-card">
+          <div class="home-entry-head">
+            <p class="eyebrow">状态</p>
+            <span class="home-entry-index">02</span>
+          </div>
+          <h2>查看设备状态</h2>
+          <p>列表优先，先筛选再进入抽屉查看维护上下文。</p>
+          <a class="button" href="/agents">进入状态页</a>
         </article>
-        <article class="panel panel-subtle">
-          <p class="eyebrow">可追踪</p>
-          <h2>发布路径清楚</h2>
-          <p>安装包从上传、校验、发布到退役的路径集中可见，便于后续补全审计链路。</p>
+        <article class="panel home-entry-card">
+          <div class="home-entry-head">
+            <p class="eyebrow">发布</p>
+            <span class="home-entry-index">03</span>
+          </div>
+          <h2>管理版本仓库</h2>
+          <p>按组件、平台、架构和通道维护安装包发布面。</p>
+          <a class="button" href="/admin/packages">进入安装包页</a>
         </article>
       </section>
     </main>

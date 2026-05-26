@@ -229,6 +229,7 @@ nlohmann::json ToJson(const AgentPackageRecord& package) {
   body["validated_at"] = package.validated_at.value_or("");
   body["published_at"] = package.published_at.value_or("");
   body["retired_at"] = package.retired_at.value_or("");
+  body["published_channels"] = package.published_channels;
   return body;
 }
 

@@ -24,48 +24,92 @@
         <div>
           <p class="kicker">发布管理</p>
           <h1>安装包管理</h1>
-          <p class="page-intro">集中管理 Agent 与 Installer 安装包的上传、校验、channel 发布和退役，维持部署来源清晰可控。</p>
+          <p class="page-intro">集中管理 Agent 与安装器安装包的上传、校验、通道发布和退役，维持部署来源清晰可控。</p>
         </div>
-        <span class="status" data-status-for="packages" role="status" aria-live="polite">待上传</span>
+        <div class="page-header-actions">
+          <button class="button primary" type="button" data-open-upload-dialog>上传安装包</button>
+          <span class="status" data-status-for="packages" role="status" aria-live="polite"></span>
+        </div>
       </section>
-      <section class="summary-grid" aria-label="发布摘要">
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">输入</span>
-          <div class="metric-value">ZIP</div>
-          <div class="metric-copy">上传包文件后自动识别平台、架构与组件类型。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">校验</span>
-          <div class="metric-value">验证</div>
-          <div class="metric-copy">入库前完成校验，减少错误包直接进入发布链路。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">通道</span>
-          <div class="metric-value">3</div>
-          <div class="metric-copy">按 stable、candidate、dev 管理不同阶段的发布目标。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">生命周期</span>
-          <div class="metric-value">退役</div>
-          <div class="metric-copy">支持对过期或替换版本进行退役，保持发布面干净。</div>
-        </article>
+      <section class="panel package-repo">
+        <div class="package-defaults">
+          <div class="panel-heading package-defaults-header">
+            <div>
+              <p class="eyebrow">默认版本</p>
+              <h2>当前默认版本配置</h2>
+            </div>
+          </div>
+          <div class="default-release-list" data-default-release-list><p class="muted">正在加载默认版本配置...</p></div>
+        </div>
+        <div class="panel-heading package-repo-header">
+          <div>
+            <p class="eyebrow">仓库</p>
+            <h2>版本仓库</h2>
+          </div>
+        </div>
+        <section class="filters package-filters" data-package-filters>
+          <div class="filter-cluster">
+            <span class="filter-label">组件</span>
+            <div class="filter-chip-row" data-package-filter-group="component"></div>
+          </div>
+          <div class="filter-cluster">
+            <span class="filter-label">平台</span>
+            <div class="filter-chip-row" data-package-filter-group="platform"></div>
+          </div>
+          <div class="filter-cluster">
+            <span class="filter-label">架构</span>
+            <div class="filter-chip-row" data-package-filter-group="arch"></div>
+          </div>
+          <div class="filter-cluster">
+            <span class="filter-label">状态</span>
+            <div class="filter-chip-row" data-package-filter-group="status"></div>
+          </div>
+          <label class="search-field">搜索版本
+            <input class="search" name="search" placeholder="搜索版本、组件或平台" aria-label="搜索版本、组件或平台">
+          </label>
+          <button class="button" type="button" data-reset-package-filters>清空筛选</button>
+        </section>
+        <div class="packages repo-list" data-package-list><p class="muted">正在加载安装包...</p></div>
       </section>
-      <section class="grid two">
-        <article class="panel">
-          <p class="eyebrow">上传</p>
-          <h2>上传 Agent / Installer Package</h2>
-          <form class="fields" data-package-upload-form>
-            <label>ZIP Package<input type="file" name="package" accept=".zip" required></label>
+      <div class="drawer-backdrop" data-package-backdrop hidden></div>
+      <aside class="drawer package-drawer" data-package-detail aria-hidden="true">
+        <button class="drawer-close" type="button" data-package-close aria-label="关闭">关闭</button>
+        <div data-package-detail-body></div>
+      </aside>
+      <dialog data-package-upload-dialog>
+        <form method="dialog" class="panel package-upload-dialog" data-package-upload-form>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">上传</p>
+              <h2>上传安装包</h2>
+            </div>
+          </div>
+          <label class="file-input">选择 ZIP 安装包
+            <input type="file" name="package" accept=".zip" required>
+          </label>
+          <p class="muted">平台、架构与组件类型会自动识别，上传后不可修改。</p>
+          <div class="fields dialog-actions">
             <button class="button primary" type="submit">上传并校验</button>
-          </form>
-          <p class="muted note">平台与架构由安装包清单自动识别，上传后不可修改。</p>
-        </article>
-        <article class="panel">
-          <p class="eyebrow">仓库</p>
-          <h2>已入库版本</h2>
-          <div class="packages" data-package-list><p class="muted">正在加载安装包...</p></div>
-        </article>
-      </section>
+            <button class="button" type="button" data-close-upload-dialog>取消</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog data-default-release-dialog>
+        <form method="dialog" class="panel default-release-dialog">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">调整默认版本</p>
+              <h2 data-default-release-dialog-title>默认版本</h2>
+            </div>
+          </div>
+          <p class="muted" data-default-release-dialog-context></p>
+          <div class="default-release-options" data-default-release-options></div>
+          <div class="dialog-actions">
+            <button class="button primary" type="button" data-confirm-default-release>确认发布</button>
+            <button class="button" type="button" data-close-default-release-dialog>取消</button>
+          </div>
+        </form>
+      </dialog>
     </main>
   </div>
 </body>

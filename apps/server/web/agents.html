@@ -26,41 +26,35 @@
           <h1>Agent 状态</h1>
           <p class="page-intro">按状态、系统、架构和版本查看当前 fleet，点选单个 Agent 后进入详细资产与维护操作。</p>
         </div>
-        <span class="status" data-status-for="agents" role="status" aria-live="polite">准备就绪</span>
+        <span class="status" data-status-for="agents" role="status" aria-live="polite"></span>
       </section>
-      <section class="summary-grid" aria-label="状态摘要">
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">视图</span>
-          <div class="metric-value">实时</div>
-          <div class="metric-copy">状态列表聚焦当前在线、异常与待处理节点。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">筛选</span>
-          <div class="metric-value">组合</div>
-          <div class="metric-copy">支持主机名、Agent ID、状态、系统、架构与版本组合筛选。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">详情</span>
-          <div class="metric-value">抽屉</div>
-          <div class="metric-copy">在同一页面内查看资产快照、应用、服务与升级状态。</div>
-        </article>
-        <article class="panel panel-subtle metric-card">
-          <span class="metric-label">维护</span>
-          <div class="metric-value">操作</div>
-          <div class="metric-copy">在允许高风险写操作的环境中发起升级或回滚。</div>
-        </article>
-      </section>
-      <section class="filters" data-agent-filters>
-        <input class="search" name="search" placeholder="搜索主机名或 Agent ID">
-        <select name="status"><option value="">全部状态</option></select>
-        <select name="os"><option value="">全部系统</option></select>
-        <select name="arch"><option value="">全部架构</option></select>
-        <select name="version"><option value="">全部版本</option></select>
+      <section class="filters agent-filters-panel" data-agent-filters>
+        <label class="search-field">搜索
+          <input class="search" name="search" placeholder="搜索主机名或 Agent ID" aria-label="搜索主机名或 Agent ID">
+        </label>
+        <div class="filter-cluster">
+          <span class="filter-label">状态</span>
+          <div class="filter-chip-row" data-filter-group="status"></div>
+        </div>
+        <div class="filter-cluster">
+          <span class="filter-label">系统</span>
+          <div class="filter-chip-row" data-filter-group="os"></div>
+        </div>
+        <div class="filter-cluster">
+          <span class="filter-label">架构</span>
+          <div class="filter-chip-row" data-filter-group="arch"></div>
+        </div>
+        <div class="filter-select custom-select" data-version-filter>
+          <span class="filter-label">版本</span>
+          <button class="select-trigger" type="button" data-version-trigger aria-haspopup="listbox" aria-expanded="false">全部版本</button>
+          <div class="select-menu" data-version-menu hidden></div>
+        </div>
+        <button class="button" type="button" data-reset-agent-filters>清空筛选</button>
       </section>
       <article class="panel table-panel">
         <table class="agent-table">
-          <thead><tr><th>状态</th><th>主机名</th><th>系统</th><th>架构</th><th>Agent 版本</th><th>Agent ID</th><th>最后在线</th></tr></thead>
-          <tbody data-agent-list><tr><td colspan="7" class="muted">正在加载 Agent...</td></tr></tbody>
+          <thead><tr><th>状态</th><th>主机名</th><th>系统</th><th>架构</th><th>当前版本</th><th>目标版本</th><th>Agent ID</th><th>最后在线</th></tr></thead>
+          <tbody data-agent-list><tr><td colspan="8" class="muted">正在加载 Agent...</td></tr></tbody>
         </table>
       </article>
       <div class="drawer-backdrop" data-agent-backdrop hidden></div>
@@ -74,8 +68,8 @@
           <p class="muted" data-maintenance-agent></p>
           <label>操作
             <select data-maintenance-action>
-              <option value="upgrade">升级</option>
-              <option value="rollback">回滚</option>
+              <option value="upgrade">发起升级</option>
+              <option value="rollback">执行回滚</option>
             </select>
           </label>
           <label data-maintenance-package-row>版本

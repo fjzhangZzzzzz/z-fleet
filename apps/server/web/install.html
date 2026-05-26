@@ -26,54 +26,38 @@
           <h1>Agent 安装</h1>
           <p class="page-intro">选择目标平台和发布通道后，系统会直接生成安装命令。架构检测、安装包解析和版本选择都由脚本与后端自动完成。</p>
         </div>
-        <span class="status" data-status-for="install" role="status" aria-live="polite">准备就绪</span>
+        <span class="status" data-status-for="install" role="status" aria-live="polite"></span>
       </section>
-      <section class="grid two install-layout">
-        <article class="panel">
-          <p class="eyebrow">安装步骤</p>
-          <h2>最少输入，直接执行</h2>
-          <ol class="step-list">
-            <li><strong>选择平台</strong><span>决定输出 Linux 或 Windows 的安装脚本命令。</span></li>
-            <li><strong>选择发布通道</strong><span>按稳定、候选或开发通道获取默认发布版本。</span></li>
-            <li><strong>生成安装命令</strong><span>系统自动创建一次性注册凭证，并拼出完整命令。</span></li>
-            <li><strong>在目标机器执行</strong><span>脚本会检测架构、下载对应安装包并启动 Agent。</span></li>
-          </ol>
-          <div class="fields install-fields">
-            <label>平台
-              <select data-install-platform>
-                <option value="linux">Linux</option>
-                <option value="windows">Windows</option>
-              </select>
-            </label>
-            <label>发布通道
-              <select data-install-channel>
-                <option value="stable">稳定</option>
-                <option value="candidate">候选</option>
-                <option value="dev">开发</option>
-              </select>
-            </label>
-          </div>
-          <p class="muted note">安装脚本会在目标机器上自动识别架构，并向后端请求该平台和通道下的默认安装包。</p>
-        </article>
-        <article class="panel install-command-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">安装命令</p>
-              <h2>一键生成可执行命令</h2>
-            </div>
-            <button class="button primary compact" type="button" data-generate-install-command>生成安装命令</button>
-          </div>
-          <div class="stack-sm">
-            <p class="secret" data-install-token-output>生成命令时会自动创建一次性注册凭证，明文不会单独展示给用户。</p>
-            <div class="code-block">
-              <div class="code-block-head">
-                <span class="code-block-label" data-install-command-label>Linux / 稳定通道</span>
-                <button class="button compact" type="button" data-copy-install disabled>复制</button>
-              </div>
-              <pre data-install-command><code>选择平台和发布通道后，点击“生成安装命令”。</code></pre>
+      <section class="panel install-workbench">
+        <div class="install-toolbar">
+          <div class="install-inline-group" role="group" aria-labelledby="install-platform-title">
+            <span class="install-inline-label" id="install-platform-title">选择平台</span>
+            <div class="install-inline-options" data-install-platform-group>
+              <button class="choice-chip active" type="button" data-install-platform value="linux" aria-pressed="true">Linux</button>
+              <button class="choice-chip" type="button" data-install-platform value="windows" aria-pressed="false">Windows</button>
             </div>
           </div>
-        </article>
+          <div class="install-inline-group" role="group" aria-labelledby="install-channel-title">
+            <span class="install-inline-label" id="install-channel-title">选择通道</span>
+            <div class="install-inline-options" data-install-channel-group>
+              <button class="choice-chip active" type="button" data-install-channel value="stable" aria-pressed="true">稳定通道</button>
+              <button class="choice-chip" type="button" data-install-channel value="candidate" aria-pressed="false">候选通道</button>
+              <button class="choice-chip" type="button" data-install-channel value="dev" aria-pressed="false">开发通道</button>
+            </div>
+          </div>
+          <div class="install-toolbar-actions">
+            <button class="button primary" type="button" data-generate-install-command>生成安装命令</button>
+          </div>
+        </div>
+        <p class="muted install-inline-note">脚本会在目标机器上自动识别架构，并下载当前平台与通道下的默认安装包。</p>
+        <p class="secret" data-install-token-output>生成命令时会自动创建一次性注册凭证，明文不会单独展示给用户。</p>
+        <div class="code-block">
+          <div class="code-block-head">
+            <span class="code-block-label" data-install-command-label>Linux · 稳定通道</span>
+            <button class="code-copy-button" type="button" data-copy-install disabled>复制</button>
+          </div>
+          <pre data-install-command><code>选择平台和发布通道后，点击“生成安装命令”。</code></pre>
+        </div>
       </section>
     </main>
   </div>

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -188,6 +189,16 @@ AssetSnapshotSummary ParseAssetSnapshotSummary(SQLite::Statement& query) {
 }
 
 AgentPackageRecord ParseAgentPackageRecord(SQLite::Statement& query) {
+  std::vector<std::string> published_channels;
+  if (query.getColumnCount() > 16 && !query.isColumnNull(16)) {
+    std::stringstream stream(query.getColumn(16).getString());
+    std::string channel;
+    while (std::getline(stream, channel, ',')) {
+      if (!channel.empty()) {
+        published_channels.push_back(channel);
+      }
+    }
+  }
   return AgentPackageRecord{
       .package_id = query.getColumn(0).getString(),
       .component = query.getColumn(1).getString(),
@@ -205,6 +216,7 @@ AgentPackageRecord ParseAgentPackageRecord(SQLite::Statement& query) {
       .validated_at = NullableOptionalColumn(query, 13),
       .published_at = NullableOptionalColumn(query, 14),
       .retired_at = NullableOptionalColumn(query, 15),
+      .published_channels = std::move(published_channels),
   };
 }
 
@@ -1982,24 +1994,43 @@ std::vector<AgentPackageRecord> ServerDatabase::ListAgentPackages() const {
         db,
         R"sql(
         select
-          package_id,
-          component,
-          version,
-          platform,
-          arch,
-          build_type,
-          filename,
-          storage_path,
-          size_bytes,
-          sha256,
-          manifest_json,
-          status,
-          uploaded_at,
-          validated_at,
-          published_at,
-          retired_at
-        from agent_packages
-        order by uploaded_at desc, package_id asc
+          p.package_id,
+          p.component,
+          p.version,
+          p.platform,
+          p.arch,
+          p.build_type,
+          p.filename,
+          p.storage_path,
+          p.size_bytes,
+          p.sha256,
+          p.manifest_json,
+          p.status,
+          p.uploaded_at,
+          p.validated_at,
+          p.published_at,
+          p.retired_at,
+          coalesce(group_concat(case when pub.is_default = 1 then pub.channel end), '')
+        from agent_packages p
+        left join package_publications pub on pub.package_id = p.package_id
+        group by
+          p.package_id,
+          p.component,
+          p.version,
+          p.platform,
+          p.arch,
+          p.build_type,
+          p.filename,
+          p.storage_path,
+          p.size_bytes,
+          p.sha256,
+          p.manifest_json,
+          p.status,
+          p.uploaded_at,
+          p.validated_at,
+          p.published_at,
+          p.retired_at
+        order by p.uploaded_at desc, p.package_id asc
       )sql");
     std::vector<AgentPackageRecord> packages;
     while (query.executeStep()) {
@@ -2017,24 +2048,43 @@ std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
         db,
         R"sql(
         select
-          package_id,
-          component,
-          version,
-          platform,
-          arch,
-          build_type,
-          filename,
-          storage_path,
-          size_bytes,
-          sha256,
-          manifest_json,
-          status,
-          uploaded_at,
-          validated_at,
-          published_at,
-          retired_at
-        from agent_packages
-        where package_id = ?
+          p.package_id,
+          p.component,
+          p.version,
+          p.platform,
+          p.arch,
+          p.build_type,
+          p.filename,
+          p.storage_path,
+          p.size_bytes,
+          p.sha256,
+          p.manifest_json,
+          p.status,
+          p.uploaded_at,
+          p.validated_at,
+          p.published_at,
+          p.retired_at,
+          coalesce(group_concat(case when pub.is_default = 1 then pub.channel end), '')
+        from agent_packages p
+        left join package_publications pub on pub.package_id = p.package_id
+        where p.package_id = ?
+        group by
+          p.package_id,
+          p.component,
+          p.version,
+          p.platform,
+          p.arch,
+          p.build_type,
+          p.filename,
+          p.storage_path,
+          p.size_bytes,
+          p.sha256,
+          p.manifest_json,
+          p.status,
+          p.uploaded_at,
+          p.validated_at,
+          p.published_at,
+          p.retired_at
       )sql");
     query.bind(1, package_id);
     if (!query.executeStep()) {

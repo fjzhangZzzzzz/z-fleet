@@ -606,6 +606,9 @@ TEST_CASE("server database stores package channel and registration tokens") {
   REQUIRE(package.has_value());
   REQUIRE(package->package_id == "pkg-1");
   REQUIRE(package->status == "published");
+  const auto stored_package = database.FindAgentPackage("pkg-1");
+  REQUIRE(stored_package.has_value());
+  REQUIRE(stored_package->published_channels == std::vector<std::string>{"stable"});
 
   database.CreateRegistrationToken(zfleet::server::RegistrationTokenRecord{
       .token_id = "token-1",
@@ -916,6 +919,8 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   const auto publish = SendHttpRequest(server.port(), publish_request);
   REQUIRE(publish.status == 200);
   REQUIRE(publish.body.find("\"status\":\"published\"") != std::string::npos);
+  REQUIRE(publish.body.find("\"published_channels\":[\"candidate\"]") !=
+          std::string::npos);
 
   const std::string upgrade_body =
       "{\"package_id\":\"" + package_id + "\",\"set_by\":\"admin\"}";

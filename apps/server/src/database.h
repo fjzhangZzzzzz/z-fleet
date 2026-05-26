@@ -75,6 +75,7 @@ struct AgentPackageRecord {
   std::optional<std::string> validated_at;
   std::optional<std::string> published_at;
   std::optional<std::string> retired_at;
+  std::vector<std::string> published_channels;
 };
 
 struct RegistrationTokenRecord {
