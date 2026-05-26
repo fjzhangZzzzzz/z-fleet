@@ -1,32 +1,32 @@
 #include "management_http_server.h"
 
+#include <algorithm>
+#include <array>
+#include <boost/asio/error.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/http.hpp>
+#include <charconv>
+#include <chrono>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+
 #include "install_platform_registry.h"
+#include "installer_policy_registry.h"
 #include "management_json_codec.h"
 #include "package_repository.h"
-
+#include "package_selection_policy.h"
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/manifest.h"
 #include "zfleet/protocol/json_codec.h"
-
-#include <boost/asio/error.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/http.hpp>
-#include <nlohmann/json.hpp>
-
-#include <algorithm>
-#include <array>
-#include <charconv>
-#include <chrono>
-#include <fstream>
-#include <map>
-#include <memory>
-#include <optional>
-#include <stdexcept>
-#include <string_view>
 
 namespace zfleet::server {
 namespace {
@@ -129,17 +129,15 @@ HttpResponse JsonResponse(nlohmann::json body, int status = 200) {
   };
 }
 
-HttpResponse ErrorResponse(int status,
-                           std::string code,
-                           std::string message,
+HttpResponse ErrorResponse(int status, std::string code, std::string message,
                            bool retryable = false) {
-  return JsonResponse({{"protocol_version",
-                        std::string(zfleet::protocol::protocol_version())},
-                       {"occurred_at", zfleet::core::NowUtcRfc3339()},
-                       {"error_code", std::move(code)},
-                       {"message", std::move(message)},
-                       {"retryable", retryable}},
-                      status);
+  return JsonResponse(
+      {{"protocol_version", std::string(zfleet::protocol::protocol_version())},
+       {"occurred_at", zfleet::core::NowUtcRfc3339()},
+       {"error_code", std::move(code)},
+       {"message", std::move(message)},
+       {"retryable", retryable}},
+      status);
 }
 
 template <typename Body>
@@ -152,10 +150,10 @@ HttpRequest ToApplicationRequest(const http::request<Body>& input) {
   if (query_start == std::string::npos) {
     request.path = UrlDecode(request.target);
   } else {
-    request.path = UrlDecode(std::string_view(request.target).substr(
-        0, query_start));
-    request.query = ParseQuery(std::string_view(request.target).substr(
-        query_start + 1));
+    request.path =
+        UrlDecode(std::string_view(request.target).substr(0, query_start));
+    request.query =
+        ParseQuery(std::string_view(request.target).substr(query_start + 1));
   }
   return request;
 }
@@ -285,8 +283,7 @@ nlohmann::json InstallPackageJson(const AgentPackageRecord& package) {
   };
 }
 
-std::string QueryValue(const HttpRequest& request,
-                       std::string_view name,
+std::string QueryValue(const HttpRequest& request, std::string_view name,
                        std::string fallback) {
   if (const auto it = request.query.find(std::string(name));
       it != request.query.end() && !it->second.empty()) {
@@ -303,8 +300,7 @@ std::string PathTail(std::string_view path, std::string_view prefix) {
 }
 
 std::filesystem::path SafePackageStoragePath(
-    const std::filesystem::path& repository,
-    std::string_view package_id) {
+    const std::filesystem::path& repository, std::string_view package_id) {
   if (package_id.empty() || package_id.find('/') != std::string_view::npos ||
       package_id.find('\\') != std::string_view::npos ||
       package_id.find("..") != std::string_view::npos) {
@@ -314,11 +310,9 @@ std::filesystem::path SafePackageStoragePath(
 }
 
 HttpResponse CommitAgentPackageUpload(
-    const HttpRequest& request,
-    ServerDatabase* database,
+    const HttpRequest& request, ServerDatabase* database,
     const std::filesystem::path& package_repository,
-    const std::filesystem::path& staging_path,
-    const std::string& package_id,
+    const std::filesystem::path& staging_path, const std::string& package_id,
     std::uintmax_t uploaded_bytes) {
   if (uploaded_bytes == 0) {
     std::error_code ignored;
@@ -352,16 +346,16 @@ HttpResponse CommitAgentPackageUpload(
         .validated_at = now,
     };
     database->UpsertAgentPackage(record);
-    RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::package_validated,
-        package_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"package_id", package_id},
-             {"version", metadata.version},
-             {"platform", metadata.platform},
-             {"arch", metadata.arch},
-             {"build_type", metadata.build_type},
-             {"component", metadata.component}}));
+    RecordManagementAudit(database,
+                          zfleet::protocol::AuditEventType::package_validated,
+                          package_id, "success",
+                          zfleet::protocol::SerializeAuditPayload(
+                              {{"package_id", package_id},
+                               {"version", metadata.version},
+                               {"platform", metadata.platform},
+                               {"arch", metadata.arch},
+                               {"build_type", metadata.build_type},
+                               {"component", metadata.component}}));
     return JsonResponse(ToJson(record), 201);
   } catch (const std::exception& ex) {
     std::error_code ignored;
@@ -402,9 +396,8 @@ std::optional<HttpResponse> HandleAgentApi(const ApiContext& ctx) {
       request.path.rfind("/api/v1/agents/", 0) == 0) {
     const auto rest = PathTail(request.path, "/api/v1/agents/");
     const auto delimiter = rest.find('/');
-    const auto agent_id = delimiter == std::string::npos
-                              ? rest
-                              : rest.substr(0, delimiter);
+    const auto agent_id =
+        delimiter == std::string::npos ? rest : rest.substr(0, delimiter);
     if (delimiter == std::string::npos) {
       const auto agent = database->FindAgent(agent_id);
       if (!agent.has_value()) {
@@ -471,7 +464,7 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
       return ErrorResponse(400, "missing_required_field",
                            "server_url and token are required");
     }
-    if (platform != "linux" && platform != "windows") {
+    if (FindInstallPlatformSpec(platform) == nullptr) {
       return ErrorResponse(400, "platform_not_allowed",
                            "platform must be linux or windows");
     }
@@ -486,9 +479,10 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
         .channel = channel,
         .root = root,
     };
-    return JsonResponse({{"platform", platform},
-                         {"script_url", InstallScriptUrl(platform, server_url)},
-                         {"command", BuildInstallCommand(platform, command_request)}});
+    return JsonResponse(
+        {{"platform", platform},
+         {"script_url", InstallScriptUrl(platform, server_url)},
+         {"command", BuildInstallCommand(platform, command_request)}});
   }
 
   if (request.method == "GET" && request.path == "/api/v1/install/options") {
@@ -500,21 +494,20 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
       return ErrorResponse(400, "build_type_not_allowed",
                            "build_type must be debug or release");
     }
-    nlohmann::json body = {
-        {"server_url", ""},
-        {"channel", channel},
-        {"platform", platform},
-        {"arch", arch},
-        {"build_type", build_type},
-    };
-    const auto agent = database->FindDefaultPublishedAgentPackage(
-        "agent", channel, platform, arch, build_type);
+    nlohmann::json body = {{"server_url", ""},
+                           {"channel", channel},
+                           {"platform", platform},
+                           {"arch", arch},
+                           {"build_type", build_type}};
+    const auto selection = ResolveInstallPackageSelection(
+        database, "agent", channel, platform, arch, build_type);
+    const auto& agent = selection.agent;
     if (!agent.has_value()) {
-      return ErrorResponse(404, "no_agent_package",
-                           "no published agent package matches install options");
+      return ErrorResponse(
+          404, "no_agent_package",
+          "no published agent package matches install options");
     }
-    const auto installer = database->FindDefaultPublishedAgentPackage(
-        "installer", channel, platform, arch, build_type);
+    const auto& installer = selection.installer;
     const auto agent_manifest =
         zfleet::package::ParseManifestJson(agent->manifest_json);
     if (!installer.has_value() ||
@@ -594,10 +587,11 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
         .capability_level = zfleet::protocol::CapabilityLevel::high_risk_write,
         .created_at = now,
         .expires_at = input.expires_at,
-        .input = zfleet::protocol::PackageUpdateInput{
-            .action = "rollback",
-            .component = "agent",
-        },
+        .input =
+            zfleet::protocol::PackageUpdateInput{
+                .action = "rollback",
+                .component = "agent",
+            },
     };
     database->ScheduleAgentRollback(agent_id, input.set_by, now, task);
     RecordManagementAudit(
@@ -605,14 +599,14 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
         task_id, "success",
         zfleet::protocol::SerializeAuditPayload(
             {{"agent_id", agent_id}, {"task_id", task_id}}));
-    RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::task_queued,
-        task_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"agent_id", agent_id},
-             {"task_id", task_id},
-             {"task_type", std::string("package_update")},
-             {"action", std::string("rollback")}}));
+    RecordManagementAudit(database,
+                          zfleet::protocol::AuditEventType::task_queued,
+                          task_id, "success",
+                          zfleet::protocol::SerializeAuditPayload(
+                              {{"agent_id", agent_id},
+                               {"task_id", task_id},
+                               {"task_type", std::string("package_update")},
+                               {"action", std::string("rollback")}}));
     return JsonResponse({{"task_id", task_id},
                          {"agent_id", agent_id},
                          {"upgrade_state", "queued"},
@@ -667,28 +661,28 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
     const auto expires_at = input.expires_at;
     const auto manifest =
         zfleet::package::ParseManifestJson(package->manifest_json);
-    const auto create_package_task =
-        [&](const AgentPackageRecord& target, const std::string& id) {
-          return zfleet::protocol::Task{
-              .protocol_version =
-                  std::string(zfleet::protocol::protocol_version()),
-              .task_id = id,
-              .agent_id = agent_id,
-              .task_type = zfleet::protocol::TaskType::package_update,
-              .capability_level =
-                  zfleet::protocol::CapabilityLevel::high_risk_write,
-              .created_at = now,
-              .expires_at = expires_at,
-              .input = zfleet::protocol::PackageUpdateInput{
+    const auto create_package_task = [&](const AgentPackageRecord& target,
+                                         const std::string& id) {
+      return zfleet::protocol::Task{
+          .protocol_version = std::string(zfleet::protocol::protocol_version()),
+          .task_id = id,
+          .agent_id = agent_id,
+          .task_type = zfleet::protocol::TaskType::package_update,
+          .capability_level =
+              zfleet::protocol::CapabilityLevel::high_risk_write,
+          .created_at = now,
+          .expires_at = expires_at,
+          .input =
+              zfleet::protocol::PackageUpdateInput{
                   .component = target.component,
                   .package_id = target.package_id,
                   .version = target.version,
                   .platform = target.platform,
                   .arch = target.arch,
                   .build_type = target.build_type,
-                  .package_url =
-                      ctx.package_download_base_url + "/api/v1/packages/" +
-                      target.component + "/" + target.package_id + "/download",
+                  .package_url = ctx.package_download_base_url +
+                                 "/api/v1/packages/" + target.component + "/" +
+                                 target.package_id + "/download",
                   .package_sha256 = target.sha256,
                   .manifest_sha256 =
                       zfleet::crypto::Sha256BytesHex(target.manifest_json),
@@ -698,31 +692,19 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
                   .allow_downgrade = false,
                   .force = false,
               },
-          };
-        };
+      };
+    };
     const auto task = create_package_task(*package, task_id);
     std::optional<zfleet::protocol::Task> prerequisite_task;
     if (!manifest.min_installer_version.empty()) {
-      std::optional<AgentPackageRecord> installer;
-      for (const auto& candidate : database->ListAgentPackages()) {
-        if (candidate.component == "installer" &&
-            candidate.status == "published" &&
-            candidate.platform == package->platform &&
-            candidate.arch == package->arch &&
-            candidate.build_type == package->build_type &&
-            VersionAtLeast(candidate.version, manifest.min_installer_version)) {
-          if (!installer.has_value() ||
-              VersionAtLeast(candidate.version, installer->version)) {
-            installer = candidate;
-          }
-        }
-      }
+      const auto installer = FindCompatibleInstallerPackage(
+          database, *package, manifest.min_installer_version);
       if (!installer.has_value()) {
         return ErrorResponse(409, "installer_too_old",
                              "no compatible installer package is published");
       }
-      prerequisite_task = create_package_task(
-          *installer, zfleet::core::GenerateUuid());
+      prerequisite_task =
+          create_package_task(*installer, zfleet::core::GenerateUuid());
     }
     database->ScheduleAgentUpgrade(agent_id, package->version, package_id,
                                    input.set_by, now, task, prerequisite_task);
@@ -735,34 +717,34 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
              {"task_id", task_id},
              {"capability_level", std::string("high_risk_write")}}));
     if (prerequisite_task.has_value()) {
-      RecordManagementAudit(
-          database, zfleet::protocol::AuditEventType::task_queued,
-          prerequisite_task->task_id, "success",
-          zfleet::protocol::SerializeAuditPayload(
-              {{"agent_id", agent_id},
-               {"task_id", prerequisite_task->task_id},
-               {"task_type", std::string("package_update")},
-               {"component", std::string("installer")},
-               {"next_task_id", task_id}}));
+      RecordManagementAudit(database,
+                            zfleet::protocol::AuditEventType::task_queued,
+                            prerequisite_task->task_id, "success",
+                            zfleet::protocol::SerializeAuditPayload(
+                                {{"agent_id", agent_id},
+                                 {"task_id", prerequisite_task->task_id},
+                                 {"task_type", std::string("package_update")},
+                                 {"component", std::string("installer")},
+                                 {"next_task_id", task_id}}));
     }
-    RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::task_queued,
-        task_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"agent_id", agent_id},
-             {"task_id", task_id},
-             {"task_type", std::string("package_update")},
-             {"package_id", package_id}}));
-    return JsonResponse({{"task_id", task_id},
-                         {"prerequisite_task_id",
-                          prerequisite_task.has_value()
-                              ? prerequisite_task->task_id
-                              : std::string{}},
-                         {"agent_id", agent_id},
-                         {"desired_package_id", package_id},
-                         {"desired_version", package->version},
-                         {"upgrade_state", "queued"}},
-                        201);
+    RecordManagementAudit(database,
+                          zfleet::protocol::AuditEventType::task_queued,
+                          task_id, "success",
+                          zfleet::protocol::SerializeAuditPayload(
+                              {{"agent_id", agent_id},
+                               {"task_id", task_id},
+                               {"task_type", std::string("package_update")},
+                               {"package_id", package_id}}));
+    return JsonResponse(
+        {{"task_id", task_id},
+         {"prerequisite_task_id", prerequisite_task.has_value()
+                                      ? prerequisite_task->task_id
+                                      : std::string{}},
+         {"agent_id", agent_id},
+         {"desired_package_id", package_id},
+         {"desired_version", package->version},
+         {"upgrade_state", "queued"}},
+        201);
   }
 
   return std::nullopt;
@@ -810,10 +792,9 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
                            "retired package cannot be published");
     }
     const auto published_at = zfleet::core::NowUtcRfc3339();
-    database->PublishAgentPackage(package_id, package->component, channel,
-                                  package->platform, package->arch,
-                                  package->build_type, input.published_by,
-                                  published_at);
+    database->PublishAgentPackage(
+        package_id, package->component, channel, package->platform,
+        package->arch, package->build_type, input.published_by, published_at);
     RecordManagementAudit(
         database, zfleet::protocol::AuditEventType::package_published,
         package_id, "success",
@@ -835,8 +816,8 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
     }
     database->RetireAgentPackage(package_id, zfleet::core::NowUtcRfc3339());
     RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::package_retired,
-        package_id, "success",
+        database, zfleet::protocol::AuditEventType::package_retired, package_id,
+        "success",
         zfleet::protocol::SerializeAuditPayload({{"package_id", package_id}}));
     return JsonResponse(ToJson(*database->FindAgentPackage(package_id)));
   }
@@ -853,9 +834,8 @@ std::optional<HttpResponse> HandlePackageDownloadApi(const ApiContext& ctx) {
     const auto prefix = std::string("/api/v1/packages/");
     const auto suffix = std::string("/download");
     if (request.path.ends_with(suffix)) {
-      const auto rest =
-          request.path.substr(prefix.size(),
-                              request.path.size() - prefix.size() - suffix.size());
+      const auto rest = request.path.substr(
+          prefix.size(), request.path.size() - prefix.size() - suffix.size());
       const auto delimiter = rest.find('/');
       if (delimiter == std::string::npos) {
         return ErrorResponse(404, "not_found", "endpoint was not found");
@@ -887,8 +867,7 @@ std::optional<HttpResponse> HandlePackageDownloadApi(const ApiContext& ctx) {
   return std::nullopt;
 }
 
-HttpResponse HandleApi(const HttpRequest& request,
-                       ServerDatabase* database,
+HttpResponse HandleApi(const HttpRequest& request, ServerDatabase* database,
                        const std::filesystem::path& package_repository,
                        bool allow_high_risk_write,
                        const std::string& package_download_base_url,
@@ -968,8 +947,7 @@ HttpResponse HandleApi(const HttpRequest& request,
   return ErrorResponse(404, "not_found", "endpoint was not found");
 }
 
-HttpResponse RouteRequest(const HttpRequest& request,
-                          ServerDatabase* database,
+HttpResponse RouteRequest(const HttpRequest& request, ServerDatabase* database,
                           const std::filesystem::path& package_repository,
                           const StaticFileService& static_files,
                           bool allow_high_risk_write,
@@ -979,8 +957,7 @@ HttpResponse RouteRequest(const HttpRequest& request,
   if (request.path.rfind("/api/v1/", 0) == 0) {
     return HandleApi(request, database, package_repository,
                      allow_high_risk_write, package_download_base_url,
-                     control_url,
-                     web_static_root);
+                     control_url, web_static_root);
   }
   if (request.method != "GET") {
     return ErrorResponse(405, "method_not_allowed", "method is not allowed");
@@ -996,8 +973,7 @@ HttpResponse RouteRequest(const HttpRequest& request,
 class ManagementHttpSession
     : public std::enable_shared_from_this<ManagementHttpSession> {
  public:
-  ManagementHttpSession(tcp::socket socket,
-                        ServerDatabase* database,
+  ManagementHttpSession(tcp::socket socket, ServerDatabase* database,
                         const std::filesystem::path& package_repository,
                         const StaticFileService& static_files,
                         ManagementHttpServerOptions options)
@@ -1026,13 +1002,9 @@ class ManagementHttpSession
     ArmTimeout();
     auto self = shared_from_this();
     http::async_read_header(
-        socket_,
-        buffer_,
-        *parser_,
+        socket_, buffer_, *parser_,
         [self](const boost::system::error_code& error,
-               std::size_t /*bytes_transferred*/) {
-          self->OnHeader(error);
-        });
+               std::size_t /*bytes_transferred*/) { self->OnHeader(error); });
   }
 
  private:
@@ -1086,8 +1058,7 @@ class ManagementHttpSession
 
   bool OpenStagingFile() {
     package_id_ = zfleet::core::GenerateUuid();
-    staging_path_ =
-        package_repository_ / ".staging" / (package_id_ + ".zip");
+    staging_path_ = package_repository_ / ".staging" / (package_id_ + ".zip");
     try {
       std::filesystem::create_directories(staging_path_.parent_path());
       staging_stream_.open(staging_path_, std::ios::binary | std::ios::trunc);
@@ -1111,22 +1082,18 @@ class ManagementHttpSession
     parser_->get().body().data = body_buffer_.data();
     parser_->get().body().size = body_buffer_.size();
     auto self = shared_from_this();
-    http::async_read_some(
-        socket_,
-        buffer_,
-        *parser_,
-        [self](const boost::system::error_code& error,
-               std::size_t /*bytes_transferred*/) {
-          self->OnBodyChunk(error);
-        });
+    http::async_read_some(socket_, buffer_, *parser_,
+                          [self](const boost::system::error_code& error,
+                                 std::size_t /*bytes_transferred*/) {
+                            self->OnBodyChunk(error);
+                          });
   }
 
   void OnBodyChunk(const boost::system::error_code& error) {
     if (responding_) {
       return;
     }
-    const auto body_bytes =
-        body_buffer_.size() - parser_->get().body().size;
+    const auto body_bytes = body_buffer_.size() - parser_->get().body().size;
     if (body_bytes != 0) {
       if (streaming_upload_) {
         staging_stream_.write(body_buffer_.data(),
@@ -1180,13 +1147,11 @@ class ManagementHttpSession
         Respond(RouteRequest(request_, database_, package_repository_,
                              static_files_, options_.allow_high_risk_write,
                              options_.package_download_base_url,
-                             options_.control_url,
-                             options_.web_static_root));
+                             options_.control_url, options_.web_static_root));
       }
     } catch (const std::exception& ex) {
       ZFLOG_ERROR(zfleet::core::log::Component("management_http"),
-                  "management request failed: {}",
-                  ex.what());
+                  "management request failed: {}", ex.what());
       Respond(ErrorResponse(500, "internal_error", ex.what()));
     }
   }
@@ -1202,12 +1167,9 @@ class ManagementHttpSession
     output_ = ToBeastResponse(response);
     auto self = shared_from_this();
     http::async_write(
-        socket_,
-        output_,
+        socket_, output_,
         [self](const boost::system::error_code& /*error*/,
-               std::size_t /*bytes_transferred*/) {
-          self->Close();
-        });
+               std::size_t /*bytes_transferred*/) { self->Close(); });
   }
 
   void Close() {
@@ -1246,11 +1208,9 @@ class ManagementHttpSession
 }  // namespace
 
 ManagementHttpServer::ManagementHttpServer(
-    std::string listen_address,
-    ServerDatabase* database,
+    std::string listen_address, ServerDatabase* database,
     std::filesystem::path package_repository,
-    std::filesystem::path web_static_dir,
-    ManagementHttpServerOptions options)
+    std::filesystem::path web_static_dir, ManagementHttpServerOptions options)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(),
       acceptor_(io_context_),
@@ -1261,9 +1221,7 @@ ManagementHttpServer::ManagementHttpServer(
   options_.web_static_root = static_files_.root();
 }
 
-ManagementHttpServer::~ManagementHttpServer() {
-  Stop();
-}
+ManagementHttpServer::~ManagementHttpServer() { Stop(); }
 
 void ManagementHttpServer::Run() {
   Start();
@@ -1287,9 +1245,7 @@ void ManagementHttpServer::Start() {
 
   const auto thread_count = std::max<std::size_t>(1, options_.io_threads);
   for (std::size_t i = 0; i < thread_count; ++i) {
-    io_threads_.emplace_back([this] {
-      io_context_.run();
-    });
+    io_threads_.emplace_back([this] { io_context_.run(); });
   }
 }
 
@@ -1316,20 +1272,18 @@ std::uint16_t ManagementHttpServer::port() const noexcept {
 }
 
 void ManagementHttpServer::StartAccept() {
-  acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
-    if (!ec) {
-      std::make_shared<ManagementHttpSession>(
-          std::move(socket),
-          database_,
-          package_repository_,
-          static_files_,
-          options_)
-          ->Start();
-    }
-    if (!stopping_) {
-      StartAccept();
-    }
-  });
+  acceptor_.async_accept(
+      [this](boost::system::error_code ec, tcp::socket socket) {
+        if (!ec) {
+          std::make_shared<ManagementHttpSession>(std::move(socket), database_,
+                                                  package_repository_,
+                                                  static_files_, options_)
+              ->Start();
+        }
+        if (!stopping_) {
+          StartAccept();
+        }
+      });
 }
 
 }  // namespace zfleet::server

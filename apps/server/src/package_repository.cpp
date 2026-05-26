@@ -4,8 +4,8 @@
 #include <zfleet/package/archive.h>
 #include <zfleet/package/manifest.h>
 
-#include <exception>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -14,23 +14,21 @@
 #include <utility>
 #include <vector>
 
+#include "package_component_policy.h"
+
 namespace zfleet::server {
 namespace {
 
 namespace fs = std::filesystem;
 
 constexpr std::string_view kManifestPath = "META/manifest.json";
-bool SupportedPackageComponent(std::string_view component) {
-  return component == "agent" || component == "installer";
-}
 
 std::string BytesToString(const std::vector<std::uint8_t>& bytes) {
   return std::string(bytes.begin(), bytes.end());
 }
 
-std::vector<std::uint8_t> ReadArchiveBytes(
-    const fs::path& archive_path,
-    std::string_view archive_file_path) {
+std::vector<std::uint8_t> ReadArchiveBytes(const fs::path& archive_path,
+                                           std::string_view archive_file_path) {
   try {
     return zfleet::package::ReadArchiveFile(archive_path, archive_file_path);
   } catch (const std::exception&) {
@@ -63,11 +61,11 @@ std::uint64_t FileSizeBytes(const fs::path& path) {
   }
 }
 
-void ValidateManifestFile(const fs::path& archive_path,
-                          const std::unordered_map<std::string,
-                                                   zfleet::package::ArchiveEntry>&
-                              archive_entries,
-                          const zfleet::package::ManifestFile& file) {
+void ValidateManifestFile(
+    const fs::path& archive_path,
+    const std::unordered_map<std::string, zfleet::package::ArchiveEntry>&
+        archive_entries,
+    const zfleet::package::ManifestFile& file) {
   if (archive_entries.find(file.source) == archive_entries.end()) {
     throw std::invalid_argument("manifest file missing from archive: " +
                                 file.source);
@@ -78,19 +76,18 @@ void ValidateManifestFile(const fs::path& archive_path,
     throw std::invalid_argument("manifest file size mismatch: " + file.source);
   }
 
-  const auto file_sha256 = zfleet::crypto::Sha256BytesHex(
-      std::string_view(reinterpret_cast<const char*>(file_bytes.data()),
-                       file_bytes.size()));
+  const auto file_sha256 = zfleet::crypto::Sha256BytesHex(std::string_view(
+      reinterpret_cast<const char*>(file_bytes.data()), file_bytes.size()));
   if (file_sha256 != file.sha256) {
-    throw std::invalid_argument("manifest file sha256 mismatch: " + file.source);
+    throw std::invalid_argument("manifest file sha256 mismatch: " +
+                                file.source);
   }
 }
 
 }  // namespace
 
 AgentPackageMetadata ValidateAgentPackageUpload(
-    const fs::path& staged_package_path,
-    const std::string& filename) {
+    const fs::path& staged_package_path, const std::string& filename) {
   if (!fs::exists(staged_package_path)) {
     throw std::runtime_error("package archive does not exist: " +
                              staged_package_path.string());
@@ -100,7 +97,8 @@ AgentPackageMetadata ValidateAgentPackageUpload(
                              staged_package_path.string());
   }
 
-  std::unordered_map<std::string, zfleet::package::ArchiveEntry> archive_entries;
+  std::unordered_map<std::string, zfleet::package::ArchiveEntry>
+      archive_entries;
   try {
     archive_entries =
         IndexEntries(zfleet::package::ListArchiveEntries(staged_package_path));
@@ -113,15 +111,17 @@ AgentPackageMetadata ValidateAgentPackageUpload(
     throw std::invalid_argument("package archive missing META/manifest.json");
   }
 
-  const auto manifest_json = ReadArchiveText(staged_package_path, kManifestPath);
+  const auto manifest_json =
+      ReadArchiveText(staged_package_path, kManifestPath);
   const auto manifest = zfleet::package::ParseManifestJson(manifest_json);
-  if (!SupportedPackageComponent(manifest.component)) {
-    throw std::invalid_argument("manifest component must be agent or installer");
+  if (!IsSupportedPackageComponent(manifest.component)) {
+    throw std::invalid_argument(
+        "manifest component must be agent or installer");
   }
-  const auto expected_filename =
-      "zfleet_" + manifest.component + "-v" + manifest.version + "-" +
-      manifest.platform + "-" + manifest.arch + "-" + manifest.build_type +
-      ".zip";
+  const auto expected_filename = "zfleet_" + manifest.component + "-v" +
+                                 manifest.version + "-" + manifest.platform +
+                                 "-" + manifest.arch + "-" +
+                                 manifest.build_type + ".zip";
   if (filename != expected_filename) {
     throw std::invalid_argument(
         "package filename metadata does not match manifest: expected " +
