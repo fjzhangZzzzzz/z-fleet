@@ -1616,6 +1616,14 @@ TEST_CASE("http2 control service stores task running and result events") {
       ReadTaskResultBlob(database_path, "task-1", "result_blob")));
   REQUIRE(stored_result.hostname() == "devbox-01");
   REQUIRE(ReadTaskResultBlob(database_path, "task-1", "error_blob").empty());
+
+  const auto repeated_result = service.HandleAgentEvent(TaskSucceededEvent(
+      "task-result-1-repeat", "agent-1", "task-1",
+      "2026-05-21T10:00:04Z"));
+  REQUIRE(repeated_result.status ==
+          zfleet::server::ControlEventStatus::kInvalidArgument);
+  REQUIRE(repeated_result.message == "task already finished");
+  REQUIRE(CountRows(database_path, "task_results") == 1);
 }
 
 TEST_CASE("http2 control service stores failed task error columns and blob") {

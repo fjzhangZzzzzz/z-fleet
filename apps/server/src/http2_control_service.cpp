@@ -129,12 +129,6 @@ std::optional<zfleet::protocol::ErrorCode> ToDomainErrorCode(
   return std::nullopt;
 }
 
-bool IsTerminal(zfleet::protocol::TaskState state) {
-  return state == zfleet::protocol::TaskState::succeeded ||
-         state == zfleet::protocol::TaskState::failed ||
-         state == zfleet::protocol::TaskState::expired;
-}
-
 zfleet::protocol::AuditEventType AuditEventForTaskResult(
     zfleet::protocol::TaskExecutionStatus status) {
   switch (status) {
@@ -217,7 +211,7 @@ ControlEventResult Http2ControlService::HandleTaskRunning(
     if (stored_task->task.task_type != request.task_type) {
       return InvalidArgument("task type does not match stored task");
     }
-    if (IsTerminal(stored_task->state)) {
+    if (zfleet::protocol::IsTerminalTaskState(stored_task->state)) {
       return InvalidArgument("task already finished");
     }
     if (stored_task->state != zfleet::protocol::TaskState::assigned) {
@@ -320,7 +314,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
     if (stored_task->task.task_type != request.task_type) {
       return InvalidArgument("task type does not match stored task");
     }
-    if (IsTerminal(stored_task->state)) {
+    if (zfleet::protocol::IsTerminalTaskState(stored_task->state)) {
       return InvalidArgument("task already finished");
     }
 

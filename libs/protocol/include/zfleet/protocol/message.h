@@ -222,4 +222,9 @@ std::optional<TaskExecutionStatus> TaskExecutionStatusFromString(
     std::string_view status) noexcept;
 std::optional<TaskState> TaskStateFromString(std::string_view state) noexcept;
 
+bool IsTerminalTaskState(TaskState state) noexcept;
+bool CanTransitionTaskState(TaskState from, TaskState to) noexcept;
+CapabilityLevel RequiredCapabilityForTaskType(TaskType task_type) noexcept;
+bool TaskInputMatchesType(TaskType task_type, const TaskInput& input) noexcept;
+
 } // namespace zfleet::protocol

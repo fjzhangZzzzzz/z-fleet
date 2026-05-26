@@ -2,21 +2,20 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <sqlite3.h>
-#include <nlohmann/json.hpp>
 
 #include <boost/asio/post.hpp>
-
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
-#include <vector>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace zfleet::server {
 namespace {
@@ -59,21 +58,16 @@ std::string SerializeProto(const Message& message) {
 
 std::string SerializeTaskInputBlob(zfleet::protocol::TaskType task_type,
                                    const zfleet::protocol::TaskInput& input) {
+  if (!zfleet::protocol::TaskInputMatchesType(task_type, input)) {
+    throw std::runtime_error("task input type mismatch");
+  }
+
   switch (task_type) {
     case zfleet::protocol::TaskType::collect_basic_inventory: {
-      if (!std::holds_alternative<zfleet::protocol::CollectBasicInventoryInput>(
-              input)) {
-        throw std::runtime_error(
-            "task input type mismatch for collect_basic_inventory");
-      }
       proto::CollectBasicInventoryInput message;
       return SerializeProto(message);
     }
     case zfleet::protocol::TaskType::package_update: {
-      if (!std::holds_alternative<zfleet::protocol::PackageUpdateInput>(
-              input)) {
-        throw std::runtime_error("task input type mismatch for package_update");
-      }
       const auto& value = std::get<zfleet::protocol::PackageUpdateInput>(input);
       proto::PackageUpdateInput message;
       message.set_action(value.action);
@@ -97,8 +91,7 @@ std::string SerializeTaskInputBlob(zfleet::protocol::TaskType task_type,
 }
 
 zfleet::protocol::TaskInput ParseTaskInputBlob(
-    zfleet::protocol::TaskType task_type,
-    const std::string& input_blob) {
+    zfleet::protocol::TaskType task_type, const std::string& input_blob) {
   switch (task_type) {
     case zfleet::protocol::TaskType::collect_basic_inventory: {
       proto::CollectBasicInventoryInput message;
@@ -134,8 +127,8 @@ zfleet::protocol::TaskInput ParseTaskInputBlob(
 }
 
 zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
-  const auto task_type = *zfleet::protocol::TaskTypeFromString(
-      query.getColumn(3).getString());
+  const auto task_type =
+      *zfleet::protocol::TaskTypeFromString(query.getColumn(3).getString());
   return zfleet::protocol::Task{
       .protocol_version = query.getColumn(0).getString(),
       .task_id = query.getColumn(1).getString(),
@@ -389,27 +382,28 @@ void ExecSchema(SQLite::Database& db) {
     )
   )sql");
 
-  for (const auto* column : {"current_package_id", "desired_version",
-                             "desired_package_id", "desired_set_at",
-                             "desired_set_by", "upgrade_state",
-                             "last_upgrade_task_id", "last_upgrade_error",
-                             "last_upgrade_at"}) {
+  for (const auto* column :
+       {"current_package_id", "desired_version", "desired_package_id",
+        "desired_set_at", "desired_set_by", "upgrade_state",
+        "last_upgrade_task_id", "last_upgrade_error", "last_upgrade_at"}) {
     if (!ColumnExists(db, "agents", column)) {
-      db.exec(std::string("alter table agents add column ") + column +
-              " text");
+      db.exec(std::string("alter table agents add column ") + column + " text");
     }
   }
   if (!ColumnExists(db, "agent_packages", "build_type")) {
-    db.exec("alter table agent_packages add column build_type text not null "
-            "default 'release'");
+    db.exec(
+        "alter table agent_packages add column build_type text not null "
+        "default 'release'");
   }
   if (!ColumnExists(db, "package_publications", "component")) {
-    db.exec("alter table package_publications add column component text not null "
-            "default 'agent'");
+    db.exec(
+        "alter table package_publications add column component text not null "
+        "default 'agent'");
   }
   if (!ColumnExists(db, "package_publications", "build_type")) {
-    db.exec("alter table package_publications add column build_type text not null "
-            "default 'release'");
+    db.exec(
+        "alter table package_publications add column build_type text not null "
+        "default 'release'");
   }
   if (!ColumnExists(db, "tasks", "prerequisite_task_id")) {
     db.exec("alter table tasks add column prerequisite_task_id text");
@@ -454,15 +448,13 @@ auto ExecuteWithBusyRetry(Func&& func) -> std::invoke_result_t<Func> {
   }
 }
 
-} // namespace
+}  // namespace
 
 ServerDatabase::ServerDatabase(std::filesystem::path database_path)
     : database_path_(std::move(database_path)),
       write_actor_thread_(&ServerDatabase::RunWriteActor, this) {}
 
-ServerDatabase::~ServerDatabase() {
-  Stop();
-}
+ServerDatabase::~ServerDatabase() { Stop(); }
 
 void ServerDatabase::Stop() {
   StopWriteActor();
@@ -499,8 +491,7 @@ void ServerDatabase::RunWriteActor() {
     try {
       if (!db.has_value()) {
         db.emplace(OpenDatabase(database_path_,
-                                SQLite::OPEN_READWRITE |
-                                    SQLite::OPEN_CREATE));
+                                SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE));
       }
       task.run(*db);
     } catch (...) {
@@ -536,26 +527,25 @@ auto ServerDatabase::SubmitWrite(Func&& func)
       throw std::runtime_error("server database write actor is stopped");
     }
     write_queue_.push_back(WriteTask{
-        .run = [func = std::forward<Func>(func),
-                promise](SQLite::Database& db) mutable {
-          try {
-            if constexpr (std::is_void_v<Result>) {
-              ExecuteWithBusyRetry([&]() {
-                func(db);
-              });
-              promise->set_value();
-            } else {
-              promise->set_value(ExecuteWithBusyRetry([&]() {
-                return func(db);
-              }));
-            }
-          } catch (...) {
-            promise->set_exception(std::current_exception());
-          }
-        },
-        .fail = [promise](std::exception_ptr exception) {
-          promise->set_exception(exception);
-        },
+        .run =
+            [func = std::forward<Func>(func),
+             promise](SQLite::Database& db) mutable {
+              try {
+                if constexpr (std::is_void_v<Result>) {
+                  ExecuteWithBusyRetry([&]() { func(db); });
+                  promise->set_value();
+                } else {
+                  promise->set_value(
+                      ExecuteWithBusyRetry([&]() { return func(db); }));
+                }
+              } catch (...) {
+                promise->set_exception(std::current_exception());
+              }
+            },
+        .fail =
+            [promise](std::exception_ptr exception) {
+              promise->set_exception(exception);
+            },
     });
   }
   write_actor_cv_.notify_one();
@@ -569,90 +559,76 @@ auto ServerDatabase::SubmitWrite(Func&& func)
 
 template <typename Func, typename Completion>
 bool ServerDatabase::SubmitWriteAsync(
-    Func&& func,
-    boost::asio::any_io_executor completion_executor,
+    Func&& func, boost::asio::any_io_executor completion_executor,
     Completion&& completion) {
   using Result = std::invoke_result_t<Func, SQLite::Database&>;
-  auto shared_completion =
-      std::make_shared<std::decay_t<Completion>>(std::forward<Completion>(
-          completion));
+  auto shared_completion = std::make_shared<std::decay_t<Completion>>(
+      std::forward<Completion>(completion));
   {
     std::lock_guard lock(write_actor_mutex_);
     if (write_actor_stopping_) {
       const auto exception = std::make_exception_ptr(
           std::runtime_error("server database write actor is stopped"));
       if constexpr (std::is_void_v<Result>) {
-        boost::asio::post(
-            completion_executor,
-            [completion = shared_completion, exception]() mutable {
-              (*completion)(exception);
-            });
+        boost::asio::post(completion_executor,
+                          [completion = shared_completion,
+                           exception]() mutable { (*completion)(exception); });
       } else {
-        boost::asio::post(
-            completion_executor,
-            [completion = shared_completion, exception]() mutable {
-              (*completion)(exception, Result{});
-            });
+        boost::asio::post(completion_executor, [completion = shared_completion,
+                                                exception]() mutable {
+          (*completion)(exception, Result{});
+        });
       }
       return true;
     }
     write_queue_.push_back(WriteTask{
-        .run = [func = std::forward<Func>(func),
-                completion_executor,
-                completion = shared_completion](
-                   SQLite::Database& db) mutable {
-          try {
-            if constexpr (std::is_void_v<Result>) {
-              ExecuteWithBusyRetry([&]() {
-                func(db);
-              });
-              boost::asio::post(completion_executor,
-                                [completion]() mutable {
-                                  (*completion)(nullptr);
-                                });
-            } else {
-              auto value = ExecuteWithBusyRetry([&]() {
-                return func(db);
-              });
-              boost::asio::post(
-                  completion_executor,
-                  [completion, value = std::move(value)]() mutable {
-                    (*completion)(nullptr, std::move(value));
-                  });
-            }
-          } catch (...) {
-            const auto exception = std::current_exception();
-            if constexpr (std::is_void_v<Result>) {
-              boost::asio::post(
-                  completion_executor,
-                  [completion, exception]() mutable {
-                    (*completion)(exception);
-                  });
-            } else {
-              boost::asio::post(
-                  completion_executor,
-                  [completion, exception]() mutable {
-                    (*completion)(exception, Result{});
-                  });
-            }
-          }
-        },
-        .fail = [completion_executor, completion = shared_completion](
-                    std::exception_ptr exception) mutable {
-          if constexpr (std::is_void_v<Result>) {
-            boost::asio::post(
-                completion_executor,
-                [completion, exception]() mutable {
-                  (*completion)(exception);
-                });
-          } else {
-            boost::asio::post(
-                completion_executor,
-                [completion, exception]() mutable {
-                  (*completion)(exception, Result{});
-                });
-          }
-        },
+        .run =
+            [func = std::forward<Func>(func), completion_executor,
+             completion = shared_completion](SQLite::Database& db) mutable {
+              try {
+                if constexpr (std::is_void_v<Result>) {
+                  ExecuteWithBusyRetry([&]() { func(db); });
+                  boost::asio::post(
+                      completion_executor,
+                      [completion]() mutable { (*completion)(nullptr); });
+                } else {
+                  auto value = ExecuteWithBusyRetry([&]() { return func(db); });
+                  boost::asio::post(
+                      completion_executor,
+                      [completion, value = std::move(value)]() mutable {
+                        (*completion)(nullptr, std::move(value));
+                      });
+                }
+              } catch (...) {
+                const auto exception = std::current_exception();
+                if constexpr (std::is_void_v<Result>) {
+                  boost::asio::post(completion_executor,
+                                    [completion, exception]() mutable {
+                                      (*completion)(exception);
+                                    });
+                } else {
+                  boost::asio::post(completion_executor,
+                                    [completion, exception]() mutable {
+                                      (*completion)(exception, Result{});
+                                    });
+                }
+              }
+            },
+        .fail =
+            [completion_executor, completion = shared_completion](
+                std::exception_ptr exception) mutable {
+              if constexpr (std::is_void_v<Result>) {
+                boost::asio::post(completion_executor,
+                                  [completion, exception]() mutable {
+                                    (*completion)(exception);
+                                  });
+              } else {
+                boost::asio::post(completion_executor,
+                                  [completion, exception]() mutable {
+                                    (*completion)(exception, Result{});
+                                  });
+              }
+            },
     });
   }
   write_actor_cv_.notify_one();
@@ -676,11 +652,9 @@ void ServerDatabase::NotifyTaskQueueChanged() {
   }
 
   for (auto& observer : observers) {
-    boost::asio::post(
-        observer.completion_executor,
-        [callback = std::move(observer.observer), version]() mutable {
-          callback(version);
-        });
+    boost::asio::post(observer.completion_executor,
+                      [callback = std::move(observer.observer),
+                       version]() mutable { callback(version); });
   }
 }
 
@@ -729,9 +703,8 @@ bool ServerDatabase::ConsumeRegistrationToken(const std::string& token_hash,
                                               const std::string& arch,
                                               const std::string& used_at) {
   return SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         update registration_tokens
         set use_count = use_count + 1,
             status = case when max_uses is not null and use_count + 1 >= max_uses
@@ -756,9 +729,8 @@ bool ServerDatabase::ConsumeRegistrationToken(const std::string& token_hash,
 void ServerDatabase::UpsertAgent(
     const zfleet::protocol::AgentRegistration& request) {
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         insert into agents (
           agent_id,
           first_seen_at,
@@ -879,9 +851,8 @@ void ServerDatabase::RecordAssetSnapshot(
     const proto::AgentEvent& event) {
   const auto event_blob = SerializeProto(event);
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         insert into asset_snapshots (
           agent_id,
           occurred_at,
@@ -913,11 +884,11 @@ void ServerDatabase::RecordAssetSnapshot(
   });
 }
 
-void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event) {
+void ServerDatabase::RecordAuditEvent(
+    const zfleet::protocol::AuditEvent& event) {
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         insert into audit_events (
           audit_id,
           occurred_at,
@@ -944,9 +915,8 @@ void ServerDatabase::RecordAuditEvent(const zfleet::protocol::AuditEvent& event)
 
 void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
           insert into tasks (
             task_id,
             protocol_version,
@@ -986,8 +956,7 @@ std::uint64_t ServerDatabase::TaskQueueVersion() const {
 }
 
 std::uint64_t ServerDatabase::WaitForTaskQueueChange(
-    std::uint64_t last_seen_version,
-    std::chrono::milliseconds timeout) const {
+    std::uint64_t last_seen_version, std::chrono::milliseconds timeout) const {
   std::unique_lock lock(task_queue_mutex_);
   task_queue_cv_.wait_for(lock, timeout, [&]() {
     return task_queue_version_ != last_seen_version || task_queue_closed_;
@@ -1002,16 +971,12 @@ void ServerDatabase::MarkTaskRunning(
         db,
         "update tasks set state = ?, assigned_at = coalesce(assigned_at, ?) "
         "where task_id = ? and state = ?");
-    update.bind(
-        1,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::running)));
+    update.bind(1, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::running)));
     update.bind(2, request.occurred_at);
     update.bind(3, request.task_id);
-    update.bind(
-        4,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::assigned)));
+    update.bind(4, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::assigned)));
     update.exec();
     if (sqlite3_changes(db.getHandle()) != 1) {
       throw std::runtime_error("task running state transition failed");
@@ -1020,13 +985,11 @@ void ServerDatabase::MarkTaskRunning(
 }
 
 std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
-    const std::string& agent_id,
-    const std::string& assigned_at) {
+    const std::string& agent_id, const std::string& assigned_at) {
   const auto task = SubmitWrite([&](SQLite::Database& db) {
     SQLite::Transaction transaction(db);
-    SQLite::Statement select(
-        db,
-        R"sql(
+    SQLite::Statement select(db,
+                             R"sql(
         select
           protocol_version,
           task_id,
@@ -1059,20 +1022,15 @@ std::optional<zfleet::protocol::Task> ServerDatabase::ClaimNextTaskForAgent(
     }
 
     const auto task = ParseStoredTask(select);
-    SQLite::Statement update(
-        db,
-        "update tasks set state = ?, assigned_at = ? "
-        "where task_id = ? and state = ?");
-    update.bind(
-        1,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::assigned)));
+    SQLite::Statement update(db,
+                             "update tasks set state = ?, assigned_at = ? "
+                             "where task_id = ? and state = ?");
+    update.bind(1, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::assigned)));
     update.bind(2, assigned_at);
     update.bind(3, task.task_id);
-    update.bind(
-        4,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::queued)));
+    update.bind(4, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::queued)));
     update.exec();
     if (sqlite3_changes(db.getHandle()) != 1) {
       return std::optional<zfleet::protocol::Task>{};
@@ -1090,9 +1048,8 @@ std::optional<StoredTask> ServerDatabase::FindTaskById(
     const std::string& task_id) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           protocol_version,
           task_id,
@@ -1124,22 +1081,22 @@ std::optional<StoredTask> ServerDatabase::FindTaskById(
 }
 
 void ServerDatabase::AsyncAgentExists(
-    std::string agent_id,
-    boost::asio::any_io_executor completion_executor,
+    std::string agent_id, boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr, bool)> completion) {
   if (!SubmitWriteAsync(
           [agent_id = std::move(agent_id)](SQLite::Database& db) {
-            SQLite::Statement query(
-                db, "select 1 from agents where agent_id = ?");
+            SQLite::Statement query(db,
+                                    "select 1 from agents where agent_id = ?");
             query.bind(1, agent_id);
             return query.executeStep();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-                     std::runtime_error("server database write actor is stopped")),
-                 false);
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(std::runtime_error(
+                         "server database write actor is stopped")),
+                     false);
+        });
   }
 }
 
@@ -1149,9 +1106,8 @@ void ServerDatabase::AsyncUpsertAgent(
     std::function<void(std::exception_ptr)> completion) {
   if (!SubmitWriteAsync(
           [request = std::move(request)](SQLite::Database& db) {
-            SQLite::Statement statement(
-                db,
-                R"sql(
+            SQLite::Statement statement(db,
+                                        R"sql(
         insert into agents (
           agent_id,
           first_seen_at,
@@ -1190,16 +1146,16 @@ void ServerDatabase::AsyncUpsertAgent(
             statement.exec();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
 void ServerDatabase::AsyncMarkAgentOffline(
-    std::string agent_id,
-    std::string disconnected_at,
+    std::string agent_id, std::string disconnected_at,
     boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr)> completion) {
   if (!SubmitWriteAsync(
@@ -1217,25 +1173,24 @@ void ServerDatabase::AsyncMarkAgentOffline(
             statement.exec();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
 void ServerDatabase::AsyncRecordAssetSnapshot(
-    zfleet::protocol::AssetSnapshot request,
-    proto::AgentEvent event,
+    zfleet::protocol::AssetSnapshot request, proto::AgentEvent event,
     boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr)> completion) {
   auto event_blob = SerializeProto(event);
   if (!SubmitWriteAsync(
           [request = std::move(request),
            event_blob = std::move(event_blob)](SQLite::Database& db) {
-            SQLite::Statement statement(
-                db,
-                R"sql(
+            SQLite::Statement statement(db,
+                                        R"sql(
         insert into asset_snapshots (
           agent_id,
           occurred_at,
@@ -1266,10 +1221,11 @@ void ServerDatabase::AsyncRecordAssetSnapshot(
             statement.exec();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
@@ -1279,9 +1235,8 @@ void ServerDatabase::AsyncRecordAuditEvent(
     std::function<void(std::exception_ptr)> completion) {
   if (!SubmitWriteAsync(
           [event = std::move(event)](SQLite::Database& db) {
-            SQLite::Statement statement(
-                db,
-                R"sql(
+            SQLite::Statement statement(db,
+                                        R"sql(
         insert into audit_events (
           audit_id,
           occurred_at,
@@ -1305,10 +1260,11 @@ void ServerDatabase::AsyncRecordAuditEvent(
             statement.exec();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
@@ -1318,9 +1274,8 @@ void ServerDatabase::AsyncEnqueueTask(
     std::function<void(std::exception_ptr)> completion) {
   if (!SubmitWriteAsync(
           [this, task = std::move(task)](SQLite::Database& db) {
-            SQLite::Statement statement(
-                db,
-                R"sql(
+            SQLite::Statement statement(db,
+                                        R"sql(
           insert into tasks (
             task_id,
             protocol_version,
@@ -1340,26 +1295,26 @@ void ServerDatabase::AsyncEnqueueTask(
             statement.bind(3, task.agent_id);
             statement.bind(
                 4, std::string(zfleet::protocol::ToString(task.task_type)));
-            statement.bind(5, std::string(
-                                  zfleet::protocol::ToString(
-                                      task.capability_level)));
+            statement.bind(
+                5,
+                std::string(zfleet::protocol::ToString(task.capability_level)));
             statement.bind(6, task.created_at);
             statement.bind(7, task.expires_at);
             BindBlob(statement, 8,
                      SerializeTaskInputBlob(task.task_type, task.input));
-            statement.bind(
-                9, std::string(zfleet::protocol::ToString(
-                       zfleet::protocol::TaskState::queued)));
+            statement.bind(9, std::string(zfleet::protocol::ToString(
+                                  zfleet::protocol::TaskState::queued)));
             statement.bind(10);
             statement.bind(11);
             statement.exec();
             NotifyTaskQueueChanged();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
@@ -1369,47 +1324,54 @@ void ServerDatabase::AsyncMarkTaskRunning(
     std::function<void(std::exception_ptr)> completion) {
   if (!SubmitWriteAsync(
           [request = std::move(request)](SQLite::Database& db) {
-            SQLite::Statement update(
-                db,
-                "update tasks set state = ?, "
-                "assigned_at = coalesce(assigned_at, ?) "
-                "where task_id = ? and state = ?");
-            update.bind(
-                1,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::running)));
+            SQLite::Statement select(
+                db, "select state from tasks where task_id = ?");
+            select.bind(1, request.task_id);
+            if (!select.executeStep()) {
+              throw std::runtime_error("task not found");
+            }
+            const auto current_state = *zfleet::protocol::TaskStateFromString(
+                select.getColumn(0).getString());
+            if (!zfleet::protocol::CanTransitionTaskState(
+                    current_state, zfleet::protocol::TaskState::running)) {
+              throw std::runtime_error("task running state transition failed");
+            }
+            SQLite::Statement update(db,
+                                     "update tasks set state = ?, "
+                                     "assigned_at = coalesce(assigned_at, ?) "
+                                     "where task_id = ? and state = ?");
+            update.bind(1, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::running)));
             update.bind(2, request.occurred_at);
             update.bind(3, request.task_id);
-            update.bind(
-                4,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::assigned)));
+            update.bind(4, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::assigned)));
             update.exec();
             if (sqlite3_changes(db.getHandle()) != 1) {
               throw std::runtime_error("task running state transition failed");
             }
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
 void ServerDatabase::AsyncClaimNextTaskForAgent(
-    std::string agent_id,
-    std::string assigned_at,
+    std::string agent_id, std::string assigned_at,
     boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr,
-                       std::optional<zfleet::protocol::Task>)> completion) {
+                       std::optional<zfleet::protocol::Task>)>
+        completion) {
   if (!SubmitWriteAsync(
           [this, agent_id = std::move(agent_id),
            assigned_at = std::move(assigned_at)](SQLite::Database& db) {
             SQLite::Transaction transaction(db);
-            SQLite::Statement select(
-                db,
-                R"sql(
+            SQLite::Statement select(db,
+                                     R"sql(
         select
           protocol_version,
           task_id,
@@ -1446,16 +1408,12 @@ void ServerDatabase::AsyncClaimNextTaskForAgent(
                 db,
                 "update tasks set state = ?, assigned_at = ? "
                 "where task_id = ? and state = ?");
-            update.bind(
-                1,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::assigned)));
+            update.bind(1, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::assigned)));
             update.bind(2, assigned_at);
             update.bind(3, task.task_id);
-            update.bind(
-                4,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::queued)));
+            update.bind(4, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::queued)));
             update.exec();
             if (sqlite3_changes(db.getHandle()) != 1) {
               return std::optional<zfleet::protocol::Task>{};
@@ -1465,11 +1423,12 @@ void ServerDatabase::AsyncClaimNextTaskForAgent(
             return std::optional<zfleet::protocol::Task>{task};
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-                     std::runtime_error("server database write actor is stopped")),
-                 std::nullopt);
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(std::runtime_error(
+                         "server database write actor is stopped")),
+                     std::nullopt);
+        });
   }
 }
 
@@ -1501,15 +1460,13 @@ void ServerDatabase::UnsubscribeTaskQueueChanges(
 }
 
 void ServerDatabase::AsyncFindTaskById(
-    std::string task_id,
-    boost::asio::any_io_executor completion_executor,
+    std::string task_id, boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr, std::optional<StoredTask>)>
         completion) {
   if (!SubmitWriteAsync(
           [task_id = std::move(task_id)](SQLite::Database& db) {
-            SQLite::Statement query(
-                db,
-                R"sql(
+            SQLite::Statement query(db,
+                                    R"sql(
         select
           protocol_version,
           task_id,
@@ -1539,11 +1496,12 @@ void ServerDatabase::AsyncFindTaskById(
             }};
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-                     std::runtime_error("server database write actor is stopped")),
-                 std::nullopt);
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(std::runtime_error(
+                         "server database write actor is stopped")),
+                     std::nullopt);
+        });
   }
 }
 
@@ -1554,9 +1512,8 @@ void ServerDatabase::RecordTaskResult(
   SubmitWrite([&](SQLite::Database& db) {
     SQLite::Transaction transaction(db);
 
-    SQLite::Statement insert(
-        db,
-        R"sql(
+    SQLite::Statement insert(db,
+                             R"sql(
         insert into task_results (
           task_id,
           protocol_version,
@@ -1579,8 +1536,9 @@ void ServerDatabase::RecordTaskResult(
     insert.bind(6, request.occurred_at);
     insert.bind(7, std::string(zfleet::protocol::ToString(request.status)));
     if (request.error.has_value()) {
-      insert.bind(8, std::string(zfleet::protocol::ToString(
-                         request.error->error_code)));
+      insert.bind(
+          8,
+          std::string(zfleet::protocol::ToString(request.error->error_code)));
       insert.bind(9, request.error->retryable ? 1 : 0);
     } else {
       insert.bind(8);
@@ -1601,9 +1559,9 @@ void ServerDatabase::RecordTaskResult(
     const auto terminal_state =
         request.status == zfleet::protocol::TaskExecutionStatus::succeeded
             ? zfleet::protocol::TaskState::succeeded
-            : request.status == zfleet::protocol::TaskExecutionStatus::failed
-                  ? zfleet::protocol::TaskState::failed
-                  : zfleet::protocol::TaskState::expired;
+        : request.status == zfleet::protocol::TaskExecutionStatus::failed
+            ? zfleet::protocol::TaskState::failed
+            : zfleet::protocol::TaskState::expired;
     SQLite::Statement update(
         db,
         "update tasks set state = ?, completed_at = ? where task_id = ? "
@@ -1611,18 +1569,12 @@ void ServerDatabase::RecordTaskResult(
     update.bind(1, std::string(zfleet::protocol::ToString(terminal_state)));
     update.bind(2, request.occurred_at);
     update.bind(3, request.task_id);
-    update.bind(
-        4,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::succeeded)));
-    update.bind(
-        5,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::failed)));
-    update.bind(
-        6,
-        std::string(zfleet::protocol::ToString(
-            zfleet::protocol::TaskState::expired)));
+    update.bind(4, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::succeeded)));
+    update.bind(5, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::failed)));
+    update.bind(6, std::string(zfleet::protocol::ToString(
+                       zfleet::protocol::TaskState::expired)));
     update.exec();
     if (sqlite3_changes(db.getHandle()) != 1) {
       throw std::runtime_error("task result state transition failed");
@@ -1641,8 +1593,8 @@ void ServerDatabase::RecordTaskResult(
       update_agent.bind(1, next_state);
       if (request.error.has_value()) {
         update_agent.bind(
-            2, std::string(zfleet::protocol::ToString(
-                   request.error->error_code)));
+            2,
+            std::string(zfleet::protocol::ToString(request.error->error_code)));
       } else {
         update_agent.bind(2);
       }
@@ -1658,9 +1610,8 @@ void ServerDatabase::RecordTaskResult(
             "where agent_id = ? and last_upgrade_task_id in "
             "(select task_id from tasks where prerequisite_task_id = ?)");
         if (request.error.has_value()) {
-          fail_dependent.bind(
-              1, std::string(zfleet::protocol::ToString(
-                     request.error->error_code)));
+          fail_dependent.bind(1, std::string(zfleet::protocol::ToString(
+                                     request.error->error_code)));
         } else {
           fail_dependent.bind(1, "task_execution_failed");
         }
@@ -1677,18 +1628,15 @@ void ServerDatabase::RecordTaskResult(
 }
 
 void ServerDatabase::ScheduleAgentUpgrade(
-    const std::string& agent_id,
-    const std::string& desired_version,
+    const std::string& agent_id, const std::string& desired_version,
     const std::string& desired_package_id,
-    const std::optional<std::string>& set_by,
-    const std::string& set_at,
+    const std::optional<std::string>& set_by, const std::string& set_at,
     const zfleet::protocol::Task& task,
     const std::optional<zfleet::protocol::Task>& prerequisite_task) {
   SubmitWrite([&](SQLite::Database& db) {
     SQLite::Transaction transaction(db);
-    SQLite::Statement update(
-        db,
-        R"sql(
+    SQLite::Statement update(db,
+                             R"sql(
         update agents set
           desired_version = ?,
           desired_package_id = ?,
@@ -1717,9 +1665,8 @@ void ServerDatabase::ScheduleAgentUpgrade(
     const auto insert_task =
         [&](const zfleet::protocol::Task& value,
             const std::optional<std::string>& prerequisite_task_id) {
-          SQLite::Statement insert(
-              db,
-              R"sql(
+          SQLite::Statement insert(db,
+                                   R"sql(
         insert into tasks (
           task_id, protocol_version, agent_id, task_type, capability_level,
           created_at, expires_at, input_blob, state, prerequisite_task_id,
@@ -1731,8 +1678,9 @@ void ServerDatabase::ScheduleAgentUpgrade(
           insert.bind(3, value.agent_id);
           insert.bind(4,
                       std::string(zfleet::protocol::ToString(value.task_type)));
-          insert.bind(5, std::string(zfleet::protocol::ToString(
-                             value.capability_level)));
+          insert.bind(
+              5,
+              std::string(zfleet::protocol::ToString(value.capability_level)));
           insert.bind(6, value.created_at);
           insert.bind(7, value.expires_at);
           BindBlob(insert, 8,
@@ -1759,10 +1707,8 @@ void ServerDatabase::ScheduleAgentUpgrade(
 }
 
 void ServerDatabase::ScheduleAgentRollback(
-    const std::string& agent_id,
-    const std::optional<std::string>& set_by,
-    const std::string& set_at,
-    const zfleet::protocol::Task& task) {
+    const std::string& agent_id, const std::optional<std::string>& set_by,
+    const std::string& set_at, const zfleet::protocol::Task& task) {
   ScheduleAgentUpgrade(agent_id, "", "", set_by, set_at, task);
   SubmitWrite([&](SQLite::Database& db) {
     SQLite::Statement update(
@@ -1804,9 +1750,8 @@ std::vector<std::string> ServerDatabase::ExpireWaitingReconnect(
 std::vector<AgentSummary> ServerDatabase::ListAgents() const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           agent_id,
           first_seen_at,
@@ -1840,9 +1785,8 @@ std::optional<AgentSummary> ServerDatabase::FindAgent(
     const std::string& agent_id) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           agent_id,
           first_seen_at,
@@ -1873,13 +1817,11 @@ std::optional<AgentSummary> ServerDatabase::FindAgent(
 }
 
 std::vector<AssetSnapshotSummary> ServerDatabase::ListAssetSnapshots(
-    const std::string& agent_id,
-    int limit) const {
+    const std::string& agent_id, int limit) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           snapshot_id,
           agent_id,
@@ -1917,9 +1859,8 @@ std::optional<AssetSnapshotSummary> ServerDatabase::FindLatestAssetSnapshot(
 
 void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         insert into agent_packages (
           package_id,
           component,
@@ -1990,9 +1931,8 @@ void ServerDatabase::UpsertAgentPackage(const AgentPackageRecord& package) {
 std::vector<AgentPackageRecord> ServerDatabase::ListAgentPackages() const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           p.package_id,
           p.component,
@@ -2044,9 +1984,8 @@ std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
     const std::string& package_id) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           p.package_id,
           p.component,
@@ -2095,12 +2034,9 @@ std::optional<AgentPackageRecord> ServerDatabase::FindAgentPackage(
 }
 
 void ServerDatabase::PublishAgentPackage(
-    const std::string& package_id,
-    const std::string& component,
-    const std::string& channel,
-    const std::string& platform,
-    const std::string& arch,
-    const std::string& build_type,
+    const std::string& package_id, const std::string& component,
+    const std::string& channel, const std::string& platform,
+    const std::string& arch, const std::string& build_type,
     const std::optional<std::string>& published_by,
     const std::string& published_at) {
   SubmitWrite([&](SQLite::Database& db) {
@@ -2117,12 +2053,10 @@ void ServerDatabase::PublishAgentPackage(
     clear.bind(5, build_type);
     clear.exec();
 
-    const auto publication_id =
-        package_id + ":" + channel + ":" + platform + ":" + arch + ":" +
-        build_type;
-    SQLite::Statement publish(
-        db,
-        R"sql(
+    const auto publication_id = package_id + ":" + channel + ":" + platform +
+                                ":" + arch + ":" + build_type;
+    SQLite::Statement publish(db,
+                              R"sql(
         insert into package_publications (
           publication_id,
           package_id,
@@ -2191,7 +2125,8 @@ void ServerDatabase::RetireAgentPackage(const std::string& package_id,
       throw std::runtime_error("agent package not found for retire");
     }
     SQLite::Statement disable_publications(
-        db, "update package_publications set is_default = 0 where package_id = ?");
+        db,
+        "update package_publications set is_default = 0 where package_id = ?");
     disable_publications.bind(1, package_id);
     disable_publications.exec();
     transaction.commit();
@@ -2200,16 +2135,13 @@ void ServerDatabase::RetireAgentPackage(const std::string& package_id,
 
 std::optional<AgentPackageRecord>
 ServerDatabase::FindDefaultPublishedAgentPackage(
-    const std::string& component,
-    const std::string& channel,
-    const std::string& platform,
-    const std::string& arch,
+    const std::string& component, const std::string& channel,
+    const std::string& platform, const std::string& arch,
     const std::string& build_type) const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           p.package_id,
           p.component,
@@ -2254,9 +2186,8 @@ ServerDatabase::FindDefaultPublishedAgentPackage(
 void ServerDatabase::CreateRegistrationToken(
     const RegistrationTokenRecord& token) {
   SubmitWrite([&](SQLite::Database& db) {
-    SQLite::Statement statement(
-        db,
-        R"sql(
+    SQLite::Statement statement(db,
+                                R"sql(
         insert into registration_tokens (
           token_id,
           token_hash,
@@ -2308,13 +2239,12 @@ void ServerDatabase::CreateRegistrationToken(
   });
 }
 
-std::vector<RegistrationTokenRecord>
-ServerDatabase::ListRegistrationTokens() const {
+std::vector<RegistrationTokenRecord> ServerDatabase::ListRegistrationTokens()
+    const {
   return ExecuteWithBusyRetry([&]() {
     SQLite::Database db = OpenDatabase(database_path_, SQLite::OPEN_READONLY);
-    SQLite::Statement query(
-        db,
-        R"sql(
+    SQLite::Statement query(db,
+                            R"sql(
         select
           token_id,
           token_hash,
@@ -2350,9 +2280,8 @@ void ServerDatabase::AsyncRecordTaskResult(
            error_blob = std::move(error_blob)](SQLite::Database& db) {
             SQLite::Transaction transaction(db);
 
-            SQLite::Statement insert(
-                db,
-                R"sql(
+            SQLite::Statement insert(db,
+                                     R"sql(
         insert into task_results (
           task_id,
           protocol_version,
@@ -2374,12 +2303,11 @@ void ServerDatabase::AsyncRecordTaskResult(
             insert.bind(
                 5, std::string(zfleet::protocol::ToString(request.task_type)));
             insert.bind(6, request.occurred_at);
-            insert.bind(7,
-                        std::string(zfleet::protocol::ToString(request.status)));
+            insert.bind(
+                7, std::string(zfleet::protocol::ToString(request.status)));
             if (request.error.has_value()) {
-              insert.bind(
-                  8, std::string(zfleet::protocol::ToString(
-                         request.error->error_code)));
+              insert.bind(8, std::string(zfleet::protocol::ToString(
+                                 request.error->error_code)));
               insert.bind(9, request.error->retryable ? 1 : 0);
             } else {
               insert.bind(8);
@@ -2401,10 +2329,10 @@ void ServerDatabase::AsyncRecordTaskResult(
                 request.status ==
                         zfleet::protocol::TaskExecutionStatus::succeeded
                     ? zfleet::protocol::TaskState::succeeded
-                    : request.status ==
-                              zfleet::protocol::TaskExecutionStatus::failed
-                          ? zfleet::protocol::TaskState::failed
-                          : zfleet::protocol::TaskState::expired;
+                : request.status ==
+                        zfleet::protocol::TaskExecutionStatus::failed
+                    ? zfleet::protocol::TaskState::failed
+                    : zfleet::protocol::TaskState::expired;
             SQLite::Statement update(
                 db,
                 "update tasks set state = ?, completed_at = ? "
@@ -2413,18 +2341,12 @@ void ServerDatabase::AsyncRecordTaskResult(
                 1, std::string(zfleet::protocol::ToString(terminal_state)));
             update.bind(2, request.occurred_at);
             update.bind(3, request.task_id);
-            update.bind(
-                4,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::succeeded)));
-            update.bind(
-                5,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::failed)));
-            update.bind(
-                6,
-                std::string(zfleet::protocol::ToString(
-                    zfleet::protocol::TaskState::expired)));
+            update.bind(4, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::succeeded)));
+            update.bind(5, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::failed)));
+            update.bind(6, std::string(zfleet::protocol::ToString(
+                               zfleet::protocol::TaskState::expired)));
             update.exec();
             if (sqlite3_changes(db.getHandle()) != 1) {
               throw std::runtime_error("task result state transition failed");
@@ -2433,11 +2355,12 @@ void ServerDatabase::AsyncRecordTaskResult(
             transaction.commit();
           },
           completion_executor, std::move(completion))) {
-    boost::asio::post(completion_executor, [completion = std::move(completion)] {
-      completion(std::make_exception_ptr(
-          std::runtime_error("server database write actor is stopped")));
-    });
+    boost::asio::post(
+        completion_executor, [completion = std::move(completion)] {
+          completion(std::make_exception_ptr(
+              std::runtime_error("server database write actor is stopped")));
+        });
   }
 }
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

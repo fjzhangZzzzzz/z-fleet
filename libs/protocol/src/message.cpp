@@ -371,4 +371,49 @@ std::optional<TaskState> TaskStateFromString(std::string_view state) noexcept {
   return std::nullopt;
 }
 
+bool IsTerminalTaskState(TaskState state) noexcept {
+  return state == TaskState::succeeded || state == TaskState::failed ||
+         state == TaskState::expired;
+}
+
+bool CanTransitionTaskState(TaskState from, TaskState to) noexcept {
+  if (from == to) {
+    return false;
+  }
+  switch (from) {
+    case TaskState::queued:
+      return to == TaskState::assigned;
+    case TaskState::assigned:
+      return to == TaskState::running || to == TaskState::expired;
+    case TaskState::running:
+      return to == TaskState::succeeded || to == TaskState::failed ||
+             to == TaskState::expired;
+    case TaskState::succeeded:
+    case TaskState::failed:
+    case TaskState::expired:
+      return false;
+  }
+  return false;
+}
+
+CapabilityLevel RequiredCapabilityForTaskType(TaskType task_type) noexcept {
+  switch (task_type) {
+    case TaskType::collect_basic_inventory:
+      return CapabilityLevel::readonly;
+    case TaskType::package_update:
+      return CapabilityLevel::high_risk_write;
+  }
+  return CapabilityLevel::readonly;
+}
+
+bool TaskInputMatchesType(TaskType task_type, const TaskInput& input) noexcept {
+  switch (task_type) {
+    case TaskType::collect_basic_inventory:
+      return std::holds_alternative<CollectBasicInventoryInput>(input);
+    case TaskType::package_update:
+      return std::holds_alternative<PackageUpdateInput>(input);
+  }
+  return false;
+}
+
 } // namespace zfleet::protocol

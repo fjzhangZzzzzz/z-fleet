@@ -64,6 +64,29 @@ TEST_CASE("protocol metadata and enum conversions are available") {
           TaskExecutionStatus::failed);
   REQUIRE(zfleet::protocol::TaskStateFromString("queued") ==
           TaskState::queued);
+  REQUIRE(zfleet::protocol::IsTerminalTaskState(TaskState::succeeded));
+  REQUIRE_FALSE(
+      zfleet::protocol::IsTerminalTaskState(TaskState::assigned));
+  REQUIRE(zfleet::protocol::CanTransitionTaskState(TaskState::queued,
+                                                  TaskState::assigned));
+  REQUIRE(zfleet::protocol::CanTransitionTaskState(TaskState::assigned,
+                                                  TaskState::running));
+  REQUIRE_FALSE(zfleet::protocol::CanTransitionTaskState(
+      TaskState::running, TaskState::assigned));
+  REQUIRE_FALSE(zfleet::protocol::CanTransitionTaskState(
+      TaskState::succeeded, TaskState::running));
+  REQUIRE(zfleet::protocol::RequiredCapabilityForTaskType(
+              TaskType::collect_basic_inventory) ==
+          CapabilityLevel::readonly);
+  REQUIRE(zfleet::protocol::RequiredCapabilityForTaskType(
+              TaskType::package_update) ==
+          CapabilityLevel::high_risk_write);
+  REQUIRE(zfleet::protocol::TaskInputMatchesType(
+              TaskType::collect_basic_inventory,
+              zfleet::protocol::CollectBasicInventoryInput{}));
+  REQUIRE(zfleet::protocol::TaskInputMatchesType(
+              TaskType::package_update,
+              zfleet::protocol::PackageUpdateInput{}));
 }
 
 TEST_CASE("audit payload supports compact json serialization") {
