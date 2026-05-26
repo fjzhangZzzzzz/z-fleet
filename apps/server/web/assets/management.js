@@ -13,8 +13,10 @@
     const response = await fetch(url, options);
     const body = await response.json();
     if (!response.ok) {
-      const error = new Error(body.error && body.error.message ? body.error.message : "Request failed");
-      error.code = body.error && body.error.code ? body.error.code : "";
+      const code = body.error_code || "";
+      const message = body.message || "Request failed";
+      const error = new Error(message);
+      error.code = code;
       throw error;
     }
     return body;

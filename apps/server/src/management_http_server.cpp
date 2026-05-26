@@ -129,10 +129,17 @@ HttpResponse JsonResponse(nlohmann::json body, int status = 200) {
   };
 }
 
-HttpResponse ErrorResponse(int status, std::string code, std::string message) {
-  return JsonResponse(
-      {{"error", {{"code", std::move(code)}, {"message", std::move(message)}}}},
-      status);
+HttpResponse ErrorResponse(int status,
+                           std::string code,
+                           std::string message,
+                           bool retryable = false) {
+  return JsonResponse({{"protocol_version",
+                        std::string(zfleet::protocol::protocol_version())},
+                       {"occurred_at", zfleet::core::NowUtcRfc3339()},
+                       {"error_code", std::move(code)},
+                       {"message", std::move(message)},
+                       {"retryable", retryable}},
+                      status);
 }
 
 template <typename Body>

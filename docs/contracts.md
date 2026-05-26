@@ -8,7 +8,7 @@
 
 本文档记录 Agent / Server 之间的共享契约，包括协议版本、消息结构、任务模型、审计事件、错误码和兼容性约束。
 
-Web 管理 API 属于 Server 管理面契约，不属于 Agent 控制通道。管理 API 的架构决策见 [ADR 0010](adr/0010-web-management-entry.md)。本文件先记录 API 边界和稳定字段方向；具体响应 schema 在实现对应接口时同步补齐。
+Web 管理 API 属于 Server 管理面契约，不属于 Agent 控制通道。管理 API 的架构决策见 [ADR 0010](adr/0010-web-management-entry.md)。本文件先记录 API 边界和稳定字段方向；具体响应 schema 在实现对应接口时同步补齐。管理 API 的失败响应统一为顶层 `error_code` 契约。
 
 ## 协议版本管理
 
@@ -364,7 +364,7 @@ v0.1 先固定以下错误码：
 | `agent_not_registered` | `404` | 心跳或资产上报时找不到已注册 Agent | `true` |
 | `internal_error` | `500` | Server 内部错误 | `true` |
 
-`message` 字段用于辅助排障，但 Agent 逻辑判断必须基于 `error_code` 和 HTTP 状态码，而不是依赖 `message` 文案。
+`message` 字段用于辅助排障，但 Agent 和管理面逻辑判断必须基于 `error_code` 和 HTTP 状态码，而不是依赖 `message` 文案。
 
 ## v0.1 审计事件
 
