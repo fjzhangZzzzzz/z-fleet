@@ -204,8 +204,9 @@
         const payload = await request("/api/v1/install/commands?server_url=" +
           encodeURIComponent(window.location.origin) +
           "&token=" + encodeURIComponent(token.token) +
-          "&channel=" + encodeURIComponent(state.channel));
-        command.textContent = state.platform === "windows" ? payload.commands.windows : payload.commands.linux;
+          "&channel=" + encodeURIComponent(state.channel) +
+          "&platform=" + encodeURIComponent(state.platform));
+        command.textContent = payload.command;
         output.textContent = "凭证有效至 " + formatAbsoluteTime(token.expires_at) + "，请尽快在目标机器执行。";
         copyButton.disabled = false;
         setStatus("install", "安装命令已生成", true);

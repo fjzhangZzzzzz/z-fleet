@@ -1,6 +1,6 @@
 #include "management_http_server.h"
 
-#include "install_script_renderer.h"
+#include "install_platform_registry.h"
 #include "management_json_codec.h"
 #include "package_repository.h"
 
@@ -295,45 +295,6 @@ std::string QueryValue(const HttpRequest& request,
   return fallback;
 }
 
-std::string ShellQuote(std::string_view value) {
-  std::string output("'");
-  for (const auto ch : value) {
-    if (ch == '\'') {
-      output += "'\"'\"'";
-    } else {
-      output.push_back(ch);
-    }
-  }
-  output.push_back('\'');
-  return output;
-}
-
-std::string LinuxInstallCommand(const std::string& server_url,
-                                const std::string& control_url,
-                                const std::string& token,
-                                const std::string& channel,
-                                const std::string& root) {
-  const auto script_url = server_url + "/api/v1/install/linux.sh";
-  return "curl -fsSL " + ShellQuote(script_url) + " | sudo bash -s -- \\\n"
-         "  --server-url " +
-         ShellQuote(server_url) + " \\\n  --control-url " +
-         ShellQuote(control_url) + " \\\n  --token " + ShellQuote(token) +
-         " \\\n  --channel " + ShellQuote(channel) + " \\\n  --root " +
-         ShellQuote(root);
-}
-
-std::string WindowsInstallCommand(const std::string& server_url,
-                                  const std::string& control_url,
-                                  const std::string& token,
-                                  const std::string& channel,
-                                  const std::string& root) {
-  return "powershell -ExecutionPolicy Bypass -File " + ShellQuote(
-             server_url + "/api/v1/install/windows.ps1") +
-         " -ServerUrl " + ShellQuote(server_url) + " -ControlUrl " +
-         ShellQuote(control_url) + " -Token " + ShellQuote(token) +
-         " -Channel " + ShellQuote(channel) + " -Root " + ShellQuote(root);
-}
-
 std::string PathTail(std::string_view path, std::string_view prefix) {
   if (path.rfind(prefix, 0) != 0) {
     return {};
@@ -482,22 +443,21 @@ std::optional<HttpResponse> HandleAgentApi(const ApiContext& ctx) {
 std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
   const auto& request = ctx.request;
   auto* database = ctx.database;
-  if (request.method == "GET" && request.path == "/api/v1/install/linux.sh") {
-    InstallScriptRenderer renderer(ctx.web_static_root);
+  if (request.method == "GET" && request.path == "/api/v1/install/script") {
+    const auto platform = QueryValue(request, "platform", "");
+    if (platform.empty()) {
+      return ErrorResponse(400, "missing_required_field",
+                           "platform is required");
+    }
+    const auto* spec = FindInstallPlatformSpec(platform);
+    if (spec == nullptr) {
+      return ErrorResponse(400, "platform_not_allowed",
+                           "platform must be linux or windows");
+    }
     return HttpResponse{
         .status = 200,
-        .content_type = "text/x-shellscript",
-        .body = renderer.RenderLinuxScript(),
-    };
-  }
-
-  if (request.method == "GET" &&
-      request.path == "/api/v1/install/windows.ps1") {
-    InstallScriptRenderer renderer(ctx.web_static_root);
-    return HttpResponse{
-        .status = 200,
-        .content_type = "text/plain",
-        .body = renderer.RenderWindowsScript(),
+        .content_type = spec->script_content_type,
+        .body = RenderInstallScript(platform, ctx.web_static_root),
     };
   }
 
@@ -505,21 +465,30 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
     const auto server_url = QueryValue(request, "server_url", "");
     const auto token = QueryValue(request, "token", "");
     const auto channel = QueryValue(request, "channel", "stable");
+    const auto platform = QueryValue(request, "platform", "linux");
     const auto root = QueryValue(request, "root", "/opt/zfleet");
     if (server_url.empty() || token.empty()) {
       return ErrorResponse(400, "missing_required_field",
                            "server_url and token are required");
     }
+    if (platform != "linux" && platform != "windows") {
+      return ErrorResponse(400, "platform_not_allowed",
+                           "platform must be linux or windows");
+    }
     if (ctx.control_url.empty()) {
       return ErrorResponse(500, "control_url_not_configured",
                            "server control url is not configured");
     }
-    return JsonResponse(
-        {{"commands",
-          {{"linux", LinuxInstallCommand(server_url, ctx.control_url, token,
-                                         channel, root)},
-           {"windows", WindowsInstallCommand(server_url, ctx.control_url, token,
-                                             channel, root)}}}});
+    const InstallCommandRequest command_request{
+        .server_url = server_url,
+        .control_url = ctx.control_url,
+        .token = token,
+        .channel = channel,
+        .root = root,
+    };
+    return JsonResponse({{"platform", platform},
+                         {"script_url", InstallScriptUrl(platform, server_url)},
+                         {"command", BuildInstallCommand(platform, command_request)}});
   }
 
   if (request.method == "GET" && request.path == "/api/v1/install/options") {

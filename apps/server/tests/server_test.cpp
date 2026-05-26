@@ -692,24 +692,35 @@ TEST_CASE("management http server serves static UI and agent api") {
 
   const auto linux_script = SendHttpRequest(
       server.port(),
-      "GET /api/v1/install/linux.sh HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+      "GET /api/v1/install/script?platform=linux HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(linux_script.status == 200);
   REQUIRE(linux_script.body.find("sha256sum -c") != std::string::npos);
 
   const auto windows_script = SendHttpRequest(
       server.port(),
-      "GET /api/v1/install/windows.ps1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+      "GET /api/v1/install/script?platform=windows HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(windows_script.status == 200);
   REQUIRE(windows_script.body.find("Get-FileHash") != std::string::npos);
 
   const auto install_commands = SendHttpRequest(
       server.port(),
-      "GET /api/v1/install/commands?server_url=http%3A%2F%2F127.0.0.1%3A8080&token=abc&channel=stable HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+      "GET /api/v1/install/commands?server_url=http%3A%2F%2F127.0.0.1%3A8080&token=abc&channel=stable&platform=linux HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(install_commands.status == 200);
-  REQUIRE(install_commands.body.find("\"commands\"") != std::string::npos);
-  REQUIRE(install_commands.body.find("/api/v1/install/linux.sh") !=
+  REQUIRE(install_commands.body.find("\"command\"") != std::string::npos);
+  REQUIRE(install_commands.body.find("\"platform\":\"linux\"") !=
+          std::string::npos);
+  REQUIRE(install_commands.body.find("/api/v1/install/script?platform=linux") !=
           std::string::npos);
   REQUIRE(install_commands.body.find("--control-url") != std::string::npos);
+
+  const auto install_commands_windows = SendHttpRequest(
+      server.port(),
+      "GET /api/v1/install/commands?server_url=http%3A%2F%2F127.0.0.1%3A8080&token=abc&channel=stable&platform=windows HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+  REQUIRE(install_commands_windows.status == 200);
+  REQUIRE(install_commands_windows.body.find("\"platform\":\"windows\"") !=
+          std::string::npos);
+  REQUIRE(install_commands_windows.body.find("/api/v1/install/script?platform=windows") !=
+          std::string::npos);
 
   server.Stop();
 }
