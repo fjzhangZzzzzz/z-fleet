@@ -220,7 +220,7 @@ Web 后台安装包管理面向 Agent 与 installer package，不改变 `zfleet_
 3. Server 解析 `META/manifest.json`，校验 component、version、platform、arch、build_type、文件名、路径、文件大小和 SHA-256；目标元数据仅从 manifest 读取。
 4. 校验通过后写入包仓库和 `agent_packages` 记录。
 5. 管理员将 package 发布到 `stable`、`candidate` 或 `dev` channel。
-6. 安装页 `/install` 根据 channel 展示下载链接、摘要和安装命令。
+6. 安装页 `/install` 根据用户选择的平台与 channel 生成最终安装命令；下载链接、默认包解析、架构检测和版本选择由后端与平台脚本完成。
 
 channel 约束：
 
@@ -238,6 +238,14 @@ channel 约束：
 4. 安装页生成 Linux bootstrap 命令；Windows 可取 `/api/v1/install/windows.ps1`。薄脚本请求安装选项，下载并校验 installer 与 Agent ZIP，先部署 installer、再执行 Agent `apply` 并尝试启动 Agent。
 5. Agent 将 token 写入本地配置并在注册事件中发送；Server 对携带 token 的首次注册校验使用次数、过期时间及可选的平台/架构约束，重连不重复消费已用 token。
 6. 安装页命令文本由 `/api/v1/install/commands` 下发，前端不再拼接命令。
+
+当前安装页交互约束：
+
+- 只向最终用户暴露“平台”和“发布通道”；
+- 不暴露 `control_url`、`arch`、`build_type`；
+- 不在页面上直接展示推荐版本和包摘要；
+- 由 Server 结合自身配置生成最终安装命令；
+- 由平台脚本在目标机器上检测架构并请求对应默认安装包。
 
 Agent 维护流程：
 

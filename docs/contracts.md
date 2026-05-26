@@ -58,7 +58,7 @@ POST /api/v1/admin/packages/{package_id}/retire
 
 ### 安装选项
 
-`GET /api/v1/install/options` 返回当前可用于安装页的发布信息。建议字段：
+`GET /api/v1/install/options` 返回当前安装脚本或后端命令生成链路可用的发布信息。该接口服务于平台脚本和后端流程，不代表这些字段都应直接暴露给安装页最终用户。建议字段：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
@@ -82,8 +82,14 @@ POST /api/v1/admin/packages/{package_id}/retire
 必填查询参数：
 
 - `server_url`
-- `control_url`
 - `token`
+
+可选查询参数：
+
+- `channel`
+- `root`
+
+`control_url` 由 Server 端配置提供，不再要求前端在安装页显式传入。按 ADR 0013，安装页只应让用户选择必要输入，例如平台和发布通道。
 
 ### 注册 token
 
@@ -124,7 +130,7 @@ POST /api/v1/admin/packages/{package_id}/retire
 
 | channel | 含义 |
 | --- | --- |
-| `stable` | 默认推荐版本 |
+| `stable` | 默认推荐安装通道 |
 | `candidate` | 灰度验证版本 |
 | `dev` | 开发和测试版本 |
 
