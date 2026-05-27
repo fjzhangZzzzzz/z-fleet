@@ -17,8 +17,8 @@ constexpr std::array<std::string_view, 8> kRequiredFiles = {
     "install.html",
     "agents.html",
     "admin/packages.html",
-    "assets/management.css",
-    "assets/management.js",
+    "assets/admin.css",
+    "assets/admin.js",
     "scripts/install/linux.sh",
     "scripts/install/windows.ps1",
 };

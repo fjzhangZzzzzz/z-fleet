@@ -1,5 +1,6 @@
 #include "database.h"
 
+#include "zfleet/core/uuid.h"
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <sqlite3.h>
 
@@ -16,6 +17,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "zfleet/protocol/json_codec.h"
 
 namespace zfleet::server {
 namespace {

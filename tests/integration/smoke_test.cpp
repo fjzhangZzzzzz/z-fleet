@@ -3,11 +3,11 @@
 
 #include "database.h"
 #include "http2_control_client.h"
-#include "http2_connection_registry.h"
-#include "http2_control_dispatcher.h"
-#include "http2_control_server.h"
-#include "http2_control_service.h"
-#include "management_http_server.h"
+#include "control_connection_registry.h"
+#include "control_dispatcher.h"
+#include "control_server.h"
+#include "control_service.h"
+#include "admin_http_server.h"
 
 #include "test_util.h"
 
@@ -608,16 +608,16 @@ TEST_CASE("integration scaffold links core platform and protocol modules") {
   REQUIRE_FALSE(zfleet::core::NowUtcRfc3339().empty());
 }
 
-TEST_CASE("http2 control dispatcher persists register and heartbeat end to end") {
+TEST_CASE("control dispatcher persists register and heartbeat end to end") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet.db";
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
   registry.OpenConnection("conn-1", "2026-05-21T12:00:00Z");
-  zfleet::server::Http2ControlDispatcher dispatcher(
+  zfleet::server::ControlDispatcher dispatcher(
       &service, &registry, "conn-1");
 
   const auto registration_frame = EncodeEventFrame(RegisterEvent(
@@ -655,15 +655,15 @@ TEST_CASE("http2 control dispatcher persists register and heartbeat end to end")
   REQUIRE(connection->last_heartbeat_at == "2026-05-21T12:00:05Z");
 }
 
-TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
+TEST_CASE("control server accepts h2c framed register and heartbeat") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c.db";
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database, &service,
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server("127.0.0.1:0", &database, &service,
                                             &registry);
 
   std::thread server_thread([&server]() { server.Run(); });
@@ -697,15 +697,15 @@ TEST_CASE("http2 control server accepts h2c framed register and heartbeat") {
               "agent-h2c-1") == "2026-05-21T13:00:00Z");
 }
 
-TEST_CASE("http2 control client exposes rejected command stream status") {
+TEST_CASE("control client exposes rejected command stream status") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-command-reject.db";
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database, &service,
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server("127.0.0.1:0", &database, &service,
                                             &registry);
 
   std::thread server_thread([&server]() { server.Run(); });
@@ -726,17 +726,17 @@ TEST_CASE("http2 control client exposes rejected command stream status") {
   }
 }
 
-TEST_CASE("http2 control server rejects connections over configured limit") {
+TEST_CASE("control server rejects connections over configured limit") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-overload.db";
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server(
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server(
       "127.0.0.1:0", &database, &service, &registry,
-      zfleet::server::Http2ControlServerOptions{.max_connections = 1});
+      zfleet::server::ControlServerOptions{.max_connections = 1});
 
   std::thread server_thread([&server]() { server.Run(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -780,7 +780,7 @@ TEST_CASE("http2 control server rejects connections over configured limit") {
   REQUIRE(rejected);
 }
 
-TEST_CASE("http2 control server sends assigned task on command stream") {
+TEST_CASE("control server sends assigned task on command stream") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-command.db";
 
@@ -796,9 +796,9 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
       .os = "linux",
       .arch = "x86_64",
   });
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server("127.0.0.1:0", &database,
                                             &service, &registry);
 
   std::thread server_thread([&server]() { server.Run(); });
@@ -866,7 +866,7 @@ TEST_CASE("http2 control server sends assigned task on command stream") {
   REQUIRE(CountRows(database_path, "task_results") == 1);
 }
 
-TEST_CASE("http2 control server sends multiple queued tasks on one command stream") {
+TEST_CASE("control server sends multiple queued tasks on one command stream") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto database_path = test_dir.path() / "zfleet-h2c-command-multi.db";
 
@@ -883,9 +883,9 @@ TEST_CASE("http2 control server sends multiple queued tasks on one command strea
       .arch = "x86_64",
   });
 
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server("127.0.0.1:0", &database,
                                             &service, &registry);
 
   std::thread server_thread([&server]() { server.Run(); });
@@ -944,16 +944,16 @@ TEST_CASE("http2 control server sends multiple queued tasks on one command strea
                                "task-command-multi-2") == "assigned");
 }
 
-TEST_CASE("agent runtime completes task over http2 control channel") {
+TEST_CASE("agent runtime completes task over control channel") {
   const zfleet::test::ScopedTestDir test_dir("integration");
   const auto test_root = test_dir.path();
   const auto database_path = test_root / "zfleet-agent-runtime.db";
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer server("127.0.0.1:0", &database,
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer server("127.0.0.1:0", &database,
                                             &service, &registry);
 
   std::exception_ptr server_error;
@@ -1002,7 +1002,7 @@ TEST_CASE("agent runtime completes task over http2 control channel") {
   struct ThreadCleanup {
     zfleet::agent::AgentRuntime& runtime;
     std::thread& runtime_thread;
-    zfleet::server::Http2ControlServer& server;
+    zfleet::server::ControlServer& server;
     std::thread& server_thread;
 
     ~ThreadCleanup() {
@@ -1048,9 +1048,9 @@ TEST_CASE("agent runtime reconnects and registers again after server restart") {
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry first_registry;
-  zfleet::server::Http2ControlServer first_server(
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry first_registry;
+  zfleet::server::ControlServer first_server(
       "127.0.0.1:0", &database, &service, &first_registry);
 
   std::thread first_server_thread([&first_server]() { first_server.Run(); });
@@ -1111,14 +1111,14 @@ TEST_CASE("agent runtime reconnects and registers again after server restart") {
       .input = zfleet::protocol::CollectBasicInventoryInput{},
   });
 
-  zfleet::server::Http2ConnectionRegistry second_registry;
-  zfleet::server::Http2ControlServer second_server(
+  zfleet::server::ControlConnectionRegistry second_registry;
+  zfleet::server::ControlServer second_server(
       std::string("127.0.0.1:") + std::to_string(port), &database, &service,
       &second_registry);
   std::thread second_server_thread([&second_server]() { second_server.Run(); });
 
   struct ServerCleanup {
-    zfleet::server::Http2ControlServer& server;
+    zfleet::server::ControlServer& server;
     std::thread& thread;
 
     ~ServerCleanup() {
@@ -1148,22 +1148,22 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
 
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
-  zfleet::server::Http2ControlServer control_server(
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
+  zfleet::server::ControlServer control_server(
       "127.0.0.1:0", &database, &service, &registry);
 
-  zfleet::server::ManagementHttpServerOptions management_options;
-  management_options.allow_high_risk_write = true;
-  management_options.web_static_root = test_root / "web";
+  zfleet::server::AdminHttpServerOptions admin_options;
+  admin_options.allow_high_risk_write = true;
+  admin_options.web_static_root = test_root / "web";
   zfleet::test::WriteTextFile(test_root / "web" / "install.html", "install");
   zfleet::test::WriteTextFile(test_root / "web" / "index.html", "index");
   zfleet::test::WriteTextFile(test_root / "web" / "admin" / "packages.html",
                               "packages");
   zfleet::test::WriteTextFile(test_root / "web" / "agents.html", "agents");
-  zfleet::test::WriteTextFile(test_root / "web" / "assets" / "management.css",
+  zfleet::test::WriteTextFile(test_root / "web" / "assets" / "admin.css",
                               "body{}");
-  zfleet::test::WriteTextFile(test_root / "web" / "assets" / "management.js",
+  zfleet::test::WriteTextFile(test_root / "web" / "assets" / "admin.js",
                               "console.log('ok');");
   zfleet::test::WriteTextFile(test_root / "web" / "scripts" / "install" /
                                   "linux.sh",
@@ -1171,9 +1171,9 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
   zfleet::test::WriteTextFile(test_root / "web" / "scripts" / "install" /
                                   "windows.ps1",
                               "Write-Output ok\n");
-  zfleet::server::ManagementHttpServer management_server(
+  zfleet::server::AdminHttpServer admin_server(
       "127.0.0.1:0", &database, test_root / "packages", test_root / "web",
-      management_options);
+      admin_options);
 
   zfleet::package::Manifest agent_manifest{
       .schema_version = 1,
@@ -1239,7 +1239,7 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
   database.PublishAgentPackage(installer_package_id, "installer", "stable",
                                "linux", "x86_64", "release", "test", now);
 
-  management_server.Start();
+  admin_server.Start();
   std::exception_ptr control_error;
   std::thread control_thread([&control_server, &control_error]() {
     try {
@@ -1250,7 +1250,7 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
   });
   for (int attempt = 0;
        attempt < 50 &&
-       (control_server.port() == 0 || management_server.port() == 0);
+       (control_server.port() == 0 || admin_server.port() == 0);
        ++attempt) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
@@ -1278,21 +1278,21 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
   struct Cleanup {
     zfleet::agent::AgentRuntime& runtime;
     std::thread& runtime_thread;
-    zfleet::server::ManagementHttpServer& management_server;
-    zfleet::server::Http2ControlServer& control_server;
+    zfleet::server::AdminHttpServer& admin_server;
+    zfleet::server::ControlServer& control_server;
     std::thread& control_thread;
     ~Cleanup() {
       runtime.RequestStop();
       if (runtime_thread.joinable()) {
         runtime_thread.join();
       }
-      management_server.Stop();
+      admin_server.Stop();
       control_server.Stop();
       if (control_thread.joinable()) {
         control_thread.join();
       }
     }
-  } cleanup{runtime, runtime_thread, management_server, control_server,
+  } cleanup{runtime, runtime_thread, admin_server, control_server,
             control_thread};
 
   REQUIRE(WaitForSingleTextColumn(
@@ -1317,7 +1317,7 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
   }
 
   const auto options_response = SendHttpRequest(
-      management_server.port(),
+      admin_server.port(),
       "GET /api/v1/install/options?channel=stable&platform=linux&arch=x86_64&build_type=release HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(options_response.status == 200);
   REQUIRE(options_response.body.find("\"agent\"") != std::string::npos);
@@ -1330,7 +1330,7 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
       "Content-Type: application/json\r\nContent-Length: " +
       std::to_string(token_body.size()) + "\r\n\r\n" + token_body;
   const auto token_response =
-      SendHttpRequest(management_server.port(), token_request);
+      SendHttpRequest(admin_server.port(), token_request);
   REQUIRE(token_response.status == 201);
   REQUIRE(token_response.body.find("\"token\"") != std::string::npos);
 
@@ -1343,7 +1343,7 @@ TEST_CASE("install options runtime online and upgrade request flow end to end") 
       "application/json\r\nContent-Length: " +
       std::to_string(upgrade_body.size()) + "\r\n\r\n" + upgrade_body;
   const auto upgrade_response =
-      SendHttpRequest(management_server.port(), upgrade_request);
+      SendHttpRequest(admin_server.port(), upgrade_request);
   REQUIRE(upgrade_response.status == 201);
   REQUIRE(upgrade_response.body.find("\"upgrade_state\":\"queued\"") !=
           std::string::npos);

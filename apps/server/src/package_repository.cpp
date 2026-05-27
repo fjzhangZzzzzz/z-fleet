@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "package_component_policy.h"
+#include "package_component_resolver.h"
 
 namespace zfleet::server {
 namespace {

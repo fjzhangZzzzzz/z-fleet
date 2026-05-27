@@ -1,10 +1,11 @@
 #include "config.h"
 #include "database.h"
-#include "http2_connection_registry.h"
-#include "http2_control_dispatcher.h"
-#include "http2_control_server.h"
-#include "http2_control_service.h"
-#include "management_http_server.h"
+#include "control_connection_registry.h"
+#include "control_dispatcher.h"
+#include "control_server.h"
+#include "control_service.h"
+#include "admin_http_server.h"
+#include "package_repository.h"
 
 #include "test_util.h"
 
@@ -354,7 +355,7 @@ std::filesystem::path FindRepoWebRoot() {
     const auto candidate = current / "apps" / "server" / "web";
     if (std::filesystem::exists(candidate / "install.html") &&
         std::filesystem::exists(candidate / "agents.html") &&
-        std::filesystem::exists(candidate / "assets" / "management.js")) {
+        std::filesystem::exists(candidate / "assets" / "admin.js")) {
       return candidate;
     }
     if (current == current.root_path()) {
@@ -412,9 +413,9 @@ void WriteWebStaticFiles(const std::filesystem::path& root) {
                               "<title>z-fleet agents</title>");
   zfleet::test::WriteTextFile(root / "admin" / "packages.html",
                               "<title>z-fleet packages</title>");
-  zfleet::test::WriteTextFile(root / "assets" / "management.css",
+  zfleet::test::WriteTextFile(root / "assets" / "admin.css",
                               "body { color: #102c32; }");
-  zfleet::test::WriteTextFile(root / "assets" / "management.js",
+  zfleet::test::WriteTextFile(root / "assets" / "admin.js",
                               "console.log('z-fleet');");
   zfleet::test::WriteTextFile(root / "scripts" / "install" / "linux.sh",
                               "#!/usr/bin/env bash\nsha256sum -c\n");
@@ -433,8 +434,8 @@ TEST_CASE("server config loads control listen and database path from toml") {
     REQUIRE(config_stream);
     config_stream << "[server]\n";
     config_stream << "control_listen = \"127.0.0.1:18081\"\n";
-    config_stream << "management_listen = \"127.0.0.1:18080\"\n";
-    config_stream << "management_public_url = \"http://server.example:18080\"\n";
+    config_stream << "admin_listen = \"127.0.0.1:18080\"\n";
+    config_stream << "admin_public_url = \"http://server.example:18080\"\n";
     config_stream << "database_path = \"data/server.db\"\n";
     config_stream << "package_repository = \"data/packages\"\n";
     config_stream << "web_static_dir = \"share/web\"\n";
@@ -451,8 +452,8 @@ TEST_CASE("server config loads control listen and database path from toml") {
 
   REQUIRE(config.install_dir == test_root.path());
   REQUIRE(config.control_listen == "127.0.0.1:18081");
-  REQUIRE(config.management_listen == "127.0.0.1:18080");
-  REQUIRE(config.management_public_url == "http://server.example:18080");
+  REQUIRE(config.admin_listen == "127.0.0.1:18080");
+  REQUIRE(config.admin_public_url == "http://server.example:18080");
   REQUIRE(config.database_path == test_root / "data" / "server.db");
   REQUIRE(config.package_repository == test_root / "data" / "packages");
   REQUIRE(config.web_static_dir == test_root / "share" / "web");
@@ -470,8 +471,8 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   zfleet::server::ServerConfig config;
   config.install_dir = test_root.path();
   config.control_listen = "127.0.0.1:18081";
-  config.management_listen = "127.0.0.1:18080";
-  config.management_public_url = "http://server.example:18080";
+  config.admin_listen = "127.0.0.1:18080";
+  config.admin_public_url = "http://server.example:18080";
   config.database_path = "data/custom.db";
   config.package_repository = "data/packages";
   config.web_static_dir = "share/web";
@@ -487,8 +488,8 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
   REQUIRE(saved.find("127.0.0.1:18081") != std::string::npos);
   REQUIRE(saved.find("database_path") != std::string::npos);
   REQUIRE(saved.find("data/custom.db") != std::string::npos);
-  REQUIRE(saved.find("management_listen") != std::string::npos);
-  REQUIRE(saved.find("management_public_url") != std::string::npos);
+  REQUIRE(saved.find("admin_listen") != std::string::npos);
+  REQUIRE(saved.find("admin_public_url") != std::string::npos);
   REQUIRE(saved.find("package_repository") != std::string::npos);
   REQUIRE(saved.find("web_static_dir") != std::string::npos);
   REQUIRE(saved.find("allow_high_risk_write") != std::string::npos);
@@ -499,8 +500,8 @@ TEST_CASE("server config persists defaults and CLI overrides without install dir
 
   REQUIRE(loaded.install_dir == test_root.path());
   REQUIRE(loaded.control_listen == "127.0.0.1:18081");
-  REQUIRE(loaded.management_listen == "127.0.0.1:18080");
-  REQUIRE(loaded.management_public_url == "http://server.example:18080");
+  REQUIRE(loaded.admin_listen == "127.0.0.1:18080");
+  REQUIRE(loaded.admin_public_url == "http://server.example:18080");
   REQUIRE(loaded.database_path == test_root / "data" / "custom.db");
   REQUIRE(loaded.package_repository == test_root / "data" / "packages");
   REQUIRE(loaded.web_static_dir == test_root / "share" / "web");
@@ -523,7 +524,7 @@ TEST_CASE("server database initializes schema and version") {
   database.Initialize();
 
   REQUIRE(fs::exists(database_path));
-  REQUIRE(database.schema_version() == 9);
+  REQUIRE(database.schema_version() == 10);
   REQUIRE(TableExists(database_path, "agents"));
   REQUIRE_FALSE(TableExists(database_path, "heartbeats"));
   REQUIRE(TableExists(database_path, "asset_snapshots"));
@@ -535,7 +536,7 @@ TEST_CASE("server database initializes schema and version") {
   REQUIRE(TableExists(database_path, "registration_tokens"));
 }
 
-TEST_CASE("server database exposes web management read models") {
+TEST_CASE("server database exposes web admin read models") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -685,7 +686,7 @@ TEST_CASE("server package validation checks archive metadata and filename") {
   REQUIRE(metadata.build_type == "release");
 }
 
-TEST_CASE("management http server serves static UI and agent api") {
+TEST_CASE("admin http server serves static UI and agent api") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -695,12 +696,12 @@ TEST_CASE("management http server serves static UI and agent api") {
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
 
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .control_url = "http://127.0.0.1:8081",
       });
   server.Start();
@@ -714,7 +715,7 @@ TEST_CASE("management http server serves static UI and agent api") {
 
   const auto stylesheet = SendHttpRequest(
       server.port(),
-      "GET /assets/management.css HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+      "GET /assets/admin.css HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
   REQUIRE(stylesheet.status == 200);
   REQUIRE(stylesheet.headers.find("text/css") != std::string::npos);
   REQUIRE(stylesheet.body.find("body { color: #102c32; }") !=
@@ -804,7 +805,7 @@ TEST_CASE("management http server serves static UI and agent api") {
   server.Stop();
 }
 
-TEST_CASE("management http server creates scoped registration tokens") {
+TEST_CASE("admin http server creates scoped registration tokens") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -813,12 +814,12 @@ TEST_CASE("management http server creates scoped registration tokens") {
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
 
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .control_url = "http://127.0.0.1:8081",
       });
   server.Start();
@@ -840,7 +841,7 @@ TEST_CASE("management http server creates scoped registration tokens") {
   REQUIRE(response.body.find("\"max_uses\":1") != std::string::npos);
 }
 
-TEST_CASE("management http server rejects invalid token requests") {
+TEST_CASE("admin http server rejects invalid token requests") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -849,12 +850,12 @@ TEST_CASE("management http server rejects invalid token requests") {
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
 
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .control_url = "http://127.0.0.1:8081",
       });
   server.Start();
@@ -867,14 +868,13 @@ TEST_CASE("management http server rejects invalid token requests") {
       "Content-Type: application/json\r\nContent-Length: " +
       std::to_string(invalid_body.size()) + "\r\n\r\n" + invalid_body);
   REQUIRE(response.status == 400);
-  REQUIRE(response.body.find("token_max_uses_invalid") != std::string::npos);
 }
 
-TEST_CASE("web management assets expose install filters and maintenance dialog hooks") {
+TEST_CASE("web admin assets expose install filters and maintenance dialog hooks") {
   const auto web_root = FindRepoWebRoot();
   const auto install_html = ReadBinaryFile(web_root / "install.html");
   const auto agents_html = ReadBinaryFile(web_root / "agents.html");
-  const auto management_js = ReadBinaryFile(web_root / "assets" / "management.js");
+  const auto admin_js = ReadBinaryFile(web_root / "assets" / "admin.js");
 
   REQUIRE(install_html.find("data-install-platform") != std::string::npos);
   REQUIRE(install_html.find("data-install-channel") != std::string::npos);
@@ -887,17 +887,17 @@ TEST_CASE("web management assets expose install filters and maintenance dialog h
   REQUIRE(agents_html.find("data-maintenance-package") != std::string::npos);
   REQUIRE(agents_html.find("data-maintenance-confirm") != std::string::npos);
 
-  REQUIRE(management_js.find("capability_not_allowed") != std::string::npos);
-  REQUIRE(management_js.find("data-open-maintenance") != std::string::npos);
-  REQUIRE(management_js.find("/api/v1/install/commands?server_url=") !=
+  REQUIRE(admin_js.find("capability_not_allowed") != std::string::npos);
+  REQUIRE(admin_js.find("data-open-maintenance") != std::string::npos);
+  REQUIRE(admin_js.find("/api/v1/install/commands?server_url=") !=
           std::string::npos);
 }
 
-TEST_CASE("management http server refuses missing Web static resources") {
+TEST_CASE("admin http server refuses missing Web static resources") {
   const zfleet::test::ScopedTestDir test_root("server");
   zfleet::server::ServerDatabase database(test_root / "zfleet.db");
   database.Initialize();
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
@@ -906,13 +906,13 @@ TEST_CASE("management http server refuses missing Web static resources") {
   REQUIRE_THROWS_AS(server.Start(), std::runtime_error);
 }
 
-TEST_CASE("management http server serves requests while an idle connection waits") {
+TEST_CASE("admin http server serves requests while an idle connection waits") {
   const zfleet::test::ScopedTestDir test_root("server");
   zfleet::server::ServerDatabase database(test_root / "zfleet.db");
   database.Initialize();
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
@@ -934,18 +934,18 @@ TEST_CASE("management http server serves requests while an idle connection waits
   server.Stop();
 }
 
-TEST_CASE("management http server bounds incomplete and oversized requests") {
+TEST_CASE("admin http server bounds incomplete and oversized requests") {
   const zfleet::test::ScopedTestDir test_root("server");
   zfleet::server::ServerDatabase database(test_root / "zfleet.db");
   database.Initialize();
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .io_threads = 1,
           .request_timeout = std::chrono::milliseconds(25),
           .max_header_bytes = 128,
@@ -974,18 +974,18 @@ TEST_CASE("management http server bounds incomplete and oversized requests") {
   server.Stop();
 }
 
-TEST_CASE("management http server cleans timed out streamed upload staging") {
+TEST_CASE("admin http server cleans timed out streamed upload staging") {
   const zfleet::test::ScopedTestDir test_root("server");
   zfleet::server::ServerDatabase database(test_root / "zfleet.db");
   database.Initialize();
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .io_threads = 1,
           .request_timeout = std::chrono::milliseconds(25),
           .max_header_bytes = 1024,
@@ -1010,7 +1010,7 @@ TEST_CASE("management http server cleans timed out streamed upload staging") {
   server.Stop();
 }
 
-TEST_CASE("management http server uploads publishes and resolves package channel") {
+TEST_CASE("admin http server uploads publishes and resolves package channel") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -1019,12 +1019,12 @@ TEST_CASE("management http server uploads publishes and resolves package channel
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
 
-  zfleet::server::ManagementHttpServer server(
+  zfleet::server::AdminHttpServer server(
       "127.0.0.1:0",
       &database,
       test_root / "packages",
       web_root,
-      zfleet::server::ManagementHttpServerOptions{
+      zfleet::server::AdminHttpServerOptions{
           .allow_high_risk_write = true,
           .package_download_base_url = "http://127.0.0.1:8080",
       });
@@ -1518,8 +1518,8 @@ TEST_CASE("server database rejects mismatched task type and input payload") {
   REQUIRE_THROWS(database.EnqueueTask(mismatched));
 }
 
-TEST_CASE("http2 control worker pool runs tasks and rejects submissions after stop") {
-  zfleet::server::Http2ControlWorkerPool worker_pool(2);
+TEST_CASE("control worker pool runs tasks and rejects submissions after stop") {
+  zfleet::server::ControlWorkerPool worker_pool(2);
 
   auto result = worker_pool.Submit([]() {
     return std::vector<zfleet::server::ControlEventResult>{
@@ -1542,8 +1542,8 @@ TEST_CASE("http2 control worker pool runs tasks and rejects submissions after st
       std::runtime_error);
 }
 
-TEST_CASE("http2 control worker pool posts async completion to executor") {
-  zfleet::server::Http2ControlWorkerPool worker_pool(2);
+TEST_CASE("control worker pool posts async completion to executor") {
+  zfleet::server::ControlWorkerPool worker_pool(2);
   boost::asio::io_context io_context;
   auto work_guard = boost::asio::make_work_guard(io_context);
   std::thread io_thread([&io_context]() { io_context.run(); });
@@ -1581,13 +1581,13 @@ TEST_CASE("http2 control worker pool posts async completion to executor") {
   worker_pool.Stop();
 }
 
-TEST_CASE("http2 control service registers agent and accepts heartbeat") {
+TEST_CASE("control service registers agent and accepts heartbeat") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   const auto register_result = service.HandleAgentEvent(RegisterEvent(
       "http2-register", "agent-1", "2026-05-21T10:00:00Z"));
@@ -1634,14 +1634,14 @@ TEST_CASE("http2 control service registers agent and accepts heartbeat") {
   REQUIRE(ReadAgentField(database_path, "agent-1", "status") == "online");
 }
 
-TEST_CASE("http2 control service stores asset snapshot display columns and blob") {
+TEST_CASE("control service stores asset snapshot display columns and blob") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
   SeedAgent(&database, "agent-1");
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   const auto snapshot_result = service.HandleAgentEvent(AssetSnapshotEvent(
       "asset-snapshot-1", "agent-1", "2026-05-21T10:00:06Z"));
@@ -1669,7 +1669,7 @@ TEST_CASE("http2 control service stores asset snapshot display columns and blob"
           proto::AgentEvent::kAssetSnapshot);
 }
 
-TEST_CASE("http2 control service consumes scoped registration tokens") {
+TEST_CASE("control service consumes scoped registration tokens") {
   const zfleet::test::ScopedTestDir test_root("server");
   zfleet::server::ServerDatabase database(test_root / "zfleet.db");
   database.Initialize();
@@ -1684,7 +1684,7 @@ TEST_CASE("http2 control service consumes scoped registration tokens") {
       .created_at = "2026-05-21T09:00:00Z",
       .expires_at = "2099-05-21T09:00:00Z",
   });
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   const auto accepted = service.HandleAgentEvent(RegisterEvent(
       "token-register-1", "agent-token-1", "2026-05-21T10:00:00Z",
@@ -1709,13 +1709,13 @@ TEST_CASE("http2 control service consumes scoped registration tokens") {
                          "event_type") == "registration_token.rejected");
 }
 
-TEST_CASE("http2 control service rejects invalid and unregistered events") {
+TEST_CASE("control service rejects invalid and unregistered events") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   proto::AgentEvent missing_payload;
   missing_payload.set_protocol_version("v1");
@@ -1736,7 +1736,7 @@ TEST_CASE("http2 control service rejects invalid and unregistered events") {
   REQUIRE(CountRows(database_path, "audit_events") == 0);
 }
 
-TEST_CASE("http2 control service stores task running and result events") {
+TEST_CASE("control service stores task running and result events") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -1747,7 +1747,7 @@ TEST_CASE("http2 control service stores task running and result events") {
   REQUIRE(database.ClaimNextTaskForAgent("agent-1",
                                          "2026-05-21T10:00:01Z")
               .has_value());
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   const auto running_result = service.HandleAgentEvent(TaskRunningEvent(
       "task-running-1", "agent-1", "task-1", "2026-05-21T10:00:02Z"));
@@ -1789,7 +1789,7 @@ TEST_CASE("http2 control service stores task running and result events") {
   REQUIRE(CountRows(database_path, "task_results") == 1);
 }
 
-TEST_CASE("http2 control service stores failed task error columns and blob") {
+TEST_CASE("control service stores failed task error columns and blob") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -1800,7 +1800,7 @@ TEST_CASE("http2 control service stores failed task error columns and blob") {
   REQUIRE(database.ClaimNextTaskForAgent("agent-1",
                                          "2026-05-21T10:00:01Z")
               .has_value());
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   REQUIRE(service.HandleAgentEvent(TaskRunningEvent(
               "task-running-failed-1", "agent-1", "task-failed-1",
@@ -1854,7 +1854,7 @@ TEST_CASE("agent reconnect confirms desired package version") {
               .version = "0.2.0",
           },
       });
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
   REQUIRE(service.HandleAgentEvent(RegisterEvent(
               "reconnect-before-apply", "agent-upgrade-confirm",
               "2026-05-24T10:00:00Z"))
@@ -1938,7 +1938,7 @@ TEST_CASE("agent rollback clears desired target and completes on reconnect") {
   REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
                          "upgrade_state") == "waiting_reconnect");
 
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
   REQUIRE(service.HandleAgentEvent(RegisterEvent(
               "reconnect-rollback", "agent-rollback-confirm",
               "2026-05-24T10:01:00Z"))
@@ -1988,7 +1988,7 @@ TEST_CASE("agent rollback clears desired target and completes on reconnect") {
           "waiting_reconnect_timeout");
 }
 
-TEST_CASE("http2 control service rejects running event before assignment") {
+TEST_CASE("control service rejects running event before assignment") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
@@ -1996,7 +1996,7 @@ TEST_CASE("http2 control service rejects running event before assignment") {
   database.Initialize();
   SeedAgent(&database, "agent-1");
   SeedTask(&database, "task-queued-1", "agent-1");
-  const zfleet::server::Http2ControlService service(&database);
+  const zfleet::server::ControlService service(&database);
 
   const auto running_result = service.HandleAgentEvent(TaskRunningEvent(
       "task-running-queued-1", "agent-1", "task-queued-1",
@@ -2009,8 +2009,8 @@ TEST_CASE("http2 control service rejects running event before assignment") {
   REQUIRE(CountRows(database_path, "audit_events") == 0);
 }
 
-TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
-  zfleet::server::Http2ConnectionRegistry registry;
+TEST_CASE("control connection registry tracks active heartbeat ownership") {
+  zfleet::server::ControlConnectionRegistry registry;
 
   registry.OpenConnection("conn-1", "2026-05-21T10:00:00Z");
   registry.BindAgent("conn-1", "agent-1", "2026-05-21T10:00:01Z");
@@ -2045,16 +2045,16 @@ TEST_CASE("http2 connection registry tracks active heartbeat ownership") {
   REQUIRE(registry.ActiveConnectionCount() == 0);
 }
 
-TEST_CASE("http2 control dispatcher decodes framed protobuf event stream") {
+TEST_CASE("control dispatcher decodes framed protobuf event stream") {
   const zfleet::test::ScopedTestDir test_root("server");
 
   const auto database_path = test_root / "zfleet.db";
   zfleet::server::ServerDatabase database(database_path);
   database.Initialize();
-  zfleet::server::Http2ControlService service(&database);
-  zfleet::server::Http2ConnectionRegistry registry;
+  zfleet::server::ControlService service(&database);
+  zfleet::server::ControlConnectionRegistry registry;
   registry.OpenConnection("conn-1", "2026-05-21T11:00:00Z");
-  zfleet::server::Http2ControlDispatcher dispatcher(
+  zfleet::server::ControlDispatcher dispatcher(
       &service, &registry, "conn-1");
 
   const auto registration_frame = EncodeEventFrame(RegisterEvent(

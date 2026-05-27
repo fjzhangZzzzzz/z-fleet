@@ -1,15 +1,9 @@
 #pragma once
 
-#include "database.h"
-#include "http2_connection_registry.h"
-#include "http2_control_dispatcher.h"
-#include "http2_control_service.h"
-
+#include <atomic>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/any_io_executor.hpp>
-
-#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -22,29 +16,34 @@
 #include <thread>
 #include <vector>
 
+#include "control_connection_registry.h"
+#include "control_dispatcher.h"
+#include "control_service.h"
+#include "database.h"
+
 namespace zfleet::server {
 
-struct Http2ControlServerOptions {
+struct ControlServerOptions {
   std::size_t io_threads = 2;
   std::size_t max_connections = 128;
   std::size_t worker_threads = 4;
 };
 
-class Http2ControlWorkerPool {
+class ControlWorkerPool {
  public:
-  explicit Http2ControlWorkerPool(std::size_t thread_count);
-  ~Http2ControlWorkerPool();
+  explicit ControlWorkerPool(std::size_t thread_count);
+  ~ControlWorkerPool();
 
-  Http2ControlWorkerPool(const Http2ControlWorkerPool&) = delete;
-  Http2ControlWorkerPool& operator=(const Http2ControlWorkerPool&) = delete;
+  ControlWorkerPool(const ControlWorkerPool&) = delete;
+  ControlWorkerPool& operator=(const ControlWorkerPool&) = delete;
 
   std::future<std::vector<ControlEventResult>> Submit(
       std::function<std::vector<ControlEventResult>()> task);
-  bool Submit(std::function<std::vector<ControlEventResult>()> task,
-              boost::asio::any_io_executor completion_executor,
-              std::function<void(std::exception_ptr,
-                                 std::vector<ControlEventResult>)>
-                  completion);
+  bool Submit(
+      std::function<std::vector<ControlEventResult>()> task,
+      boost::asio::any_io_executor completion_executor,
+      std::function<void(std::exception_ptr, std::vector<ControlEventResult>)>
+          completion);
   void Stop();
 
  private:
@@ -57,14 +56,13 @@ class Http2ControlWorkerPool {
   std::vector<std::thread> threads_;
 };
 
-class Http2ControlServer {
+class ControlServer {
  public:
-  Http2ControlServer(std::string listen_address,
-                     ServerStore* store,
-                     const Http2ControlService* service,
-                     Http2ConnectionRegistry* registry,
-                     Http2ControlServerOptions options = {});
-  ~Http2ControlServer();
+  ControlServer(std::string listen_address, ServerStore* store,
+                const ControlService* service,
+                ControlConnectionRegistry* registry,
+                ControlServerOptions options = {});
+  ~ControlServer();
 
   void Run();
   void Stop();
@@ -84,14 +82,14 @@ class Http2ControlServer {
   boost::asio::io_context io_context_;
   boost::asio::ip::tcp::acceptor acceptor_;
   ServerStore* store_;
-  const Http2ControlService* service_;
-  Http2ConnectionRegistry* registry_;
-  Http2ControlServerOptions options_;
-  Http2ControlWorkerPool worker_pool_;
+  const ControlService* service_;
+  ControlConnectionRegistry* registry_;
+  ControlServerOptions options_;
+  ControlWorkerPool worker_pool_;
   std::mutex io_threads_mutex_;
   std::vector<std::thread> io_threads_;
   std::mutex sessions_mutex_;
   std::vector<ActiveSession> sessions_;
 };
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

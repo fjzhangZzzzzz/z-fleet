@@ -2,6 +2,7 @@
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>

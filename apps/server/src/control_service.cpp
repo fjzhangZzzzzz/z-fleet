@@ -1,4 +1,4 @@
-#include "http2_control_service.h"
+#include "control_service.h"
 
 #include <cstdint>
 #include <exception>
@@ -153,9 +153,9 @@ std::string SerializeProto(const Message& message) {
 
 }  // namespace
 
-Http2ControlService::Http2ControlService(ServerStore* store) : store_(store) {}
+ControlService::ControlService(ServerStore* store) : store_(store) {}
 
-ControlEventResult Http2ControlService::HandleAgentEvent(
+ControlEventResult ControlService::HandleAgentEvent(
     const proto::AgentEvent& event) const {
   const auto validation = ValidateEnvelope(event);
   if (validation.status != ControlEventStatus::kAccepted) {
@@ -180,7 +180,7 @@ ControlEventResult Http2ControlService::HandleAgentEvent(
   }
 }
 
-ControlEventResult Http2ControlService::HandleTaskRunning(
+ControlEventResult ControlService::HandleTaskRunning(
     const proto::AgentEvent& event) const {
   const auto& running = event.task_running();
   const auto task_type = ToDomainTaskType(running.task_type());
@@ -238,7 +238,7 @@ ControlEventResult Http2ControlService::HandleTaskRunning(
   }
 }
 
-ControlEventResult Http2ControlService::HandleTaskResult(
+ControlEventResult ControlService::HandleTaskResult(
     const proto::AgentEvent& event) const {
   const auto& result = event.task_result();
   const auto task_type = ToDomainTaskType(result.task_type());
@@ -340,7 +340,7 @@ ControlEventResult Http2ControlService::HandleTaskResult(
   }
 }
 
-ControlEventResult Http2ControlService::ValidateEnvelope(
+ControlEventResult ControlService::ValidateEnvelope(
     const proto::AgentEvent& event) const {
   if (event.protocol_version() != zfleet::protocol::protocol_version()) {
     return InvalidArgument("unsupported protocol version");
@@ -357,7 +357,7 @@ ControlEventResult Http2ControlService::ValidateEnvelope(
   return Accepted("accepted");
 }
 
-ControlEventResult Http2ControlService::HandleRegister(
+ControlEventResult ControlService::HandleRegister(
     const proto::AgentEvent& event) const {
   const auto& registration = event.register_();
   const zfleet::protocol::AgentRegistration request{
@@ -450,7 +450,7 @@ ControlEventResult Http2ControlService::HandleRegister(
   }
 }
 
-ControlEventResult Http2ControlService::HandleHeartbeat(
+ControlEventResult ControlService::HandleHeartbeat(
     const proto::AgentEvent& event) const {
   const auto& heartbeat = event.heartbeat();
   const zfleet::protocol::AgentHeartbeat request{
@@ -476,7 +476,7 @@ ControlEventResult Http2ControlService::HandleHeartbeat(
   }
 }
 
-ControlEventResult Http2ControlService::HandleAssetSnapshot(
+ControlEventResult ControlService::HandleAssetSnapshot(
     const proto::AgentEvent& event) const {
   const auto& snapshot = event.asset_snapshot();
   const zfleet::protocol::AssetSnapshot request{
@@ -530,7 +530,7 @@ ControlEventResult Http2ControlService::HandleAssetSnapshot(
   }
 }
 
-void Http2ControlService::RecordAuditEvent(
+void ControlService::RecordAuditEvent(
     zfleet::protocol::AuditEventType event_type, std::string request_id,
     std::string agent_id, std::string result, std::string payload_json) const {
   store_->RecordAuditEvent(zfleet::protocol::AuditEvent{

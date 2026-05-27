@@ -1,24 +1,13 @@
-#include "http2_control_server.h"
+#include "control_server.h"
 
-#include "http2_control_dispatcher.h"
-
-#include "zfleet/core/log.h"
-#include "zfleet/core/time.h"
-#include "zfleet/core/uuid.h"
-#include "zfleet/protocol/message.h"
-#include "zfleet/protocol/v1/agent_control.pb.h"
-#include "zfleet/transport/frame_codec.h"
-
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/write.hpp>
-#include "zfleet/transport/nghttp2_compat.h"
-
-#include <algorithm>
-#include <atomic>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -27,13 +16,22 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <thread>
-#include <stdexcept>
 #include <span>
+#include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "control_dispatcher.h"
+#include "zfleet/core/log.h"
+#include "zfleet/core/time.h"
+#include "zfleet/core/uuid.h"
+#include "zfleet/protocol/message.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/transport/frame_codec.h"
+#include "zfleet/transport/nghttp2_compat.h"
 
 namespace zfleet::server {
 namespace {
@@ -42,11 +40,11 @@ using tcp = boost::asio::ip::tcp;
 namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
-#define ZFLEET_NGHTTP2_NV(NAME, VALUE)                                      \
-  nghttp2_nv {                                                              \
-    reinterpret_cast<std::uint8_t*>(const_cast<char*>(NAME)),               \
-        reinterpret_cast<std::uint8_t*>(const_cast<char*>(VALUE)),          \
-        sizeof(NAME) - 1, sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE           \
+#define ZFLEET_NGHTTP2_NV(NAME, VALUE)                             \
+  nghttp2_nv {                                                     \
+    reinterpret_cast<std::uint8_t*>(const_cast<char*>(NAME)),      \
+        reinterpret_cast<std::uint8_t*>(const_cast<char*>(VALUE)), \
+        sizeof(NAME) - 1, sizeof(VALUE) - 1, NGHTTP2_NV_FLAG_NONE  \
   }
 
 tcp::endpoint ParseListenAddress(const std::string& listen_address) {
@@ -66,7 +64,7 @@ struct StreamState {
   std::string method;
   std::string path;
   std::string correlation_id;
-  std::shared_ptr<Http2ControlDispatcher> dispatcher;
+  std::shared_ptr<ControlDispatcher> dispatcher;
   std::shared_ptr<std::mutex> dispatcher_mutex = std::make_shared<std::mutex>();
   std::vector<std::uint8_t> response_body;
   std::size_t response_offset = 0;
@@ -81,12 +79,13 @@ struct StreamState {
   bool response_submitted = false;
 };
 
-struct ConnectionContext : public std::enable_shared_from_this<ConnectionContext> {
+struct ConnectionContext
+    : public std::enable_shared_from_this<ConnectionContext> {
   std::shared_ptr<tcp::socket> socket;
   ServerStore* store;
-  const Http2ControlService* service;
-  Http2ConnectionRegistry* registry;
-  Http2ControlWorkerPool* worker_pool;
+  const ControlService* service;
+  ControlConnectionRegistry* registry;
+  ControlWorkerPool* worker_pool;
   boost::asio::any_io_executor completion_executor;
   nghttp2_session* session = nullptr;
   std::deque<std::vector<std::uint8_t>> pending_writes;
@@ -97,10 +96,9 @@ struct ConnectionContext : public std::enable_shared_from_this<ConnectionContext
   std::map<std::int32_t, StreamState> streams;
 
   ConnectionContext(std::shared_ptr<tcp::socket> accepted_socket,
-                    ServerStore* store_arg,
-                    const Http2ControlService* service_arg,
-                    Http2ConnectionRegistry* registry_arg,
-                    Http2ControlWorkerPool* worker_pool_arg,
+                    ServerStore* store_arg, const ControlService* service_arg,
+                    ControlConnectionRegistry* registry_arg,
+                    ControlWorkerPool* worker_pool_arg,
                     boost::asio::any_io_executor completion_executor_arg,
                     std::string connection_id_arg)
       : socket(std::move(accepted_socket)),
@@ -114,8 +112,8 @@ struct ConnectionContext : public std::enable_shared_from_this<ConnectionContext
 
 void CheckNghttp2(int rv, std::string_view operation) {
   if (rv < 0) {
-    throw std::runtime_error(std::string(operation) + " failed: " +
-                             nghttp2_strerror(rv));
+    throw std::runtime_error(std::string(operation) +
+                             " failed: " + nghttp2_strerror(rv));
   }
 }
 
@@ -152,11 +150,11 @@ proto::CapabilityLevel ToProtoCapabilityLevel(
   return proto::CAPABILITY_LEVEL_UNSPECIFIED;
 }
 
-std::vector<std::uint8_t> EncodeCommandFrame(
-    const zfleet::protocol::Task& task,
-    std::string_view correlation_id) {
+std::vector<std::uint8_t> EncodeCommandFrame(const zfleet::protocol::Task& task,
+                                             std::string_view correlation_id) {
   proto::ServerCommand command;
-  command.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
+  command.set_protocol_version(
+      std::string(zfleet::protocol::protocol_version()));
   command.set_message_id(zfleet::core::GenerateUuid());
   command.set_correlation_id(std::string(correlation_id));
   command.set_agent_id(task.agent_id);
@@ -197,8 +195,7 @@ std::vector<std::uint8_t> EncodeCommandFrame(
       reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
 }
 
-void SubmitSimpleResponse(nghttp2_session* session,
-                          std::int32_t stream_id,
+void SubmitSimpleResponse(nghttp2_session* session, std::int32_t stream_id,
                           std::string_view status) {
   std::array<nghttp2_nv, 2> headers{
       ZFLEET_NGHTTP2_NV(":status", "200"),
@@ -217,12 +214,9 @@ void SubmitSimpleResponse(nghttp2_session* session,
 }
 
 ssize_t ResponseReadCallback(nghttp2_session* /*session*/,
-                             std::int32_t /*stream_id*/,
-                             std::uint8_t* buffer,
-                             std::size_t length,
-                             std::uint32_t* data_flags,
-                             nghttp2_data_source* source,
-                             void* /*user_data*/) {
+                             std::int32_t /*stream_id*/, std::uint8_t* buffer,
+                             std::size_t length, std::uint32_t* data_flags,
+                             nghttp2_data_source* source, void* /*user_data*/) {
   auto* stream = static_cast<StreamState*>(source->ptr);
   const auto remaining = stream->response_body.size() - stream->response_offset;
   const auto bytes_to_copy = std::min(length, remaining);
@@ -237,8 +231,7 @@ ssize_t ResponseReadCallback(nghttp2_session* /*session*/,
   return static_cast<ssize_t>(bytes_to_copy);
 }
 
-void SubmitCommandHeaders(nghttp2_session* session,
-                          std::int32_t stream_id,
+void SubmitCommandHeaders(nghttp2_session* session, std::int32_t stream_id,
                           StreamState* stream) {
   if (stream->command_headers_submitted) {
     return;
@@ -247,15 +240,14 @@ void SubmitCommandHeaders(nghttp2_session* session,
       ZFLEET_NGHTTP2_NV(":status", "200"),
       ZFLEET_NGHTTP2_NV("content-type", "application/x-protobuf"),
   };
-  CheckNghttp2(nghttp2_submit_headers(session, NGHTTP2_FLAG_NONE, stream_id,
-                                      nullptr, headers.data(), headers.size(),
-                                      nullptr),
-               "submit command stream headers");
+  CheckNghttp2(
+      nghttp2_submit_headers(session, NGHTTP2_FLAG_NONE, stream_id, nullptr,
+                             headers.data(), headers.size(), nullptr),
+      "submit command stream headers");
   stream->command_headers_submitted = true;
 }
 
-void SubmitCommandData(nghttp2_session* session,
-                       std::int32_t stream_id,
+void SubmitCommandData(nghttp2_session* session, std::int32_t stream_id,
                        StreamState* stream) {
   std::array<nghttp2_nv, 2> headers{
       ZFLEET_NGHTTP2_NV(":status", "200"),
@@ -270,28 +262,24 @@ void SubmitCommandData(nghttp2_session* session,
                  "submit command response");
     stream->command_headers_submitted = true;
   } else {
-    CheckNghttp2(nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id,
-                                     &provider),
-                 "submit command data");
+    CheckNghttp2(
+        nghttp2_submit_data(session, NGHTTP2_FLAG_NONE, stream_id, &provider),
+        "submit command data");
   }
   stream->command_data_in_flight = true;
 }
 
 bool IsWouldBlock(const boost::system::error_code& ec);
 
-ssize_t SendCallback(nghttp2_session* /*session*/,
-                     const std::uint8_t* data,
-                     std::size_t length,
-                     int /*flags*/,
-                     void* user_data) {
+ssize_t SendCallback(nghttp2_session* /*session*/, const std::uint8_t* data,
+                     std::size_t length, int /*flags*/, void* user_data) {
   auto* context = static_cast<ConnectionContext*>(user_data);
   context->pending_writes.emplace_back(data, data + length);
   return static_cast<ssize_t>(length);
 }
 
 int OnBeginHeadersCallback(nghttp2_session* /*session*/,
-                           const nghttp2_frame* frame,
-                           void* user_data) {
+                           const nghttp2_frame* frame, void* user_data) {
   if (frame->hd.type != NGHTTP2_HEADERS ||
       frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
     return 0;
@@ -302,14 +290,10 @@ int OnBeginHeadersCallback(nghttp2_session* /*session*/,
   return 0;
 }
 
-int OnHeaderCallback(nghttp2_session* /*session*/,
-                     const nghttp2_frame* frame,
-                     const std::uint8_t* name,
-                     std::size_t name_length,
-                     const std::uint8_t* value,
-                     std::size_t value_length,
-                     std::uint8_t /*flags*/,
-                     void* user_data) {
+int OnHeaderCallback(nghttp2_session* /*session*/, const nghttp2_frame* frame,
+                     const std::uint8_t* name, std::size_t name_length,
+                     const std::uint8_t* value, std::size_t value_length,
+                     std::uint8_t /*flags*/, void* user_data) {
   if (frame->hd.type != NGHTTP2_HEADERS ||
       frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
     return 0;
@@ -337,16 +321,15 @@ int OnHeaderCallback(nghttp2_session* /*session*/,
 
 void HandleCommandHeadersEnd(nghttp2_session* session,
                              const nghttp2_frame* frame,
-                             ConnectionContext* context,
-                             StreamState* stream) {
+                             ConnectionContext* context, StreamState* stream) {
   if (stream == nullptr || stream->method != "GET" ||
       stream->path != zfleet::transport::kControlCommandsPath) {
     SubmitSimpleResponse(session, frame->hd.stream_id, "400");
     return;
   }
 
-  const auto connection = context->registry->FindByConnection(
-      context->connection_id);
+  const auto connection =
+      context->registry->FindByConnection(context->connection_id);
   if (!connection.has_value() || !connection->agent_id.has_value() ||
       connection->disconnected_at.has_value()) {
     SubmitSimpleResponse(session, frame->hd.stream_id, "404");
@@ -374,8 +357,7 @@ void FinalizeSentCommandData(ConnectionContext* context) {
   }
 }
 
-void TrySubmitEventResponse(nghttp2_session* session,
-                            std::int32_t stream_id,
+void TrySubmitEventResponse(nghttp2_session* session, std::int32_t stream_id,
                             StreamState* stream) {
   if (stream == nullptr || stream->response_submitted ||
       !stream->end_stream_received || stream->pending_event_chunks != 0) {
@@ -385,12 +367,9 @@ void TrySubmitEventResponse(nghttp2_session* session,
   stream->response_submitted = true;
 }
 
-int OnDataChunkRecvCallback(nghttp2_session* session,
-                            std::uint8_t /*flags*/,
-                            std::int32_t stream_id,
-                            const std::uint8_t* data,
-                            std::size_t length,
-                            void* user_data) {
+int OnDataChunkRecvCallback(nghttp2_session* session, std::uint8_t /*flags*/,
+                            std::int32_t stream_id, const std::uint8_t* data,
+                            std::size_t length, void* user_data) {
   auto* context = static_cast<ConnectionContext*>(user_data);
   auto* stream = FindStream(context, stream_id);
   if (stream == nullptr) {
@@ -404,7 +383,7 @@ int OnDataChunkRecvCallback(nghttp2_session* session,
   }
 
   if (stream->dispatcher == nullptr) {
-    stream->dispatcher = std::make_shared<Http2ControlDispatcher>(
+    stream->dispatcher = std::make_shared<ControlDispatcher>(
         context->service, context->registry, context->connection_id);
   }
   std::vector<std::uint8_t> bytes(data, data + length);
@@ -418,8 +397,7 @@ int OnDataChunkRecvCallback(nghttp2_session* session,
       },
       context->completion_executor,
       [context = context->shared_from_this(), stream_id](
-          std::exception_ptr error,
-          std::vector<ControlEventResult> results) {
+          std::exception_ptr error, std::vector<ControlEventResult> results) {
         auto* stream = FindStream(context.get(), stream_id);
         if (stream == nullptr || context->session == nullptr) {
           return;
@@ -461,8 +439,7 @@ bool IsWouldBlock(const boost::system::error_code& ec) {
          ec == boost::asio::error::try_again;
 }
 
-int OnFrameRecvCallback(nghttp2_session* session,
-                        const nghttp2_frame* frame,
+int OnFrameRecvCallback(nghttp2_session* session, const nghttp2_frame* frame,
                         void* user_data) {
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST &&
@@ -473,9 +450,9 @@ int OnFrameRecvCallback(nghttp2_session* session,
       HandleCommandHeadersEnd(session, frame, context, stream);
       return 0;
     }
-    SubmitSimpleResponse(session, frame->hd.stream_id,
-                         stream != nullptr && !stream->has_error ? "200"
-                                                                  : "400");
+    SubmitSimpleResponse(
+        session, frame->hd.stream_id,
+        stream != nullptr && !stream->has_error ? "200" : "400");
     return 0;
   }
 
@@ -491,10 +468,8 @@ int OnFrameRecvCallback(nghttp2_session* session,
   return 0;
 }
 
-int OnStreamCloseCallback(nghttp2_session* /*session*/,
-                          std::int32_t stream_id,
-                          std::uint32_t /*error_code*/,
-                          void* user_data) {
+int OnStreamCloseCallback(nghttp2_session* /*session*/, std::int32_t stream_id,
+                          std::uint32_t /*error_code*/, void* user_data) {
   auto* context = static_cast<ConnectionContext*>(user_data);
   context->streams.erase(stream_id);
   return 0;
@@ -519,9 +494,7 @@ struct SessionCallbacks {
         callbacks, OnStreamCloseCallback);
   }
 
-  ~SessionCallbacks() {
-    nghttp2_session_callbacks_del(callbacks);
-  }
+  ~SessionCallbacks() { nghttp2_session_callbacks_del(callbacks); }
 };
 
 struct ServerSession {
@@ -532,22 +505,20 @@ struct ServerSession {
         nghttp2_session_server_new(&session, callbacks.callbacks, context),
         "create nghttp2 server session");
     context->session = session;
-    CheckNghttp2(nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, nullptr, 0),
-                 "submit http2 settings");
+    CheckNghttp2(
+        nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, nullptr, 0),
+        "submit http2 settings");
   }
 
-  ~ServerSession() {
-    nghttp2_session_del(session);
-  }
+  ~ServerSession() { nghttp2_session_del(session); }
 };
 
 class Http2Session : public std::enable_shared_from_this<Http2Session> {
  public:
-  Http2Session(std::shared_ptr<tcp::socket> socket,
-               ServerStore* store,
-               const Http2ControlService* service,
-               Http2ConnectionRegistry* registry,
-               Http2ControlWorkerPool* worker_pool,
+  Http2Session(std::shared_ptr<tcp::socket> socket, ServerStore* store,
+               const ControlService* service,
+               ControlConnectionRegistry* registry,
+               ControlWorkerPool* worker_pool,
                std::shared_ptr<std::atomic_bool> done)
       : socket_(std::move(socket)),
         executor_(boost::asio::make_strand(socket_->get_executor())),
@@ -561,28 +532,27 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
   void Start() {
     auto self = shared_from_this();
     boost::asio::post(executor_, [self]() {
-      self->context_->flush_output = [weak = std::weak_ptr<Http2Session>(self)] {
+      self->context_->flush_output = [weak =
+                                          std::weak_ptr<Http2Session>(self)] {
         if (const auto session = weak.lock()) {
           session->FlushOutput();
         }
       };
-      self->context_->request_command_drain = [
-          weak = std::weak_ptr<Http2Session>(self)]() {
-        if (const auto session = weak.lock()) {
-          session->TryStartQueuedCommands();
-        }
-      };
-      self->context_->registry->OpenConnection(
-          self->context_->connection_id, zfleet::core::NowUtcRfc3339());
-      self->server_session_ =
-          std::make_unique<ServerSession>(self->callbacks_,
-                                          self->context_.get());
+      self->context_->request_command_drain =
+          [weak = std::weak_ptr<Http2Session>(self)]() {
+            if (const auto session = weak.lock()) {
+              session->TryStartQueuedCommands();
+            }
+          };
+      self->context_->registry->OpenConnection(self->context_->connection_id,
+                                               zfleet::core::NowUtcRfc3339());
+      self->server_session_ = std::make_unique<ServerSession>(
+          self->callbacks_, self->context_.get());
       if (self->database_ != nullptr) {
         self->task_queue_subscription_ =
             self->database_->SubscribeTaskQueueChanges(
-                self->executor_,
-                [weak = std::weak_ptr<Http2Session>(self)](
-                    std::uint64_t version) {
+                self->executor_, [weak = std::weak_ptr<Http2Session>(self)](
+                                     std::uint64_t version) {
                   if (const auto session = weak.lock()) {
                     session->OnTaskQueueChanged(version);
                   }
@@ -595,21 +565,18 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
 
   void Stop() {
     auto self = shared_from_this();
-    boost::asio::post(executor_, [self]() {
-      self->Close();
-    });
+    boost::asio::post(executor_, [self]() { self->Close(); });
   }
 
  private:
   void DoRead() {
     auto self = shared_from_this();
-    socket_->async_read_some(
-        boost::asio::buffer(read_buffer_),
-        boost::asio::bind_executor(
-            executor_,
-            [self](boost::system::error_code ec, std::size_t bytes_read) {
-              self->OnRead(ec, bytes_read);
-            }));
+    socket_->async_read_some(boost::asio::buffer(read_buffer_),
+                             boost::asio::bind_executor(
+                                 executor_, [self](boost::system::error_code ec,
+                                                   std::size_t bytes_read) {
+                                   self->OnRead(ec, bytes_read);
+                                 }));
   }
 
   void OnRead(boost::system::error_code ec, std::size_t bytes_read) {
@@ -623,23 +590,20 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     if (ec) {
       ZFLOG_ERROR(zfleet::core::log::Component("server").With(
                       {{"connection_id", context_->connection_id}}),
-                  "http2 control connection failed: {}",
-                  ec.message());
+                  "http2 control connection failed: {}", ec.message());
       Close();
       return;
     }
 
     try {
       const auto rv = nghttp2_session_mem_recv(context_->session,
-                                               read_buffer_.data(),
-                                               bytes_read);
+                                               read_buffer_.data(), bytes_read);
       CheckNghttp2(static_cast<int>(rv), "receive http2 bytes");
       FlushSession();
     } catch (const std::exception& ex) {
       ZFLOG_ERROR(zfleet::core::log::Component("server").With(
                       {{"connection_id", context_->connection_id}}),
-                  "http2 control connection failed: {}",
-                  ex.what());
+                  "http2 control connection failed: {}", ex.what());
       Close();
       return;
     }
@@ -677,10 +641,8 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     boost::asio::async_write(
         *socket_, boost::asio::buffer(context_->pending_writes.front()),
         boost::asio::bind_executor(
-            executor_,
-            [self](boost::system::error_code ec, std::size_t /*bytes*/) {
-              self->OnWrite(ec);
-            }));
+            executor_, [self](boost::system::error_code ec,
+                              std::size_t /*bytes*/) { self->OnWrite(ec); }));
   }
 
   void OnWrite(boost::system::error_code ec) {
@@ -705,8 +667,8 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
       return;
     }
 
-    const auto connection = context_->registry->FindByConnection(
-        context_->connection_id);
+    const auto connection =
+        context_->registry->FindByConnection(context_->connection_id);
     if (!connection.has_value() || !connection->agent_id.has_value() ||
         connection->disconnected_at.has_value()) {
       return;
@@ -734,8 +696,7 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     }
   }
 
-  void OnCommandClaimComplete(std::int32_t stream_id,
-                              std::exception_ptr error,
+  void OnCommandClaimComplete(std::int32_t stream_id, std::exception_ptr error,
                               std::optional<zfleet::protocol::Task> task) {
     if (closed_ || context_->session == nullptr) {
       return;
@@ -791,17 +752,16 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
         closed->was_current_agent_connection) {
       if (async_store_ != nullptr) {
         auto done = done_;
-        async_store_->AsyncMarkAgentOffline(
-            *closed->agent_id, disconnected_at, executor_,
-            [done](std::exception_ptr) {
-              if (done != nullptr) {
-                done->store(true);
-              }
-            });
+        async_store_->AsyncMarkAgentOffline(*closed->agent_id, disconnected_at,
+                                            executor_,
+                                            [done](std::exception_ptr) {
+                                              if (done != nullptr) {
+                                                done->store(true);
+                                              }
+                                            });
         return;
       } else {
-        context_->store->MarkAgentOffline(*closed->agent_id,
-                                          disconnected_at);
+        context_->store->MarkAgentOffline(*closed->agent_id, disconnected_at);
       }
     }
     if (done_ != nullptr) {
@@ -822,23 +782,21 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
   bool closed_ = false;
 };
 
-} // namespace
+}  // namespace
 
-Http2ControlWorkerPool::Http2ControlWorkerPool(std::size_t thread_count) {
+ControlWorkerPool::ControlWorkerPool(std::size_t thread_count) {
   if (thread_count == 0) {
     thread_count = 1;
   }
   threads_.reserve(thread_count);
   for (std::size_t index = 0; index < thread_count; ++index) {
-    threads_.emplace_back(&Http2ControlWorkerPool::RunWorker, this);
+    threads_.emplace_back(&ControlWorkerPool::RunWorker, this);
   }
 }
 
-Http2ControlWorkerPool::~Http2ControlWorkerPool() {
-  Stop();
-}
+ControlWorkerPool::~ControlWorkerPool() { Stop(); }
 
-std::future<std::vector<ControlEventResult>> Http2ControlWorkerPool::Submit(
+std::future<std::vector<ControlEventResult>> ControlWorkerPool::Submit(
     std::function<std::vector<ControlEventResult>()> task) {
   auto promise =
       std::make_shared<std::promise<std::vector<ControlEventResult>>>();
@@ -860,7 +818,7 @@ std::future<std::vector<ControlEventResult>> Http2ControlWorkerPool::Submit(
   return result;
 }
 
-bool Http2ControlWorkerPool::Submit(
+bool ControlWorkerPool::Submit(
     std::function<std::vector<ControlEventResult>()> task,
     boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr, std::vector<ControlEventResult>)>
@@ -869,12 +827,10 @@ bool Http2ControlWorkerPool::Submit(
     std::lock_guard lock(mutex_);
     if (stopping_) {
       boost::asio::post(
-          completion_executor,
-          [completion = std::move(completion)]() mutable {
-            completion(
-                std::make_exception_ptr(std::runtime_error(
-                    "http2 control worker pool is stopped")),
-                {});
+          completion_executor, [completion = std::move(completion)]() mutable {
+            completion(std::make_exception_ptr(std::runtime_error(
+                           "http2 control worker pool is stopped")),
+                       {});
           });
       return false;
     }
@@ -882,19 +838,16 @@ bool Http2ControlWorkerPool::Submit(
                       completion = std::move(completion)]() mutable {
       try {
         auto result = task();
-        boost::asio::post(
-            completion_executor,
-            [completion = std::move(completion),
-             result = std::move(result)]() mutable {
-              completion(nullptr, std::move(result));
-            });
+        boost::asio::post(completion_executor,
+                          [completion = std::move(completion),
+                           result = std::move(result)]() mutable {
+                            completion(nullptr, std::move(result));
+                          });
       } catch (...) {
         const auto exception = std::current_exception();
-        boost::asio::post(
-            completion_executor,
-            [completion = std::move(completion), exception]() mutable {
-              completion(exception, {});
-            });
+        boost::asio::post(completion_executor,
+                          [completion = std::move(completion),
+                           exception]() mutable { completion(exception, {}); });
       }
     });
   }
@@ -902,7 +855,7 @@ bool Http2ControlWorkerPool::Submit(
   return true;
 }
 
-void Http2ControlWorkerPool::Stop() {
+void ControlWorkerPool::Stop() {
   {
     std::lock_guard lock(mutex_);
     if (stopping_) {
@@ -918,7 +871,7 @@ void Http2ControlWorkerPool::Stop() {
   }
 }
 
-void Http2ControlWorkerPool::RunWorker() {
+void ControlWorkerPool::RunWorker() {
   while (true) {
     std::function<void()> task;
     {
@@ -937,12 +890,10 @@ void Http2ControlWorkerPool::RunWorker() {
   }
 }
 
-Http2ControlServer::Http2ControlServer(
-    std::string listen_address,
-    ServerStore* store,
-    const Http2ControlService* service,
-    Http2ConnectionRegistry* registry,
-    Http2ControlServerOptions options)
+ControlServer::ControlServer(std::string listen_address, ServerStore* store,
+                             const ControlService* service,
+                             ControlConnectionRegistry* registry,
+                             ControlServerOptions options)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(1),
       acceptor_(io_context_),
@@ -952,11 +903,9 @@ Http2ControlServer::Http2ControlServer(
       options_(options),
       worker_pool_(options_.worker_threads) {}
 
-Http2ControlServer::~Http2ControlServer() {
-  Stop();
-}
+ControlServer::~ControlServer() { Stop(); }
 
-void Http2ControlServer::Run() {
+void ControlServer::Run() {
   if (store_ == nullptr) {
     throw std::invalid_argument("server store must not be null");
   }
@@ -991,7 +940,7 @@ void Http2ControlServer::Run() {
   io_context_.run();
 }
 
-void Http2ControlServer::Stop() {
+void ControlServer::Stop() {
   boost::system::error_code ec;
   acceptor_.cancel(ec);
   acceptor_.close(ec);
@@ -1037,47 +986,46 @@ void Http2ControlServer::Stop() {
   }
 }
 
-std::uint16_t Http2ControlServer::port() const noexcept {
-  return endpoint_.port();
+std::uint16_t ControlServer::port() const noexcept { return endpoint_.port(); }
+
+void ControlServer::StartAccept() {
+  acceptor_.async_accept([this](boost::system::error_code ec,
+                                tcp::socket socket) {
+    if (ec) {
+      if (acceptor_.is_open()) {
+        StartAccept();
+      }
+      return;
+    }
+
+    ReapFinishedSessions();
+    auto socket_ptr = std::make_shared<tcp::socket>(std::move(socket));
+    auto done = std::make_shared<std::atomic_bool>(false);
+    {
+      std::lock_guard lock(sessions_mutex_);
+      if (sessions_.size() >= options_.max_connections) {
+        socket_ptr->close(ec);
+        ZFLOG_ERROR(
+            zfleet::core::log::Component("server"),
+            "http2 control connection rejected: too many active connections");
+      } else {
+        auto session = std::make_shared<Http2Session>(
+            socket_ptr, store_, service_, registry_, &worker_pool_, done);
+        sessions_.push_back(ActiveSession{
+            .session = session,
+            .stop = [session]() { session->Stop(); },
+            .done = done,
+        });
+        session->Start();
+      }
+    }
+    if (acceptor_.is_open()) {
+      StartAccept();
+    }
+  });
 }
 
-void Http2ControlServer::StartAccept() {
-  acceptor_.async_accept(
-      [this](boost::system::error_code ec, tcp::socket socket) {
-        if (ec) {
-          if (acceptor_.is_open()) {
-            StartAccept();
-          }
-          return;
-        }
-
-        ReapFinishedSessions();
-        auto socket_ptr = std::make_shared<tcp::socket>(std::move(socket));
-        auto done = std::make_shared<std::atomic_bool>(false);
-        {
-          std::lock_guard lock(sessions_mutex_);
-          if (sessions_.size() >= options_.max_connections) {
-            socket_ptr->close(ec);
-            ZFLOG_ERROR(zfleet::core::log::Component("server"),
-                        "http2 control connection rejected: too many active connections");
-          } else {
-            auto session = std::make_shared<Http2Session>(
-                socket_ptr, store_, service_, registry_, &worker_pool_, done);
-            sessions_.push_back(ActiveSession{
-                .session = session,
-                .stop = [session]() { session->Stop(); },
-                .done = done,
-            });
-            session->Start();
-          }
-        }
-        if (acceptor_.is_open()) {
-          StartAccept();
-        }
-      });
-}
-
-void Http2ControlServer::ReapFinishedSessions() {
+void ControlServer::ReapFinishedSessions() {
   std::lock_guard lock(sessions_mutex_);
   auto session = sessions_.begin();
   while (session != sessions_.end()) {
@@ -1089,4 +1037,4 @@ void Http2ControlServer::ReapFinishedSessions() {
   }
 }
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

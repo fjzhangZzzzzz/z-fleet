@@ -1,12 +1,8 @@
 #pragma once
 
-#include "database.h"
-#include "static_file_service.h"
-
+#include <atomic>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -14,9 +10,12 @@
 #include <thread>
 #include <vector>
 
+#include "database.h"
+#include "static_file_service.h"
+
 namespace zfleet::server {
 
-struct ManagementHttpServerOptions {
+struct AdminHttpServerOptions {
   std::size_t io_threads = 1;
   std::chrono::milliseconds request_timeout = std::chrono::seconds(10);
   std::size_t max_header_bytes = 16 * 1024;
@@ -27,17 +26,16 @@ struct ManagementHttpServerOptions {
   std::filesystem::path web_static_root;
 };
 
-class ManagementHttpServer {
+class AdminHttpServer {
  public:
-  ManagementHttpServer(std::string listen_address,
-                       ServerDatabase* database,
-                       std::filesystem::path package_repository,
-                       std::filesystem::path web_static_dir,
-                       ManagementHttpServerOptions options = {});
-  ~ManagementHttpServer();
+  AdminHttpServer(std::string listen_address, ServerDatabase* database,
+                  std::filesystem::path package_repository,
+                  std::filesystem::path web_static_dir,
+                  AdminHttpServerOptions options = {});
+  ~AdminHttpServer();
 
-  ManagementHttpServer(const ManagementHttpServer&) = delete;
-  ManagementHttpServer& operator=(const ManagementHttpServer&) = delete;
+  AdminHttpServer(const AdminHttpServer&) = delete;
+  AdminHttpServer& operator=(const AdminHttpServer&) = delete;
 
   void Run();
   void Start();
@@ -53,7 +51,7 @@ class ManagementHttpServer {
   ServerDatabase* database_;
   std::filesystem::path package_repository_;
   StaticFileService static_files_;
-  ManagementHttpServerOptions options_;
+  AdminHttpServerOptions options_;
   std::atomic_bool stopping_ = false;
   std::vector<std::thread> io_threads_;
 };

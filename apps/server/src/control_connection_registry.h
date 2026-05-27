@@ -24,17 +24,14 @@ struct ClosedConnectionSnapshot {
   bool was_current_agent_connection = false;
 };
 
-class Http2ConnectionRegistry {
+class ControlConnectionRegistry {
  public:
   void OpenConnection(std::string connection_id, std::string connected_at);
   std::optional<ClosedConnectionSnapshot> CloseConnection(
-      std::string_view connection_id,
-      std::string disconnected_at);
-  void BindAgent(std::string_view connection_id,
-                 std::string agent_id,
+      std::string_view connection_id, std::string disconnected_at);
+  void BindAgent(std::string_view connection_id, std::string agent_id,
                  std::string observed_at);
-  void RecordHeartbeat(std::string_view connection_id,
-                       std::string agent_id,
+  void RecordHeartbeat(std::string_view connection_id, std::string agent_id,
                        std::string heartbeat_at);
 
   std::optional<ControlConnectionSnapshot> FindByConnection(
@@ -46,8 +43,7 @@ class Http2ConnectionRegistry {
   std::size_t ActiveConnectionCount() const;
 
  private:
-  void BindAgentLocked(std::string_view connection_id,
-                       std::string agent_id,
+  void BindAgentLocked(std::string_view connection_id, std::string agent_id,
                        std::string observed_at);
 
   mutable std::mutex mutex_;
@@ -56,4 +52,4 @@ class Http2ConnectionRegistry {
   std::map<std::string, std::string, std::less<>> connection_by_agent_id_;
 };
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

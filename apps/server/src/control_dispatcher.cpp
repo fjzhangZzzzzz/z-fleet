@@ -1,9 +1,9 @@
-#include "http2_control_dispatcher.h"
-
-#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "control_dispatcher.h"
 
 #include <exception>
 #include <utility>
+
+#include "zfleet/protocol/v1/agent_control.pb.h"
 
 namespace zfleet::server {
 namespace {
@@ -15,21 +15,19 @@ ControlEventResult InvalidArgument(std::string message) {
   };
 }
 
-} // namespace
+}  // namespace
 
-Http2ControlDispatcher::Http2ControlDispatcher(
-    const Http2ControlService* service)
+ControlDispatcher::ControlDispatcher(const ControlService* service)
     : service_(service), registry_(nullptr) {}
 
-Http2ControlDispatcher::Http2ControlDispatcher(
-    const Http2ControlService* service,
-    Http2ConnectionRegistry* registry,
-    std::string connection_id)
+ControlDispatcher::ControlDispatcher(const ControlService* service,
+                                     ControlConnectionRegistry* registry,
+                                     std::string connection_id)
     : service_(service),
       registry_(registry),
       connection_id_(std::move(connection_id)) {}
 
-std::vector<ControlEventResult> Http2ControlDispatcher::PushEventBytes(
+std::vector<ControlEventResult> ControlDispatcher::PushEventBytes(
     std::span<const std::uint8_t> bytes) {
   std::vector<std::vector<std::uint8_t>> frames;
   try {
@@ -55,7 +53,7 @@ std::vector<ControlEventResult> Http2ControlDispatcher::PushEventBytes(
   return results;
 }
 
-void Http2ControlDispatcher::RecordAcceptedEvent(
+void ControlDispatcher::RecordAcceptedEvent(
     const zfleet::protocol::v1::AgentEvent& event) const {
   if (registry_ == nullptr || connection_id_.empty()) {
     return;
@@ -75,4 +73,4 @@ void Http2ControlDispatcher::RecordAcceptedEvent(
   }
 }
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

@@ -1,4 +1,4 @@
-#include "installer_policy_registry.h"
+#include "installer_package_resolver.h"
 
 #include <algorithm>
 #include <vector>

@@ -1,17 +1,17 @@
 add_library(zfleet_server_app
   src/config.cpp
   src/database.cpp
-  src/http2_connection_registry.cpp
-  src/http2_control_dispatcher.cpp
-  src/http2_control_server.cpp
-  src/http2_control_service.cpp
-  src/install_platform_registry.cpp
-  src/installer_policy_registry.cpp
-  src/management_json_codec.cpp
-  src/management_http_server.cpp
+  src/control_connection_registry.cpp
+  src/control_dispatcher.cpp
+  src/control_server.cpp
+  src/control_service.cpp
+  src/install_platform_resolver.cpp
+  src/installer_package_resolver.cpp
+  src/admin_json_codec.cpp
+  src/admin_http_server.cpp
   src/package_repository.cpp
-  src/package_component_policy.cpp
-  src/package_selection_policy.cpp
+  src/package_component_resolver.cpp
+  src/package_selection_resolver.cpp
   src/static_file_service.cpp
 )
 

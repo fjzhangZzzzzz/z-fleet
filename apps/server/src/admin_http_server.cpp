@@ -1,4 +1,4 @@
-#include "management_http_server.h"
+#include "admin_http_server.h"
 
 #include <algorithm>
 #include <array>
@@ -16,11 +16,11 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "install_platform_registry.h"
-#include "installer_policy_registry.h"
-#include "management_json_codec.h"
+#include "admin_json_codec.h"
+#include "install_platform_resolver.h"
+#include "installer_package_resolver.h"
 #include "package_repository.h"
-#include "package_selection_policy.h"
+#include "package_selection_resolver.h"
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
@@ -49,11 +49,10 @@ struct HttpResponse {
   std::string body;
 };
 
-void RecordManagementAudit(ServerDatabase* database,
-                           zfleet::protocol::AuditEventType event_type,
-                           const std::string& request_id,
-                           const std::string& result,
-                           const std::string& payload_json) {
+void RecordAdminAudit(ServerDatabase* database,
+                      zfleet::protocol::AuditEventType event_type,
+                      const std::string& request_id, const std::string& result,
+                      const std::string& payload_json) {
   database->RecordAuditEvent(zfleet::protocol::AuditEvent{
       .audit_id = zfleet::core::GenerateUuid(),
       .occurred_at = zfleet::core::NowUtcRfc3339(),
@@ -349,16 +348,16 @@ HttpResponse CommitAgentPackageUpload(
     validated_record.status = "validated";
     validated_record.validated_at = now;
     database->UpsertAgentPackage(validated_record);
-    RecordManagementAudit(database,
-                          zfleet::protocol::AuditEventType::package_validated,
-                          package_id, "success",
-                          zfleet::protocol::SerializeAuditPayload(
-                              {{"package_id", package_id},
-                               {"version", metadata.version},
-                               {"platform", metadata.platform},
-                               {"arch", metadata.arch},
-                               {"build_type", metadata.build_type},
-                               {"component", metadata.component}}));
+    RecordAdminAudit(database,
+                     zfleet::protocol::AuditEventType::package_validated,
+                     package_id, "success",
+                     zfleet::protocol::SerializeAuditPayload(
+                         {{"package_id", package_id},
+                          {"version", metadata.version},
+                          {"platform", metadata.platform},
+                          {"arch", metadata.arch},
+                          {"build_type", metadata.build_type},
+                          {"component", metadata.component}}));
     return JsonResponse(ToJson(validated_record), 201);
   } catch (const std::exception& ex) {
     std::error_code ignored;
@@ -560,7 +559,7 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
         .expires_at = input.expires_at,
     };
     database->CreateRegistrationToken(token);
-    RecordManagementAudit(
+    RecordAdminAudit(
         database, zfleet::protocol::AuditEventType::registration_token_created,
         token_id, "success",
         zfleet::protocol::SerializeAuditPayload(
@@ -617,19 +616,18 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
             },
     };
     database->ScheduleAgentRollback(agent_id, input.set_by, now, task);
-    RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::agent_rollback_requested,
-        task_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"agent_id", agent_id}, {"task_id", task_id}}));
-    RecordManagementAudit(database,
-                          zfleet::protocol::AuditEventType::task_queued,
-                          task_id, "success",
-                          zfleet::protocol::SerializeAuditPayload(
-                              {{"agent_id", agent_id},
-                               {"task_id", task_id},
-                               {"task_type", std::string("package_update")},
-                               {"action", std::string("rollback")}}));
+    RecordAdminAudit(database,
+                     zfleet::protocol::AuditEventType::agent_rollback_requested,
+                     task_id, "success",
+                     zfleet::protocol::SerializeAuditPayload(
+                         {{"agent_id", agent_id}, {"task_id", task_id}}));
+    RecordAdminAudit(database, zfleet::protocol::AuditEventType::task_queued,
+                     task_id, "success",
+                     zfleet::protocol::SerializeAuditPayload(
+                         {{"agent_id", agent_id},
+                          {"task_id", task_id},
+                          {"task_type", std::string("package_update")},
+                          {"action", std::string("rollback")}}));
     return JsonResponse({{"task_id", task_id},
                          {"agent_id", agent_id},
                          {"upgrade_state", "queued"},
@@ -731,7 +729,7 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
     }
     database->ScheduleAgentUpgrade(agent_id, package->version, package_id,
                                    input.set_by, now, task, prerequisite_task);
-    RecordManagementAudit(
+    RecordAdminAudit(
         database, zfleet::protocol::AuditEventType::agent_upgrade_requested,
         task_id, "success",
         zfleet::protocol::SerializeAuditPayload(
@@ -740,24 +738,22 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
              {"task_id", task_id},
              {"capability_level", std::string("high_risk_write")}}));
     if (prerequisite_task.has_value()) {
-      RecordManagementAudit(database,
-                            zfleet::protocol::AuditEventType::task_queued,
-                            prerequisite_task->task_id, "success",
-                            zfleet::protocol::SerializeAuditPayload(
-                                {{"agent_id", agent_id},
-                                 {"task_id", prerequisite_task->task_id},
-                                 {"task_type", std::string("package_update")},
-                                 {"component", std::string("installer")},
-                                 {"next_task_id", task_id}}));
+      RecordAdminAudit(database, zfleet::protocol::AuditEventType::task_queued,
+                       prerequisite_task->task_id, "success",
+                       zfleet::protocol::SerializeAuditPayload(
+                           {{"agent_id", agent_id},
+                            {"task_id", prerequisite_task->task_id},
+                            {"task_type", std::string("package_update")},
+                            {"component", std::string("installer")},
+                            {"next_task_id", task_id}}));
     }
-    RecordManagementAudit(database,
-                          zfleet::protocol::AuditEventType::task_queued,
-                          task_id, "success",
-                          zfleet::protocol::SerializeAuditPayload(
-                              {{"agent_id", agent_id},
-                               {"task_id", task_id},
-                               {"task_type", std::string("package_update")},
-                               {"package_id", package_id}}));
+    RecordAdminAudit(database, zfleet::protocol::AuditEventType::task_queued,
+                     task_id, "success",
+                     zfleet::protocol::SerializeAuditPayload(
+                         {{"agent_id", agent_id},
+                          {"task_id", task_id},
+                          {"task_type", std::string("package_update")},
+                          {"package_id", package_id}}));
     return JsonResponse(
         {{"task_id", task_id},
          {"prerequisite_task_id", prerequisite_task.has_value()
@@ -820,26 +816,26 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
       validated.status = "validated";
       validated.validated_at = validated_at;
       database->UpsertAgentPackage(validated);
-      RecordManagementAudit(
-          database, zfleet::protocol::AuditEventType::package_validated,
-          package_id, "success",
-          zfleet::protocol::SerializeAuditPayload(
-              {{"package_id", package_id},
-               {"version", metadata.version},
-               {"platform", metadata.platform},
-               {"arch", metadata.arch},
-               {"build_type", metadata.build_type},
-               {"component", metadata.component}}));
+      RecordAdminAudit(database,
+                       zfleet::protocol::AuditEventType::package_validated,
+                       package_id, "success",
+                       zfleet::protocol::SerializeAuditPayload(
+                           {{"package_id", package_id},
+                            {"version", metadata.version},
+                            {"platform", metadata.platform},
+                            {"arch", metadata.arch},
+                            {"build_type", metadata.build_type},
+                            {"component", metadata.component}}));
       return JsonResponse(ToJson(*database->FindAgentPackage(package_id)));
     } catch (const std::exception& ex) {
       AgentPackageRecord rejected = *package;
       rejected.status = "rejected";
       database->UpsertAgentPackage(rejected);
-      RecordManagementAudit(
-          database, zfleet::protocol::AuditEventType::package_validated,
-          package_id, "failure",
-          zfleet::protocol::SerializeAuditPayload(
-              {{"package_id", package_id}, {"error", ex.what()}}));
+      RecordAdminAudit(database,
+                       zfleet::protocol::AuditEventType::package_validated,
+                       package_id, "failure",
+                       zfleet::protocol::SerializeAuditPayload(
+                           {{"package_id", package_id}, {"error", ex.what()}}));
       return ErrorResponse(400, "package_validation_failed", ex.what());
     }
   }
@@ -877,16 +873,16 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
     database->PublishAgentPackage(
         package_id, package->component, channel, package->platform,
         package->arch, package->build_type, input.published_by, published_at);
-    RecordManagementAudit(
-        database, zfleet::protocol::AuditEventType::package_published,
-        package_id, "success",
-        zfleet::protocol::SerializeAuditPayload(
-            {{"package_id", package_id}, {"channel", channel}}));
+    RecordAdminAudit(database,
+                     zfleet::protocol::AuditEventType::package_published,
+                     package_id, "success",
+                     zfleet::protocol::SerializeAuditPayload(
+                         {{"package_id", package_id}, {"channel", channel}}));
     const auto published = database->FindAgentPackage(package_id);
     return JsonResponse(ToJson(*published));
   }
 
-    if (request.method == "POST" &&
+  if (request.method == "POST" &&
       request.path.rfind("/api/v1/admin/packages/", 0) == 0 &&
       request.path.ends_with("/retire")) {
     const auto prefix = std::string("/api/v1/admin/packages/");
@@ -897,7 +893,7 @@ std::optional<HttpResponse> HandleAdminPackageApi(const ApiContext& ctx) {
       return ErrorResponse(404, "package_not_found", "package was not found");
     }
     database->RetireAgentPackage(package_id, zfleet::core::NowUtcRfc3339());
-    RecordManagementAudit(
+    RecordAdminAudit(
         database, zfleet::protocol::AuditEventType::package_retired, package_id,
         "success",
         zfleet::protocol::SerializeAuditPayload({{"package_id", package_id}}));
@@ -957,7 +953,7 @@ HttpResponse HandleApi(const HttpRequest& request, ServerDatabase* database,
                        const std::filesystem::path& web_static_root) {
   const auto now = zfleet::core::NowUtcRfc3339();
   for (const auto& agent_id : database->ExpireWaitingReconnect(now)) {
-    RecordManagementAudit(
+    RecordAdminAudit(
         database, zfleet::protocol::AuditEventType::agent_upgrade_confirmed,
         zfleet::core::GenerateUuid(), "error",
         zfleet::protocol::SerializeAuditPayload(
@@ -1058,7 +1054,7 @@ class ManagementHttpSession
   ManagementHttpSession(tcp::socket socket, ServerDatabase* database,
                         const std::filesystem::path& package_repository,
                         const StaticFileService& static_files,
-                        ManagementHttpServerOptions options)
+                        AdminHttpServerOptions options)
       : socket_(std::move(socket)),
         timer_(socket_.get_executor()),
         database_(database),
@@ -1232,7 +1228,7 @@ class ManagementHttpSession
                              options_.control_url, options_.web_static_root));
       }
     } catch (const std::exception& ex) {
-      ZFLOG_ERROR(zfleet::core::log::Component("management_http"),
+      ZFLOG_ERROR(zfleet::core::log::Component("admin_http"),
                   "management request failed: {}", ex.what());
       Respond(ErrorResponse(500, "internal_error", ex.what()));
     }
@@ -1273,7 +1269,7 @@ class ManagementHttpSession
   ServerDatabase* database_;
   const std::filesystem::path& package_repository_;
   const StaticFileService& static_files_;
-  ManagementHttpServerOptions options_;
+  AdminHttpServerOptions options_;
   beast::flat_buffer buffer_;
   std::unique_ptr<http::request_parser<http::buffer_body>> parser_;
   std::array<char, 8192> body_buffer_{};
@@ -1289,10 +1285,11 @@ class ManagementHttpSession
 
 }  // namespace
 
-ManagementHttpServer::ManagementHttpServer(
-    std::string listen_address, ServerDatabase* database,
-    std::filesystem::path package_repository,
-    std::filesystem::path web_static_dir, ManagementHttpServerOptions options)
+AdminHttpServer::AdminHttpServer(std::string listen_address,
+                                 ServerDatabase* database,
+                                 std::filesystem::path package_repository,
+                                 std::filesystem::path web_static_dir,
+                                 AdminHttpServerOptions options)
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(),
       acceptor_(io_context_),
@@ -1303,9 +1300,9 @@ ManagementHttpServer::ManagementHttpServer(
   options_.web_static_root = static_files_.root();
 }
 
-ManagementHttpServer::~ManagementHttpServer() { Stop(); }
+AdminHttpServer::~AdminHttpServer() { Stop(); }
 
-void ManagementHttpServer::Run() {
+void AdminHttpServer::Run() {
   Start();
   for (auto& thread : io_threads_) {
     if (thread.joinable()) {
@@ -1314,7 +1311,7 @@ void ManagementHttpServer::Run() {
   }
 }
 
-void ManagementHttpServer::Start() {
+void AdminHttpServer::Start() {
   if (acceptor_.is_open()) {
     return;
   }
@@ -1331,7 +1328,7 @@ void ManagementHttpServer::Start() {
   }
 }
 
-void ManagementHttpServer::Stop() {
+void AdminHttpServer::Stop() {
   if (stopping_.exchange(true)) {
     return;
   }
@@ -1345,7 +1342,7 @@ void ManagementHttpServer::Stop() {
   }
 }
 
-std::uint16_t ManagementHttpServer::port() const noexcept {
+std::uint16_t AdminHttpServer::port() const noexcept {
   if (!acceptor_.is_open()) {
     return endpoint_.port();
   }
@@ -1353,7 +1350,7 @@ std::uint16_t ManagementHttpServer::port() const noexcept {
   return acceptor_.local_endpoint(ignored).port();
 }
 
-void ManagementHttpServer::StartAccept() {
+void AdminHttpServer::StartAccept() {
   acceptor_.async_accept(
       [this](boost::system::error_code ec, tcp::socket socket) {
         if (!ec) {

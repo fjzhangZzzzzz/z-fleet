@@ -1,2 +1,4 @@
 BasedOnStyle: Google
 Language: Cpp
+SortIncludes: Never
+IncludeBlocks: Preserve

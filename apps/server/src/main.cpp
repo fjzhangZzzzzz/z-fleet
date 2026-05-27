@@ -1,9 +1,9 @@
 #include "config.h"
 #include "database.h"
-#include "http2_connection_registry.h"
-#include "http2_control_server.h"
-#include "http2_control_service.h"
-#include "management_http_server.h"
+#include "control_connection_registry.h"
+#include "control_server.h"
+#include "control_service.h"
+#include "admin_http_server.h"
 
 #include "zfleet/core/log.h"
 #include "zfleet/core/version.h"
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 
   std::string config_path_arg;
   std::string control_listen_arg;
-  std::string management_listen_arg;
+  std::string admin_listen_arg;
   std::string database_path_arg;
   std::string package_repository_arg;
   std::string web_static_dir_arg;
@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
   app.add_option("-c,--config", config_path_arg, "Path to server config file");
   app.add_option("--control-listen", control_listen_arg,
                  "Override server HTTP/2 control listen address");
-  app.add_option("--management-listen", management_listen_arg,
-                 "Override server Web management listen address");
+  app.add_option("--admin-listen", admin_listen_arg,
+                 "Override server admin listen address");
   app.add_option("--database-path", database_path_arg,
                  "Override server database path");
   app.add_option("--package-repository", package_repository_arg,
@@ -88,8 +88,8 @@ int main(int argc, char** argv) {
     if (!control_listen_arg.empty()) {
       config.control_listen = control_listen_arg;
     }
-    if (!management_listen_arg.empty()) {
-      config.management_listen = management_listen_arg;
+    if (!admin_listen_arg.empty()) {
+      config.admin_listen = admin_listen_arg;
     }
     if (!package_repository_arg.empty()) {
       config.package_repository = package_repository_arg;
@@ -114,33 +114,33 @@ int main(int argc, char** argv) {
 
     zfleet::server::ServerDatabase database(config.database_path);
     database.Initialize();
-    const zfleet::server::Http2ControlService control_service(&database);
-    zfleet::server::Http2ConnectionRegistry connection_registry;
-    zfleet::server::Http2ControlServer control_server(config.control_listen,
-                                                      &database,
-                                                      &control_service,
-                                                      &connection_registry);
-    zfleet::server::ManagementHttpServer management_server(
-        config.management_listen,
+    zfleet::server::ControlService control_service(&database);
+    zfleet::server::ControlConnectionRegistry connection_registry;
+    zfleet::server::ControlServer control_server(config.control_listen,
+                                                  &database,
+                                                  &control_service,
+                                                  &connection_registry);
+    zfleet::server::AdminHttpServer admin_server(
+        config.admin_listen,
         &database,
         config.package_repository,
         config.web_static_dir,
-        zfleet::server::ManagementHttpServerOptions{
-            .allow_high_risk_write = config.allow_high_risk_write,
-            .package_download_base_url = config.management_public_url,
+        zfleet::server::AdminHttpServerOptions{
+          .allow_high_risk_write = config.allow_high_risk_write,
+            .package_download_base_url = config.admin_public_url,
             .control_url = NormalizeControlUrl(config.control_listen),
         });
-    management_server.Start();
+    admin_server.Start();
 
     ZFLOG_INFO(logger,
-               "{} server {} protocol {} on {} schema_version={} control_listen={} management_listen={}",
+               "{} server {} protocol {} on {} schema_version={} control_listen={} admin_listen={}",
                zfleet::core::project_name(),
                zfleet::core::version(),
                zfleet::protocol::protocol_version(),
                zfleet::platform::os_name(),
                database.schema_version(),
                config.control_listen,
-               config.management_listen);
+               config.admin_listen);
     control_server.Run();
     zfleet::core::log::Shutdown();
     return 0;

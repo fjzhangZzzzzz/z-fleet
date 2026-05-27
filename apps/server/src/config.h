@@ -11,8 +11,8 @@ namespace zfleet::server {
 struct ServerConfig {
   std::optional<std::filesystem::path> install_dir = std::nullopt;
   std::string control_listen = "127.0.0.1:8081";
-  std::string management_listen = "127.0.0.1:8080";
-  std::string management_public_url = "http://127.0.0.1:8080";
+  std::string admin_listen = "127.0.0.1:8080";
+  std::string admin_public_url = "http://127.0.0.1:8080";
   std::filesystem::path database_path = "data/zfleet.db";
   std::filesystem::path package_repository = "data/packages";
   std::filesystem::path web_static_dir;

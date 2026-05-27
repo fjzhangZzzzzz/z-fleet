@@ -21,9 +21,9 @@ struct ControlEventResult {
   std::string message;
 };
 
-class Http2ControlService {
+class ControlService {
  public:
-  explicit Http2ControlService(ServerStore* store);
+  explicit ControlService(ServerStore* store);
 
   ControlEventResult HandleAgentEvent(
       const zfleet::protocol::v1::AgentEvent& event) const;
@@ -42,14 +42,12 @@ class Http2ControlService {
   ControlEventResult ValidateEnvelope(
       const zfleet::protocol::v1::AgentEvent& event) const;
   void RecordAuditEvent(zfleet::protocol::AuditEventType event_type,
-                        std::string request_id,
-                        std::string agent_id,
-                        std::string result,
-                        std::string payload_json) const;
+                        std::string request_id, std::string agent_id,
+                        std::string result, std::string payload_json) const;
 
   ServerStore* store_;
 };
 
 std::string_view ToString(ControlEventStatus status) noexcept;
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

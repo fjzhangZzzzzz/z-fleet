@@ -1,4 +1,4 @@
-#include "install_platform_registry.h"
+#include "install_platform_resolver.h"
 
 #include <fstream>
 #include <sstream>
