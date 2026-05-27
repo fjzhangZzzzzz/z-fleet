@@ -14,7 +14,8 @@
 4. [安全](security.md)：威胁模型、安全默认值、身份、授权和任务风险分级。
 5. [运维](operations.md)：本地运行、配置、构建、部署、发布、升级、回滚和排障。
 6. [路线图](roadmap.md)：里程碑状态和阶段性交付范围。
-7. [ADR](adr/)：关键架构决策记录。
+7. [测试分层](testing.md)：单元、组件、集成测试边界与矩阵。
+8. [ADR](adr/)：关键架构决策记录。
 
 ## 文档
 
@@ -24,6 +25,7 @@
 | [契约](contracts.md) | 草案 | 协议、任务、审计、错误码 |
 | [安全](security.md) | 草案 | 威胁模型、安全边界、策略默认值 |
 | [运维](operations.md) | 草案 | 构建、配置、运行、部署、发布、升级、回滚、排障 |
+| [测试分层](testing.md) | 草案 | 测试边界、目录拆分、覆盖矩阵 |
 | [路线图](roadmap.md) | 草案 | v0.1 / v0.2 / v0.3 和长期方向 |
 | [ADR 模板](adr/template.md) | 草案 | ADR 模板 |
 | [ADR 0007](adr/0007-agent-control-channel-http2-protobuf-lite.md) | 已接受 | Agent/Server 主控制通道协议决策 |
