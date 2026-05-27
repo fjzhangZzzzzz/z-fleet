@@ -89,10 +89,14 @@ ServerConfig LoadConfig(
       config.admin_listen = *value;
     }
   }
-  if (const auto* node = server->get("admin_public_url");
-      node != nullptr) {
+  if (const auto* node = server->get("admin_public_url"); node != nullptr) {
     if (const auto value = node->value<std::string>(); value.has_value()) {
       config.admin_public_url = *value;
+    }
+  }
+  if (const auto* node = server->get("control_public_url"); node != nullptr) {
+    if (const auto value = node->value<std::string>(); value.has_value()) {
+      config.control_public_url = *value;
     }
   }
 
@@ -142,6 +146,7 @@ void SaveConfig(const ServerConfig& config,
       "server",
       toml::table{
           {"control_listen", config.control_listen},
+          {"control_public_url", config.control_public_url},
           {"admin_listen", config.admin_listen},
           {"admin_public_url", config.admin_public_url},
           {"database_path", PathToConfigString(config.database_path)},
@@ -149,13 +154,13 @@ void SaveConfig(const ServerConfig& config,
           {"web_static_dir", PathToConfigString(config.web_static_dir)},
           {"allow_high_risk_write", config.allow_high_risk_write},
       });
-  root.insert("log",
-              toml::table{
-                  {"level", std::string(zfleet::core::log::ToString(
-                                config.log.level))},
-                  {"file", PathToConfigString(config.log.file_path)},
-                  {"enable_console", config.log.enable_console},
-              });
+  root.insert(
+      "log",
+      toml::table{
+          {"level", std::string(zfleet::core::log::ToString(config.log.level))},
+          {"file", PathToConfigString(config.log.file_path)},
+          {"enable_console", config.log.enable_console},
+      });
 
   std::ofstream stream(config_path, std::ios::binary | std::ios::trunc);
   if (!stream) {
@@ -169,14 +174,14 @@ void SaveConfig(const ServerConfig& config,
 }
 
 void ResolveConfigPaths(ServerConfig* config) {
-  config->database_path = ResolvePath(config->install_dir,
-                                      config->database_path);
-  config->package_repository = ResolvePath(config->install_dir,
-                                           config->package_repository);
-  config->web_static_dir = ResolvePath(config->install_dir,
-                                       config->web_static_dir);
-  config->log.file_path = ResolvePath(config->install_dir,
-                                      config->log.file_path);
+  config->database_path =
+      ResolvePath(config->install_dir, config->database_path);
+  config->package_repository =
+      ResolvePath(config->install_dir, config->package_repository);
+  config->web_static_dir =
+      ResolvePath(config->install_dir, config->web_static_dir);
+  config->log.file_path =
+      ResolvePath(config->install_dir, config->log.file_path);
 }
 
 }  // namespace zfleet::server

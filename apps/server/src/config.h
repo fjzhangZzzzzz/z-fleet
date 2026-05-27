@@ -11,6 +11,7 @@ namespace zfleet::server {
 struct ServerConfig {
   std::optional<std::filesystem::path> install_dir = std::nullopt;
   std::string control_listen = "127.0.0.1:8081";
+  std::string control_public_url = "http://127.0.0.1:8081";
   std::string admin_listen = "127.0.0.1:8080";
   std::string admin_public_url = "http://127.0.0.1:8080";
   std::filesystem::path database_path = "data/zfleet.db";
@@ -24,11 +25,12 @@ struct ServerConfig {
   };
 };
 
-ServerConfig LoadConfig(const std::optional<std::filesystem::path>& config_path);
+ServerConfig LoadConfig(
+    const std::optional<std::filesystem::path>& config_path);
 std::filesystem::path DefaultConfigPath(
     const std::optional<std::filesystem::path>& install_dir);
 void SaveConfig(const ServerConfig& config,
                 const std::filesystem::path& config_path);
 void ResolveConfigPaths(ServerConfig* config);
 
-} // namespace zfleet::server
+}  // namespace zfleet::server

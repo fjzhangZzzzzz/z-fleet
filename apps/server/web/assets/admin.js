@@ -119,7 +119,7 @@
   function localizeInstallError(error) {
     if (!error || !error.message) return "请求失败";
     if (error.code === "missing_required_field") return "生成安装命令失败：缺少必要参数。";
-    if (error.code === "control_url_not_configured") return "服务端未配置控制地址，暂时无法生成安装命令。";
+    if (error.code === "control_public_url_not_configured") return "服务端未配置公网控制地址，暂时无法生成安装命令。";
     if (error.code === "token_expiry_required") return "生成注册凭证失败：缺少过期时间。";
     return error.message;
   }

@@ -20,14 +20,6 @@ namespace {
 
 constexpr char kComponentRootEnvVar[] = "ZFLEET_COMPONENT_ROOT";
 
-std::string NormalizeControlUrl(const std::string& listen_address) {
-  if (listen_address.rfind("http://", 0) == 0 ||
-      listen_address.rfind("https://", 0) == 0) {
-    return listen_address;
-  }
-  return "http://" + listen_address;
-}
-
 std::filesystem::path DetectInstallDir() {
   if (const char* value = std::getenv(kComponentRootEnvVar);
       value != nullptr && value[0] != '\0') {
@@ -37,9 +29,9 @@ std::filesystem::path DetectInstallDir() {
 }
 
 std::filesystem::path DetectReleaseWebStaticDir(const char* executable_path) {
-  const auto executable =
-      std::filesystem::absolute(executable_path == nullptr ? "" : executable_path)
-          .lexically_normal();
+  const auto executable = std::filesystem::absolute(
+                              executable_path == nullptr ? "" : executable_path)
+                              .lexically_normal();
   return executable.parent_path().parent_path() / "share" / "web";
 }
 
@@ -55,6 +47,7 @@ int main(int argc, char** argv) {
   std::string package_repository_arg;
   std::string web_static_dir_arg;
   std::string log_level_arg;
+  std::string control_public_url_arg;
   app.add_option("-c,--config", config_path_arg, "Path to server config file");
   app.add_option("--control-listen", control_listen_arg,
                  "Override server HTTP/2 control listen address");
@@ -66,6 +59,8 @@ int main(int argc, char** argv) {
                  "Override server package repository path");
   app.add_option("--web-static-dir", web_static_dir_arg,
                  "Override server Web static asset directory");
+  app.add_option("--control-public-url", control_public_url_arg,
+                 "Override public server control url");
   app.add_option("--log-level", log_level_arg, "Override server log level");
 
   CLI11_PARSE(app, argc, argv);
@@ -97,6 +92,9 @@ int main(int argc, char** argv) {
     if (!web_static_dir_arg.empty()) {
       config.web_static_dir = web_static_dir_arg;
     }
+    if (!control_public_url_arg.empty()) {
+      config.control_public_url = control_public_url_arg;
+    }
     if (!log_level_arg.empty()) {
       config.log.level = zfleet::core::log::ParseLevel(log_level_arg);
     }
@@ -117,37 +115,31 @@ int main(int argc, char** argv) {
     zfleet::server::ControlService control_service(&database);
     zfleet::server::ControlConnectionRegistry connection_registry;
     zfleet::server::ControlServer control_server(config.control_listen,
-                                                  &database,
-                                                  &control_service,
-                                                  &connection_registry);
+                                                 &database, &control_service,
+                                                 &connection_registry);
     zfleet::server::AdminHttpServer admin_server(
-        config.admin_listen,
-        &database,
-        config.package_repository,
+        config.admin_listen, &database, config.package_repository,
         config.web_static_dir,
         zfleet::server::AdminHttpServerOptions{
-          .allow_high_risk_write = config.allow_high_risk_write,
+            .allow_high_risk_write = config.allow_high_risk_write,
             .package_download_base_url = config.admin_public_url,
-            .control_url = NormalizeControlUrl(config.control_listen),
+            .control_url = config.control_public_url,
         });
     admin_server.Start();
 
     ZFLOG_INFO(logger,
-               "{} server {} protocol {} on {} schema_version={} control_listen={} admin_listen={}",
-               zfleet::core::project_name(),
-               zfleet::core::version(),
+               "{} server {} protocol {} on {} schema_version={} "
+               "control_listen={} admin_listen={}",
+               zfleet::core::project_name(), zfleet::core::version(),
                zfleet::protocol::protocol_version(),
-               zfleet::platform::os_name(),
-               database.schema_version(),
-               config.control_listen,
-               config.admin_listen);
+               zfleet::platform::os_name(), database.schema_version(),
+               config.control_listen, config.admin_listen);
     control_server.Run();
     zfleet::core::log::Shutdown();
     return 0;
   } catch (const std::exception& ex) {
     ZFLOG_ERROR(zfleet::core::log::Component("server"),
-                "server startup failed: {}",
-                ex.what());
+                "server startup failed: {}", ex.what());
     zfleet::core::log::Shutdown();
     return 1;
   }

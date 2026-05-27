@@ -471,8 +471,8 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
                            "platform must be linux or windows");
     }
     if (ctx.control_url.empty()) {
-      return ErrorResponse(500, "control_url_not_configured",
-                           "server control url is not configured");
+      return ErrorResponse(500, "control_public_url_not_configured",
+                           "server public control url is not configured");
     }
     const InstallCommandRequest command_request{
         .server_url = server_url,

@@ -22,6 +22,7 @@ TEST_CASE("server config loads control listen and database path from toml") {
     config_stream << "control_listen = \"127.0.0.1:18081\"\n";
     config_stream << "admin_listen = \"127.0.0.1:18080\"\n";
     config_stream << "admin_public_url = \"http://server.example:18080\"\n";
+    config_stream << "control_public_url = \"http://server.example:18081\"\n";
     config_stream << "database_path = \"data/server.db\"\n";
     config_stream << "package_repository = \"data/packages\"\n";
     config_stream << "web_static_dir = \"share/web\"\n";
@@ -40,6 +41,7 @@ TEST_CASE("server config loads control listen and database path from toml") {
   REQUIRE(config.control_listen == "127.0.0.1:18081");
   REQUIRE(config.admin_listen == "127.0.0.1:18080");
   REQUIRE(config.admin_public_url == "http://server.example:18080");
+  REQUIRE(config.control_public_url == "http://server.example:18081");
   REQUIRE(config.database_path == test_root / "data" / "server.db");
   REQUIRE(config.package_repository == test_root / "data" / "packages");
   REQUIRE(config.web_static_dir == test_root / "share" / "web");
@@ -60,6 +62,7 @@ TEST_CASE(
   config.control_listen = "127.0.0.1:18081";
   config.admin_listen = "127.0.0.1:18080";
   config.admin_public_url = "http://server.example:18080";
+  config.control_public_url = "http://server.example:18081";
   config.database_path = "data/custom.db";
   config.package_repository = "data/packages";
   config.web_static_dir = "share/web";
@@ -77,6 +80,7 @@ TEST_CASE(
   REQUIRE(saved.find("data/custom.db") != std::string::npos);
   REQUIRE(saved.find("admin_listen") != std::string::npos);
   REQUIRE(saved.find("admin_public_url") != std::string::npos);
+  REQUIRE(saved.find("control_public_url") != std::string::npos);
   REQUIRE(saved.find("package_repository") != std::string::npos);
   REQUIRE(saved.find("web_static_dir") != std::string::npos);
   REQUIRE(saved.find("allow_high_risk_write") != std::string::npos);
@@ -89,6 +93,7 @@ TEST_CASE(
   REQUIRE(loaded.control_listen == "127.0.0.1:18081");
   REQUIRE(loaded.admin_listen == "127.0.0.1:18080");
   REQUIRE(loaded.admin_public_url == "http://server.example:18080");
+  REQUIRE(loaded.control_public_url == "http://server.example:18081");
   REQUIRE(loaded.database_path == test_root / "data" / "custom.db");
   REQUIRE(loaded.package_repository == test_root / "data" / "packages");
   REQUIRE(loaded.web_static_dir == test_root / "share" / "web");
