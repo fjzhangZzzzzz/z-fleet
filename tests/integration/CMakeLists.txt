@@ -2,6 +2,7 @@ find_package(Catch2 CONFIG REQUIRED)
 include(Catch)
 
 add_executable(zfleet_integration_tests
+  control_command_stream_test.cpp
   agent_runtime_test.cpp
   control_flow_test.cpp
   install_flow_test.cpp

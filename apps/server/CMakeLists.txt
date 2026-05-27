@@ -68,6 +68,16 @@ if(BUILD_TESTING)
   include(Catch)
 
   add_executable(zfleet_server_tests
+    tests/server_database_test.cpp
+    tests/server_config_test.cpp
+    tests/server_admin_http_test.cpp
+    tests/server_failure_matrix_test.cpp
+    tests/server_control_unit_test.cpp
+    tests/server_database_async_test.cpp
+    tests/server_worker_pool_test.cpp
+    tests/server_control_service_test.cpp
+    tests/server_upgrade_lifecycle_test.cpp
+    tests/server_database_queue_test.cpp
     tests/server_test.cpp
   )
 
