@@ -1,0 +1,32 @@
+name: Resolve Image Meta
+
+on:
+  workflow_call:
+    outputs:
+      image_tag:
+        value: ${{ jobs.resolve.outputs.image_tag }}
+      image_owner:
+        value: ${{ jobs.resolve.outputs.image_owner }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.version.outputs.image_tag }}
+      image_owner: ${{ steps.owner.outputs.image_owner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read image version
+        id: version
+        run: |
+          image_tag="$(tr -d '[:space:]' < ci/images/version.txt)"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize image owner
+        id: owner
+        run: |
+          image_owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_owner=$image_owner" >> "$GITHUB_OUTPUT"
