@@ -1,0 +1,69 @@
+name: CI Windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-msvc:
+    name: windows-msvc-${{ matrix.preset }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset:
+          - windows-debug
+          - windows-release
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ZF_BUILD_JOBS: 2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: windows-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          restore-keys: |
+            windows-${{ matrix.preset }}-
+            windows-
+
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Build
+        run: ./scripts/build.sh ${{ matrix.preset }}
+
+      - name: Test
+        run: ./scripts/test.sh ${{ matrix.preset }}
+
+      - name: Package release components
+        if: matrix.preset == 'windows-release'
+        run: |
+          ./scripts/make-package.sh agent server installer --preset windows-release --out "$RUNNER_TEMP/packages" --zip --no-build
+
+      - name: Inspect release binaries
+        if: matrix.preset == 'windows-release'
+        run: |
+          for binary in \
+            build/windows-release/apps/agent/zfleet_agent.exe \
+            build/windows-release/apps/server/zfleet_server.exe \
+            build/windows-release/apps/installer/zfleet_installer.exe \
+            build/windows-release/apps/launcher/zfleet_launcher.exe
+          do
+            [[ -f "$binary" ]] || { printf 'missing executable: %s\n' "$binary" >&2; exit 1; }
+          done

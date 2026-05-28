@@ -1,0 +1,166 @@
+name: CI Linux
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.version.outputs.image_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read image version
+        id: version
+        run: |
+          image_tag="$(tr -d '[:space:]' < ci/images/version.txt)"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+  linux-container:
+    needs: resolve-version
+    name: linux-container-${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        preset:
+          - linux-debug
+          - linux-release
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ZF_BUILD_JOBS: 2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: linux-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          restore-keys: |
+            linux-${{ matrix.preset }}-
+            linux-
+
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Build
+        run: ./scripts/build.sh ${{ matrix.preset }}
+
+      - name: Test
+        run: ./scripts/test.sh ${{ matrix.preset }}
+
+      - name: Package release components
+        if: matrix.preset == 'linux-release'
+        run: |
+          ./scripts/make-package.sh agent server installer --preset linux-release --out "$RUNNER_TEMP/packages" --zip --no-build
+
+      - name: Upload release packages
+        if: matrix.preset == 'linux-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-packages
+          path: ${{ runner.temp }}/packages/*.zip
+          if-no-files-found: error
+
+      - name: Inspect release binaries
+        if: matrix.preset == 'linux-release'
+        run: |
+          for binary in \
+            build/linux-release/apps/agent/zfleet_agent \
+            build/linux-release/apps/server/zfleet_server \
+            build/linux-release/apps/installer/zfleet_installer \
+            build/linux-release/apps/launcher/zfleet_launcher
+          do
+            [[ -x "$binary" ]] || { printf 'missing executable: %s\n' "$binary" >&2; exit 1; }
+            ldd "$binary"
+            "$binary" --help >/dev/null
+          done
+
+      - name: Inspect release packages
+        if: matrix.preset == 'linux-release'
+        run: |
+          python3 - "$RUNNER_TEMP/packages" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import zipfile
+
+          package_dir = pathlib.Path(sys.argv[1])
+          for package in sorted(package_dir.glob("*.zip")):
+              with zipfile.ZipFile(package) as zf:
+                  manifest = json.loads(zf.read("META/manifest.json"))
+                  assert manifest["platform"] == "linux"
+                  assert manifest["arch"] == "x86_64"
+                  assert manifest["component"] in {"agent", "server", "installer"}
+                  assert manifest["entry"].startswith("bin/")
+          PY
+
+  linux-runtime-compat:
+    name: linux-runtime-compat-${{ matrix.distro }}
+    needs: linux-container
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: rocky8
+            image: rockylinux:8
+            package_manager: dnf
+          - distro: alma8
+            image: almalinux:8
+            package_manager: dnf
+          - distro: ubuntu2204
+            image: ubuntu:22.04
+            package_manager: apt
+          - distro: debian12
+            image: debian:12
+            package_manager: apt
+
+    container:
+      image: ${{ matrix.image }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install smoke dependencies
+        run: |
+          if [[ "${{ matrix.package_manager }}" == "apt" ]]; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y python3 unzip ca-certificates
+          else
+            dnf -y install python3 unzip ca-certificates
+          fi
+
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release-packages
+          path: /tmp/linux-release-packages
+
+      - name: Run compatibility smoke test
+        run: |
+          bash ./scripts/linux-package-smoke.sh /tmp/linux-release-packages/*.zip

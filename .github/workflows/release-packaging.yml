@@ -1,6 +1,7 @@
-name: Release
+name: Release Packaging
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'agent/v*'
@@ -9,7 +10,7 @@ on:
 
 jobs:
   package:
-    name: Package ${{ matrix.os }} ${{ github.ref_name }}
+    name: package-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -25,6 +26,9 @@ jobs:
       run:
         shell: bash
 
+    env:
+      ZF_BUILD_JOBS: 2
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +38,18 @@ jobs:
       - name: Configure MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vcpkg_installed
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: release-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          restore-keys: |
+            release-${{ matrix.preset }}-
+            release-
 
       - name: Parse tag
         id: tag
@@ -54,15 +70,33 @@ jobs:
             exit 1
           fi
 
-      - name: Build package
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Build
+        run: ./scripts/build.sh ${{ matrix.preset }}
+
+      - name: Package
         id: package
         run: |
           component="${{ steps.tag.outputs.component }}"
           notes_file="$RUNNER_TEMP/release-notes.md"
           bash ./scripts/generate-release-notes.sh "$component" "$GITHUB_REF_NAME" > "$notes_file"
-          package_path="$(./scripts/make-package.sh "$component" --preset "${{ matrix.preset }}" --out "$RUNNER_TEMP/packages" --zip)"
+          package_path="$(./scripts/make-package.sh "$component" --preset "${{ matrix.preset }}" --out "$RUNNER_TEMP/packages" --zip --no-build)"
           echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
           echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect package manifest
+        run: |
+          package_path="${{ steps.package.outputs.package_path }}"
+          case "$package_path" in
+            *.zip)
+              python3 -c 'import json, pathlib, sys, zipfile; package = pathlib.Path(sys.argv[1]); zf = zipfile.ZipFile(package); manifest = json.loads(zf.read("META/manifest.json")); assert manifest["component"] in {"agent", "server", "installer"}; assert manifest["entry"].startswith("bin/")' "$package_path"
+              ;;
+            *)
+              [[ -f "$package_path/META/manifest.json" ]] || exit 1
+              ;;
+          esac
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -80,9 +114,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish release
+    name: publish-release
     runs-on: ubuntu-latest
     needs: package
+    if: github.event_name == 'push'
 
     permissions:
       contents: write
