@@ -9,6 +9,7 @@
 
 #include "test_util.h"
 
+#include "zfleet/platform/system.h"
 #include "zfleet/package/manifest.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
@@ -258,7 +259,9 @@ bool WaitForTaskState(const std::filesystem::path& database_path,
 
 proto::AgentEvent RegisterEvent(std::string message_id, std::string agent_id,
                                 std::string occurred_at,
-                                std::string agent_version = "0.1.0") {
+                                std::string agent_version,
+                                const std::string& os,
+                                const std::string& arch) {
   proto::AgentEvent event;
   event.set_protocol_version("v1");
   event.set_message_id(std::move(message_id));
@@ -267,8 +270,8 @@ proto::AgentEvent RegisterEvent(std::string message_id, std::string agent_id,
   auto* payload = event.mutable_register_();
   payload->set_agent_version(std::move(agent_version));
   payload->set_hostname("devbox-01");
-  payload->set_os("linux");
-  payload->set_arch("x86_64");
+  payload->set_os(os);
+  payload->set_arch(arch);
   return event;
 }
 
@@ -379,12 +382,15 @@ TEST_CASE(
       "127.0.0.1:0", &database, test_root / "packages", test_root / "web",
       admin_options);
 
+  const std::string platform = std::string(zfleet::platform::os_name());
+  const std::string arch = zfleet::platform::architecture_name();
+
   zfleet::package::Manifest agent_manifest{
       .schema_version = 1,
       .component = "agent",
       .version = "0.2.0",
-      .platform = "linux",
-      .arch = "x86_64",
+      .platform = platform,
+      .arch = arch,
       .build_type = "release",
       .min_installer_version = "0.1.0",
       .files = {},
@@ -393,8 +399,8 @@ TEST_CASE(
       .schema_version = 1,
       .component = "installer",
       .version = "0.1.0",
-      .platform = "linux",
-      .arch = "x86_64",
+      .platform = platform,
+      .arch = arch,
       .build_type = "release",
       .min_installer_version = "0.1.0",
       .files = {},
@@ -407,8 +413,8 @@ TEST_CASE(
       .package_id = agent_package_id,
       .component = "agent",
       .version = "0.2.0",
-      .platform = "linux",
-      .arch = "x86_64",
+      .platform = platform,
+      .arch = arch,
       .build_type = "release",
       .filename = "agent.zip",
       .storage_path = (test_root / "packages" / "agent.zip").string(),
@@ -420,14 +426,14 @@ TEST_CASE(
       .uploaded_at = now,
       .validated_at = now,
   });
-  database.PublishAgentPackage(agent_package_id, "agent", "stable", "linux",
-                               "x86_64", "release", "test", now);
+  database.PublishAgentPackage(agent_package_id, "agent", "stable", platform,
+                               arch, "release", "test", now);
   database.UpsertAgentPackage(zfleet::server::AgentPackageRecord{
       .package_id = installer_package_id,
       .component = "installer",
       .version = "0.1.0",
-      .platform = "linux",
-      .arch = "x86_64",
+      .platform = platform,
+      .arch = arch,
       .build_type = "release",
       .filename = "installer.zip",
       .storage_path = (test_root / "packages" / "installer.zip").string(),
@@ -441,7 +447,7 @@ TEST_CASE(
       .validated_at = now,
   });
   database.PublishAgentPackage(installer_package_id, "installer", "stable",
-                               "linux", "x86_64", "release", "test", now);
+                               platform, arch, "release", "test", now);
 
   admin_server.Start();
   std::exception_ptr control_error;
@@ -521,15 +527,36 @@ TEST_CASE(
     runtime_thread.join();
   }
 
+  const std::string options_request =
+      "GET /api/v1/install/options?channel=stable&platform=" + platform +
+      "&arch=" + arch + "&build_type=release HTTP/1.1\r\nHost: "
+      "127.0.0.1\r\n\r\n";
   const auto options_response =
-      SendHttpRequest(admin_server.port(),
-                      "GET "
-                      "/api/v1/install/"
-                      "options?channel=stable&platform=linux&arch=x86_64&build_"
-                      "type=release HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+      SendHttpRequest(admin_server.port(), options_request);
   REQUIRE(options_response.status == 200);
   REQUIRE(options_response.body.find("\"agent\"") != std::string::npos);
   REQUIRE(options_response.body.find("\"installer\"") != std::string::npos);
+
+  const auto stored_agent_platform = ReadSingleTextColumn(
+      database_path, "select platform from agents where agent_id = ?",
+      agent_state.agent_id);
+  const auto stored_agent_version = ReadSingleTextColumn(
+      database_path, "select agent_version from agents where agent_id = ?",
+      agent_state.agent_id);
+  const auto latest_asset_platform = ReadSingleTextColumn(
+      database_path,
+      "select os from asset_snapshots where agent_id = ? order by snapshot_id "
+      "desc limit 1",
+      agent_state.agent_id);
+  const auto latest_asset_arch = ReadSingleTextColumn(
+      database_path,
+      "select arch from asset_snapshots where agent_id = ? order by snapshot_id "
+      "desc limit 1",
+      agent_state.agent_id);
+  REQUIRE(stored_agent_platform == platform);
+  REQUIRE(stored_agent_version == "0.1.0");
+  REQUIRE(latest_asset_platform == platform);
+  REQUIRE(latest_asset_arch == arch);
 
   const std::string token_body =
       "{\"purpose\":\"agent_register\",\"expires_at\":\"2099-01-01T00:00:"
@@ -576,7 +603,7 @@ TEST_CASE(
   std::vector<std::uint8_t> reconnect_body;
   const auto reconnect_frame = EncodeEventFrame(
       RegisterEvent("upgrade-reconnect-1", agent_state.agent_id,
-                    "2026-05-25T11:00:04Z", "0.2.0"));
+                    "2026-05-25T11:00:04Z", "0.2.0", platform, arch));
   reconnect_body.insert(reconnect_body.end(), reconnect_frame.begin(),
                         reconnect_frame.end());
   PostHttp2Events(control_server.port(), std::move(reconnect_body));
