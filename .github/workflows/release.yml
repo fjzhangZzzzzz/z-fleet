@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'agent/v*'
+      - 'server/v*'
+      - 'installer/v*'
+
+jobs:
+  package:
+    name: Package ${{ matrix.os }} ${{ github.ref_name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: linux-release
+          - os: windows-latest
+            preset: windows-release
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Parse tag
+        id: tag
+        run: |
+          tag_name="${GITHUB_REF_NAME}"
+          component="${tag_name%%/*}"
+          version="${tag_name#${component}/v}"
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version file
+        run: |
+          component="${{ steps.tag.outputs.component }}"
+          version="${{ steps.tag.outputs.version }}"
+          file_version="$(tr -d '[:space:]' < "apps/$component/VERSION")"
+          if [[ "$file_version" != "$version" ]]; then
+            printf 'version mismatch for %s: tag=%s file=%s\n' "$component" "$version" "$file_version" >&2
+            exit 1
+          fi
+
+      - name: Build package
+        id: package
+        run: |
+          component="${{ steps.tag.outputs.component }}"
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          bash ./scripts/generate-release-notes.sh "$component" "$GITHUB_REF_NAME" > "$notes_file"
+          package_path="$(./scripts/make-package.sh "$component" --preset "${{ matrix.preset }}" --out "$RUNNER_TEMP/packages" --zip)"
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.component }}-${{ matrix.os }}
+          path: ${{ steps.package.outputs.package_path }}
+          if-no-files-found: error
+
+      - name: Upload release notes artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ steps.package.outputs.notes_file }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: package
+
+    permissions:
+      contents: write
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Parse tag
+        id: tag
+        run: |
+          tag_name="${GITHUB_REF_NAME}"
+          component="${tag_name%%/*}"
+          version="${tag_name#${component}/v}"
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes
+
+      - name: Download Linux package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.component }}-ubuntu-latest
+          path: ${{ runner.temp }}/packages
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.component }}-windows-latest
+          path: ${{ runner.temp }}/packages
+
+      - name: Prepare release body
+        id: prepare_release_body
+        run: |
+          component="${{ steps.tag.outputs.component }}"
+          version="${{ steps.tag.outputs.version }}"
+          body_file="$RUNNER_TEMP/release-body.md"
+          {
+            printf '# %s %s\n\n' "$component" "$version"
+            printf '## 产物\n\n'
+            printf '- Linux: `%s`\n' "${component}-ubuntu-latest"
+            printf '- Windows: `%s`\n\n' "${component}-windows-latest"
+            cat "$RUNNER_TEMP/release-notes/release-notes.md"
+          } > "$body_file"
+          echo "body_file=$body_file" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.tag.outputs.component }} ${{ steps.tag.outputs.version }}
+          draft: true
+          generate_release_notes: false
+          body_path: ${{ steps.prepare_release_body.outputs.body_file }}
+          files: |
+            ${{ runner.temp }}/packages/*.zip

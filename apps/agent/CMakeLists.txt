@@ -2,7 +2,8 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS beast system)
 find_package(tomlplusplus CONFIG REQUIRED)
 
-set(ZFLEET_AGENT_VERSION "${PROJECT_VERSION}")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZFLEET_AGENT_VERSION)
+string(STRIP "${ZFLEET_AGENT_VERSION}" ZFLEET_AGENT_VERSION)
 
 add_library(zfleet_agent_app
   src/command_decoder.cpp

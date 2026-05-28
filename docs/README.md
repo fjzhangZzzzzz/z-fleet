@@ -35,6 +35,7 @@
 | [ADR 0011](adr/0011-agent-package-install-upgrade.md) | 草案 | Agent 安装包发布、安装与升级模型 |
 | [ADR 0012](adr/0012-cross-platform-script-boundary.md) | 草案 | 跨平台构建、打包与安装脚本边界 |
 | [ADR 0013](adr/0013-web-ui-information-architecture-and-interaction-guidelines.md) | 已接受 | Web 管理界面的信息架构与交互约束 |
+| [ADR 0014](adr/0014-component-versioning-and-tag-driven-release.md) | 草案 | 组件级版本管理与标签驱动发布 |
 
 ## 文档状态枚举
 

@@ -15,7 +15,8 @@ add_library(zfleet_server_app
   src/static_file_service.cpp
 )
 
-set(ZFLEET_SERVER_VERSION "${PROJECT_VERSION}")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZFLEET_SERVER_VERSION)
+string(STRIP "${ZFLEET_SERVER_VERSION}" ZFLEET_SERVER_VERSION)
 
 find_package(Boost REQUIRED COMPONENTS beast system)
 find_package(CLI11 CONFIG REQUIRED)

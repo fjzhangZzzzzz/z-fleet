@@ -1,7 +1,8 @@
 find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-set(ZFLEET_INSTALLER_VERSION "${PROJECT_VERSION}")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ZFLEET_INSTALLER_VERSION)
+string(STRIP "${ZFLEET_INSTALLER_VERSION}" ZFLEET_INSTALLER_VERSION)
 
 add_library(zfleet_installer_app
   src/installer.cpp
