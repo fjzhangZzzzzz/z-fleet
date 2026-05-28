@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.version.outputs.image_tag }}
+      image_owner: ${{ steps.owner.outputs.image_owner }}
 
     steps:
       - name: Checkout
@@ -23,6 +24,12 @@ jobs:
         run: |
           image_tag="$(tr -d '[:space:]' < ci/images/version.txt)"
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize image owner
+        id: owner
+        run: |
+          image_owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_owner=$image_owner" >> "$GITHUB_OUTPUT"
 
   build-images:
     needs: resolve-version
@@ -61,6 +68,6 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}:${{ needs.resolve-version.outputs.image_tag }}
+          tags: ghcr.io/${{ needs.resolve-version.outputs.image_owner }}/${{ matrix.name }}:${{ needs.resolve-version.outputs.image_tag }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

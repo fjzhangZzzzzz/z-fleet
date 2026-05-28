@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.version.outputs.image_tag }}
+      image_owner: ${{ steps.owner.outputs.image_owner }}
 
     steps:
       - name: Checkout
@@ -20,12 +21,18 @@ jobs:
           image_tag="$(tr -d '[:space:]' < ci/images/version.txt)"
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
 
+      - name: Normalize image owner
+        id: owner
+        run: |
+          image_owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_owner=$image_owner" >> "$GITHUB_OUTPUT"
+
   linux-container:
     needs: resolve-version
     name: linux-container-${{ matrix.preset }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/${{ github.repository_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
+      image: ghcr.io/${{ needs.resolve-version.outputs.image_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
 
     strategy:
       fail-fast: false
