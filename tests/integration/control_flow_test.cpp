@@ -11,6 +11,7 @@
 #include "zfleet/platform/system.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
+#include "zfleet/transport/nghttp2_compat.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <boost/asio/connect.hpp>
@@ -19,7 +20,6 @@
 #include <boost/asio/streambuf.hpp>
 #include <boost/asio/write.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <nghttp2/nghttp2.h>
 #include <sqlite3.h>
 
 #include <array>

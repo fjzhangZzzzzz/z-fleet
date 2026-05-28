@@ -2,7 +2,6 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <nghttp2/nghttp2.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +11,7 @@
 #include <vector>
 
 #include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/transport/nghttp2_compat.h"
 
 namespace zfleet::test {
 
