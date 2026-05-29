@@ -46,6 +46,43 @@ zf_vcpkg_exe() {
   printf '%s/vcpkg\n' "$VCPKG_ROOT"
 }
 
+zf_vcpkg_bootstrap_bin_posix() {
+  local vcpkg_dir="$1"
+  if zf_is_windows_host; then
+    printf '%s/vcpkg.exe\n' "$vcpkg_dir"
+  else
+    printf '%s/vcpkg\n' "$vcpkg_dir"
+  fi
+}
+
+zf_vcpkg_tool_release_tag() {
+  local vcpkg_dir="$1"
+  local metadata_file="$vcpkg_dir/scripts/vcpkg-tool-metadata.txt"
+  [[ -f "$metadata_file" ]] || return 1
+
+  local release_tag
+  release_tag="$(sed -n 's/^VCPKG_TOOL_RELEASE_TAG=//p' "$metadata_file" | tr -d '[:space:]')"
+  [[ -n "$release_tag" ]] || return 1
+  printf '%s\n' "$release_tag"
+}
+
+zf_vcpkg_should_skip_bootstrap() {
+  local vcpkg_dir="$1"
+  [[ "${ZF_FORCE_VCPKG_BOOTSTRAP:-0}" != "1" ]] || return 1
+
+  local tool_bin
+  local release_tag
+  local version_output
+  tool_bin="$(zf_vcpkg_bootstrap_bin_posix "$vcpkg_dir")"
+  [[ -x "$tool_bin" ]] || return 1
+
+  release_tag="$(zf_vcpkg_tool_release_tag "$vcpkg_dir")" || return 1
+  version_output="$("$tool_bin" version --disable-metrics 2>/dev/null || true)"
+  [[ "$version_output" == *"$release_tag"* ]] || return 1
+
+  return 0
+}
+
 zf_validate_build_jobs() {
   local jobs="$1"
   [[ "$jobs" =~ ^[1-9][0-9]*$ ]] ||
@@ -88,10 +125,14 @@ zf_vcpkg_bootstrap() {
   export VCPKG_ROOT="$vcpkg_root"
   export VCPKG_DISABLE_METRICS=1
 
-  if zf_is_windows_host; then
-    "$vcpkg_root/bootstrap-vcpkg.bat" -disableMetrics
+  if zf_vcpkg_should_skip_bootstrap "$vcpkg_dir"; then
+    printf 'Reusing existing vcpkg tool binary (set ZF_FORCE_VCPKG_BOOTSTRAP=1 to force re-bootstrap).\n'
   else
-    "$vcpkg_root/bootstrap-vcpkg.sh" -disableMetrics
+    if zf_is_windows_host; then
+      "$vcpkg_root/bootstrap-vcpkg.bat" -disableMetrics
+    else
+      "$vcpkg_root/bootstrap-vcpkg.sh" -disableMetrics
+    fi
   fi
 
   printf 'VCPKG_ROOT=%s\n' "$VCPKG_ROOT"
