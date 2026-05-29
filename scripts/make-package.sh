@@ -130,6 +130,13 @@ for component in "${components[@]}"; do
     zf_fail_exec "failed to create payload staging dir"
   cp -p "$source_binary" "$payload_dir/$entry_path" ||
     zf_fail_exec "failed to stage component binary"
+  if [[ "$component" == "installer" ]]; then
+    launcher_source="$repo_root/build/$preset/apps/installer/launcher/$(zf_launcher_binary_name)"
+    [[ -f "$launcher_source" ]] ||
+      zf_fail_exec "launcher asset not found: $launcher_source"
+    cp -p "$launcher_source" "$payload_dir/bin/$(zf_launcher_binary_name)" ||
+      zf_fail_exec "failed to stage launcher asset: $launcher_source"
+  fi
   if [[ "$component" == "server" ]]; then
     web_source_dir="$repo_root/apps/server/web"
     [[ -d "$web_source_dir" ]] ||

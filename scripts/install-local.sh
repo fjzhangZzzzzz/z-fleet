@@ -12,21 +12,6 @@ Usage:
 EOF
 }
 
-copy_launcher_stub() {
-  local component="$1"
-  local preset="$2"
-  local root="$3"
-  local binary_name
-  binary_name="$(zf_component_binary_name "$component")"
-
-  local launcher_source="$repo_root/build/$preset/apps/launcher/$binary_name"
-  local launcher_target="$root/$component/bin/$binary_name"
-  [[ -f "$launcher_source" ]] || zf_fail_exec "launcher stub not found: $launcher_source"
-
-  mkdir -p "$(dirname "$launcher_target")" || zf_fail_exec "failed to create launcher target dir"
-  cp -p "$launcher_source" "$launcher_target" || zf_fail_exec "failed to copy launcher stub"
-}
-
 resolve_installer_binary() {
   local root="$1"
   local preset="$2"
@@ -246,9 +231,6 @@ apply_component() {
   zf_log "applying $component package with installer"
   run_installer "$installer_binary" apply --root "$root_arg" --package "$package_arg" ||
     zf_fail_exec "installer apply failed"
-
-  zf_log "copying $component launcher stub"
-  copy_launcher_stub "$component" "$preset" "$root_abs"
 
   if [[ $was_running -eq 1 ]]; then
     start_component_if_needed "$root_abs" "$component"

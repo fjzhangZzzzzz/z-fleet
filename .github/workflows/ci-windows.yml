@@ -58,12 +58,8 @@ jobs:
 
       - name: Inspect release binaries
         if: matrix.preset == 'windows-release'
-        run: |
-          for binary in \
-            build/windows-release/apps/agent/zfleet_agent.exe \
-            build/windows-release/apps/server/zfleet_server.exe \
-            build/windows-release/apps/installer/zfleet_installer.exe \
-            build/windows-release/apps/launcher/zfleet_launcher.exe
-          do
-            [[ -f "$binary" ]] || { printf 'missing executable: %s\n' "$binary" >&2; exit 1; }
-          done
+        run: ./scripts/inspect-release-binaries.sh --preset windows-release
+
+      - name: Inspect release packages
+        if: matrix.preset == 'windows-release'
+        run: ./scripts/inspect-release-packages.sh --platform windows --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip

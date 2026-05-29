@@ -22,7 +22,7 @@ for package_path in "$@"; do
   manifest_path="$work_dir/META/manifest.json"
   [[ -f "$manifest_path" ]] || zf_fail_exec "manifest not found in package: $package_path"
 
-  entry_path="$(python3 - "$manifest_path" <<'PY'
+  package_info="$(python3 - "$manifest_path" <<'PY'
 import json
 import pathlib
 import sys
@@ -31,11 +31,14 @@ manifest_path = pathlib.Path(sys.argv[1])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 assert manifest["platform"] == "linux"
 assert manifest["arch"] == "x86_64"
-print(manifest["entry"])
+component = manifest["component"]
+assert component in {"agent", "server", "installer"}
+print(component)
 PY
   )"
 
-  binary_path="$work_dir/payload/$entry_path"
+  component="$(printf '%s\n' "$package_info" | sed -n '1p')"
+  binary_path="$work_dir/payload/bin/zfleet_${component}"
   [[ -f "$binary_path" ]] || zf_fail_exec "entry binary missing: $binary_path"
 
   [[ -x "$binary_path" ]] || zf_fail_exec "entry binary is not executable: $binary_path"

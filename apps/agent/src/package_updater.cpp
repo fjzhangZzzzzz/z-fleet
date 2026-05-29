@@ -59,13 +59,10 @@ std::string ReadTrimmed(const fs::path& path) {
 }
 
 fs::path InstallerBinary(const fs::path& root) {
-  const auto version = ReadTrimmed(root / "installer" / "var" / "active-version");
 #ifdef _WIN32
-  return root / "installer" / "releases" / version / "bin" /
-         "zfleet_installer.exe";
+  return root / "installer" / "bin" / "zfleet_installer.exe";
 #else
-  return root / "installer" / "releases" / version / "bin" /
-         "zfleet_installer";
+  return root / "installer" / "bin" / "zfleet_installer";
 #endif
 }
 
@@ -128,15 +125,13 @@ int RunRollback(const fs::path& installer, const fs::path& root) {
 void StartNewAgent(const AgentConfig& config, const fs::path& root,
                    const std::string& version) {
 #ifdef _WIN32
-  const auto binary =
-      root / "agent" / "releases" / version / "bin" / "zfleet_agent.exe";
+  const auto binary = root / "agent" / "bin" / "zfleet_agent.exe";
   if (_spawnl(_P_NOWAIT, binary.string().c_str(), binary.string().c_str(),
               nullptr) == -1) {
     throw std::runtime_error("failed to start new agent");
   }
 #else
-  const auto binary =
-      root / "agent" / "releases" / version / "bin" / "zfleet_agent";
+  const auto binary = root / "agent" / "bin" / "zfleet_agent";
   if (!zfleet::platform::IsExecutableFile(binary)) {
     throw std::runtime_error("new agent binary is unavailable");
   }
@@ -151,6 +146,7 @@ void StartNewAgent(const AgentConfig& config, const fs::path& root,
   }
 #endif
   (void)config;
+  (void)version;
 }
 
 } // namespace

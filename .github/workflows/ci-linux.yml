@@ -73,36 +73,11 @@ jobs:
 
       - name: Inspect release binaries
         if: matrix.preset == 'linux-release'
-        run: |
-          for binary in \
-            build/linux-release/apps/agent/zfleet_agent \
-            build/linux-release/apps/server/zfleet_server \
-            build/linux-release/apps/installer/zfleet_installer \
-            build/linux-release/apps/launcher/zfleet_launcher
-          do
-            [[ -x "$binary" ]] || { printf 'missing executable: %s\n' "$binary" >&2; exit 1; }
-            ldd "$binary"
-            "$binary" --help >/dev/null
-          done
+        run: ./scripts/inspect-release-binaries.sh --preset linux-release
 
       - name: Inspect release packages
         if: matrix.preset == 'linux-release'
-        run: |
-          python3 - "$RUNNER_TEMP/packages" <<'PY'
-          import json
-          import pathlib
-          import sys
-          import zipfile
-
-          package_dir = pathlib.Path(sys.argv[1])
-          for package in sorted(package_dir.glob("*.zip")):
-              with zipfile.ZipFile(package) as zf:
-                  manifest = json.loads(zf.read("META/manifest.json"))
-                  assert manifest["platform"] == "linux"
-                  assert manifest["arch"] == "x86_64"
-                  assert manifest["component"] in {"agent", "server", "installer"}
-                  assert manifest["entry"].startswith("bin/")
-          PY
+        run: ./scripts/inspect-release-packages.sh --platform linux --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
 
   linux-runtime-compat:
     name: linux-runtime-compat-${{ matrix.distro }}

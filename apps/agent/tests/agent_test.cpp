@@ -232,8 +232,7 @@ TEST_CASE("package updater downloads verifies and invokes active installer") {
   const auto body = ReadBytes(archive);
   SingleResponseServer server(body);
   const auto marker = root / "applied";
-  const auto installer =
-      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  const auto installer = root / "installer" / "bin" / "zfleet_installer";
   zfleet::test::WriteTextFile(installer,
                               "#!/bin/sh\ntouch \"" + marker.string() +
                                   "\"\nexit 0\n");
@@ -271,8 +270,7 @@ TEST_CASE("package updater rejects checksum mismatch before apply") {
   const auto archive = MakePackageArchive(root);
   SingleResponseServer server(ReadBytes(archive));
   const auto marker = root / "applied";
-  const auto installer =
-      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  const auto installer = root / "installer" / "bin" / "zfleet_installer";
   zfleet::test::WriteTextFile(installer,
                               "#!/bin/sh\ntouch \"" + marker.string() +
                                   "\"\nexit 0\n");
@@ -302,18 +300,16 @@ TEST_CASE("package updater rolls back agent and starts restored release") {
   const zfleet::test::ScopedTestDir test_dir("agent-updater");
   const auto root = test_dir.path();
   const auto started = root / "started";
-  const auto installer =
-      root / "installer" / "releases" / "0.1.0" / "bin" / "zfleet_installer";
+  const auto installer = root / "installer" / "bin" / "zfleet_installer";
   zfleet::test::WriteTextFile(
       installer, "#!/bin/sh\nmkdir -p \"" +
                      (root / "agent" / "var").string() + "\"\nprintf '0.0.9\\n' > \"" +
                      (root / "agent" / "var" / "active-version").string() +
-                     "\"\nexit 0\n");
+                      "\"\nexit 0\n");
   zfleet::platform::SetExecutable(installer, true);
   zfleet::test::WriteTextFile(root / "installer" / "var" / "active-version",
                               "0.1.0\n");
-  const auto restored_agent =
-      root / "agent" / "releases" / "0.0.9" / "bin" / "zfleet_agent";
+  const auto restored_agent = root / "agent" / "bin" / "zfleet_agent";
   zfleet::test::WriteTextFile(restored_agent,
                               "#!/bin/sh\ntouch \"" + started.string() +
                                   "\"\nexit 0\n");

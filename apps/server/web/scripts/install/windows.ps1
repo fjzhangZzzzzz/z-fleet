@@ -19,8 +19,8 @@ try {
   if ((Get-FileHash $agentZip -Algorithm SHA256).Hash.ToLower() -ne $options.agent.sha256) { throw "agent checksum mismatch" }
   $expanded = Join-Path $tmp "installer"; Expand-Archive $installerZip -DestinationPath $expanded
   & (Join-Path $expanded "payload\bin\zfleet_installer.exe") apply --root $Root --package $installerZip
-  $installer = Join-Path $Root ("installer\releases\" + $options.installer.version + "\bin\zfleet_installer.exe")
+  $installer = Join-Path $Root "installer\bin\zfleet_installer.exe"
   & $installer apply --root $Root --package $agentZip
-  $agent = Join-Path $Root ("agent\releases\" + $options.agent.version + "\bin\zfleet_agent.exe")
+  $agent = Join-Path $Root "agent\bin\zfleet_agent.exe"
   Start-Process $agent -ArgumentList @("--control-url", $ControlUrl, "--registration-token", $Token) -WorkingDirectory (Split-Path $agent)
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }

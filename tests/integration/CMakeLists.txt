@@ -6,6 +6,7 @@ add_executable(zfleet_integration_tests
   agent_runtime_test.cpp
   control_flow_test.cpp
   install_flow_test.cpp
+  installer_stub_flow_test.cpp
   smoke_test.cpp
 )
 
@@ -13,7 +14,10 @@ target_link_libraries(zfleet_integration_tests
   PRIVATE
     Catch2::Catch2WithMain
     zfleet_agent_app
+    zfleet_installer_app
     zfleet_server_app
+    zfleet::crypto
+    zfleet::package
     zfleet::platform
     zfleet_test_support
 )

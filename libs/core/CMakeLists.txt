@@ -5,6 +5,7 @@ add_library(zfleet_core
   src/time.cpp
   src/uuid.cpp
   src/version.cpp
+  src/version_compare.cpp
 )
 
 add_library(zfleet::core ALIAS zfleet_core)
@@ -36,6 +37,7 @@ if(BUILD_TESTING)
     tests/path_test.cpp
     tests/time_test.cpp
     tests/version_test.cpp
+    tests/version_compare_test.cpp
   )
 
   target_link_libraries(zfleet_core_tests

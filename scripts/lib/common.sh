@@ -183,6 +183,14 @@ zf_component_binary_name() {
   printf '%s\n' "$binary_name"
 }
 
+zf_launcher_binary_name() {
+  local binary_name="zfleet_launcher"
+  if zf_is_windows_host; then
+    binary_name="${binary_name}.exe"
+  fi
+  printf '%s\n' "$binary_name"
+}
+
 zf_known_components_description() {
   printf 'agent, server, or installer\n'
 }

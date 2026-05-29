@@ -276,7 +276,7 @@ Agent 维护流程：
 
 ## 安装部署
 
-本地部署优先使用 `scripts/install-local.sh`。脚本面向本地 root 安装，会按需调用 `make-package.sh` 生成 package，再调用 installer `apply`，安装成功后复制对应 launcher stub 到固定 bootstrap 路径。
+本地部署优先使用 `scripts/install-local.sh`。脚本面向本地 root 安装，会按需调用 `make-package.sh` 生成 package，再调用 installer `apply`。固定 bootstrap 路径下的 launcher stub 由 installer release 自带并在 `apply` / `rollback` 时负责部署或刷新，脚本不再额外复制 stub。
 
 ```bash
 ./scripts/install-local.sh apply <agent|server|installer>... [--root <root>] [--preset <preset>] [--zip] [--force] [--replace] [--no-build]
@@ -358,9 +358,17 @@ Agent 维护流程：
     previous-version
 ```
 
-`apply` 先写入 `.staging/<version>` 并校验 manifest 中声明的文件大小、SHA-256、路径和可执行权限，再切换到 `releases/<version>` 并更新 `var/active-version`。当从健康版本 `A` 切换到 `B` 时，会记录 `previous-version=A`；`rollback` 成功后会交换 active 与 previous。
+其中 installer release 额外携带 launcher 模板：
 
-launcher stub 位于固定 `bin/zfleet_*` 路径，启动时读取 `var/active-version` 并执行 `releases/<version>/bin/zfleet_*`。installer 自身也按同一模型更新，新版本从下一次通过 `installer/bin/zfleet_installer` 调用时生效。
+```text
+<root>/installer/releases/<version>/bin/
+  zfleet_installer
+  zfleet_launcher
+```
+
+`apply` 先写入 `.staging/<version>` 并校验 manifest 中声明的文件大小、SHA-256、路径和可执行权限，再切换到 `releases/<version>` 并更新 `var/active-version`。当从健康版本 `A` 切换到 `B` 时，会记录 `previous-version=A`；`rollback` 成功后会交换 active 与 previous。安装 agent/server package 时还会校验当前 active installer 是否满足 package 的 `min_installer_version`。
+
+launcher stub 位于固定 `bin/zfleet_*` 路径，启动时读取 `var/active-version` 并执行 `releases/<version>/bin/zfleet_*`。installer package 自带单个 `bin/zfleet_launcher` 模板；`zfleet_installer apply` 和 `rollback` 会从当前 active installer release 复制并重命名该模板，刷新各组件固定入口。installer 自身也按同一模型更新，新版本从下一次通过 `installer/bin/zfleet_installer` 调用时生效。
 
 launcher stub 会把组件根目录通过内部环境变量传给真实进程。Agent 和 Server 不从配置文件读取 `install_dir`，也不会把 `install_dir` 写回配置文件；默认配置文件位于组件根目录下的 `etc/agent.toml` 或 `etc/server.toml`，可用 `-c, --config` 指向自定义配置文件。配置文件不存在时，启动流程会先按内置默认值生成 TOML；命令行覆盖项会在路径解析前写回配置文件。
 

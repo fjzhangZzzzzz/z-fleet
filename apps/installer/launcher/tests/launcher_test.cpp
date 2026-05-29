@@ -51,23 +51,21 @@ int RunProcess(const fs::path& executable,
 }
 #endif
 
-} // namespace
+}  // namespace
 
 TEST_CASE("resolve target derives component root from launcher path") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
-  const auto launcher_path =
-      test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
   zfleet::test::WriteTextFile(test_root / "agent" / "var" / "active-version",
                               "1.2.3\n");
-  zfleet::test::WriteTextFile(test_root / "agent" / "releases" / "1.2.3" /
-                                  "bin" / "zfleet_agent",
-                              "agent-binary");
-  zfleet::platform::SetExecutable(test_root / "agent" / "releases" / "1.2.3" /
-                                      "bin" /
-                                      "zfleet_agent",
-                                  true);
+  zfleet::test::WriteTextFile(
+      test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent",
+      "agent-binary");
+  zfleet::platform::SetExecutable(
+      test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent",
+      true);
 
   const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
 
@@ -76,8 +74,7 @@ TEST_CASE("resolve target derives component root from launcher path") {
   REQUIRE(resolved.target.component_root == test_root / "agent");
   REQUIRE(resolved.target.version == "1.2.3");
   REQUIRE(resolved.target.executable_path ==
-          test_root / "agent" / "releases" / "1.2.3" / "bin" /
-              "zfleet_agent");
+          test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent");
 }
 
 TEST_CASE("forwarded argv preserves argv[1..] and replaces argv[0]") {
@@ -90,8 +87,7 @@ TEST_CASE("forwarded argv preserves argv[1..] and replaces argv[0]") {
       "/tmp/example/agent/releases/1.2.3/bin/zfleet_agent", 3, argv);
 
   REQUIRE(forwarded.size() == 3);
-  REQUIRE(forwarded[0] ==
-          "/tmp/example/agent/releases/1.2.3/bin/zfleet_agent");
+  REQUIRE(forwarded[0] == "/tmp/example/agent/releases/1.2.3/bin/zfleet_agent");
   REQUIRE(forwarded[1] == "--mode");
   REQUIRE(forwarded[2] == "beta");
 }
@@ -100,8 +96,7 @@ TEST_CASE("resolve target fails for invalid active version state") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
-  const auto launcher_path =
-      test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
 
   SECTION("missing active-version") {
     const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
@@ -110,37 +105,36 @@ TEST_CASE("resolve target fails for invalid active version state") {
   }
 
   SECTION("invalid active-version") {
-    zfleet::test::WriteTextFile(
-        test_root / "agent" / "var" / "active-version",
-        "../bad\n");
+    zfleet::test::WriteTextFile(test_root / "agent" / "var" / "active-version",
+                                "../bad\n");
+
+    const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
+    REQUIRE_FALSE(resolved.ok);
+    REQUIRE(
+        resolved.message ==
+        "active-version is invalid: expected non-empty single segment using "
+        "only letters, digits, '.', '_', or '-'");
+  }
+
+  SECTION("target executable missing") {
+    zfleet::test::WriteTextFile(test_root / "agent" / "var" / "active-version",
+                                "1.2.3\n");
 
     const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
     REQUIRE_FALSE(resolved.ok);
     REQUIRE(resolved.message ==
-            "active-version is invalid: expected non-empty single segment using "
-            "only letters, digits, '.', '_', or '-'");
+            "target executable is missing or not executable");
   }
-
-  SECTION("target executable missing") {
-    zfleet::test::WriteTextFile(
-        test_root / "agent" / "var" / "active-version",
-        "1.2.3\n");
-
-    const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
-    REQUIRE_FALSE(resolved.ok);
-    REQUIRE(resolved.message == "target executable is missing or not executable");
-  }
-
 }
 
 #ifndef _WIN32
-TEST_CASE("launcher executable forwards args and propagates exit code on POSIX") {
+TEST_CASE(
+    "launcher executable forwards args and propagates exit code on POSIX") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
   const fs::path launcher_source = ZFLEET_TEST_AGENT_LAUNCHER;
-  const auto launcher_path =
-      test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
   fs::create_directories(launcher_path.parent_path());
   REQUIRE(fs::copy_file(launcher_source, launcher_path,
                         fs::copy_options::overwrite_existing));
@@ -152,20 +146,24 @@ TEST_CASE("launcher executable forwards args and propagates exit code on POSIX")
   const auto env_file = test_root / "env.txt";
   const auto target_path =
       test_root / "agent" / "releases" / "2.0.0" / "bin" / "zfleet_agent";
-  zfleet::test::WriteTextFile(target_path,
-                              "#!/bin/sh\n"
-                              "printf '%s\\n' \"$@\" > \"" +
-                                  args_file.string() + "\"\n"
-                              "printf '%s\\n' \"$ZFLEET_COMPONENT_ROOT\" > \"" +
-                                  env_file.string() + "\"\n"
-                              "exit 23\n");
+  zfleet::test::WriteTextFile(
+      target_path,
+      "#!/bin/sh\n"
+      "printf '%s\\n' \"$@\" > \"" +
+          args_file.string() +
+          "\"\n"
+          "printf '%s\\n' \"$ZFLEET_COMPONENT_ROOT\" > \"" +
+          env_file.string() +
+          "\"\n"
+          "exit 23\n");
   zfleet::platform::SetExecutable(target_path, true);
 
   const auto exit_code =
       RunProcess(launcher_path, {"alpha", "beta gamma", "--flag"});
 
   REQUIRE(exit_code == 23);
-  REQUIRE(zfleet::test::ReadTextFile(args_file) == "alpha\nbeta gamma\n--flag\n");
+  REQUIRE(zfleet::test::ReadTextFile(args_file) ==
+          "alpha\nbeta gamma\n--flag\n");
   REQUIRE(zfleet::test::ReadTextFile(env_file) ==
           (test_root / "agent").string() + "\n");
 }

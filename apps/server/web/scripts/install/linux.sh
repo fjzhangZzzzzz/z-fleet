@@ -74,10 +74,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 installer_url="$(json_field installer.download_url)"
 installer_sha="$(json_field installer.sha256)"
-installer_version="$(json_field installer.version)"
 agent_url="$(json_field agent.download_url)"
 agent_sha="$(json_field agent.sha256)"
-agent_version="$(json_field agent.version)"
 download_to "$server_url$installer_url" "$tmp/installer.zip"
 download_to "$server_url$agent_url" "$tmp/agent.zip"
 echo "$installer_sha  $tmp/installer.zip" | sha256sum -c -
@@ -85,7 +83,7 @@ echo "$agent_sha  $tmp/agent.zip" | sha256sum -c -
 unzip -q "$tmp/installer.zip" -d "$tmp/installer"
 chmod +x "$tmp/installer/payload/bin/zfleet_installer"
 "$tmp/installer/payload/bin/zfleet_installer" apply --root "$root" --package "$tmp/installer.zip"
-installer="$root/installer/releases/$installer_version/bin/zfleet_installer"
+installer="$root/installer/bin/zfleet_installer"
 "$installer" apply --root "$root" --package "$tmp/agent.zip"
-agent="$root/agent/releases/$agent_version/bin/zfleet_agent"
-env ZFLEET_COMPONENT_ROOT="$root/agent" "$agent" --control-url "$control_url" --registration-token "$token" >/dev/null 2>&1 &
+agent="$root/agent/bin/zfleet_agent"
+"$agent" --control-url "$control_url" --registration-token "$token" >/dev/null 2>&1 &

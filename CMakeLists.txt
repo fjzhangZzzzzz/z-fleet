@@ -55,7 +55,6 @@ add_subdirectory(libs/package)
 
 add_subdirectory(apps/agent)
 add_subdirectory(apps/installer)
-add_subdirectory(apps/launcher)
 add_subdirectory(apps/packager)
 add_subdirectory(apps/server)
 

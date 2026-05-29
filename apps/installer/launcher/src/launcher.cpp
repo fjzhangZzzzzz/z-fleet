@@ -47,7 +47,7 @@ std::string ReadFileTrimmed(const fs::path& path) {
   return value;
 }
 
-} // namespace
+}  // namespace
 
 ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
   const auto executable_name = launcher_path.filename().string();
@@ -133,8 +133,7 @@ void SetComponentRootEnvironment(const fs::path& component_root) {
 }
 
 std::vector<std::string> BuildForwardedArgv(const fs::path& executable_path,
-                                            int argc,
-                                            char* const argv[]) {
+                                            int argc, char* const argv[]) {
   std::vector<std::string> forwarded;
   forwarded.reserve(argc > 0 ? static_cast<std::size_t>(argc) : 1U);
   forwarded.push_back(executable_path.string());
@@ -163,8 +162,8 @@ int RunLauncher(const fs::path& launcher_path, int argc, char* argv[]) {
   }
   raw_args.push_back(nullptr);
 
-  const auto exit_code = _spawnv(_P_WAIT, forwarded.front().c_str(),
-                                 raw_args.data());
+  const auto exit_code =
+      _spawnv(_P_WAIT, forwarded.front().c_str(), raw_args.data());
   if (exit_code == -1) {
     std::cerr << "failed to spawn target: " << std::strerror(errno) << '\n';
     return 1;
@@ -184,4 +183,4 @@ int RunLauncher(const fs::path& launcher_path, int argc, char* argv[]) {
 #endif
 }
 
-} // namespace zfleet::launcher
+}  // namespace zfleet::launcher

@@ -24,6 +24,7 @@
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
+#include "zfleet/core/version_compare.h"
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/manifest.h"
 #include "zfleet/protocol/json_codec.h"
@@ -237,39 +238,8 @@ nlohmann::json ToJson(const AgentPackageRecord& package) {
   return body;
 }
 
-std::optional<std::array<int, 3>> ParseVersion(std::string_view value) {
-  std::array<int, 3> parts{};
-  for (std::size_t i = 0; i < parts.size(); ++i) {
-    const auto delimiter = value.find('.');
-    const auto part = value.substr(0, delimiter);
-    if (part.empty()) {
-      return std::nullopt;
-    }
-    const auto* begin = part.data();
-    const auto* end = begin + part.size();
-    if (std::from_chars(begin, end, parts[i]).ec != std::errc{} ||
-        parts[i] < 0) {
-      return std::nullopt;
-    }
-    if (i + 1 == parts.size()) {
-      if (delimiter != std::string_view::npos) {
-        return std::nullopt;
-      }
-    } else {
-      if (delimiter == std::string_view::npos) {
-        return std::nullopt;
-      }
-      value.remove_prefix(delimiter + 1);
-    }
-  }
-  return parts;
-}
-
-bool VersionAtLeast(std::string_view actual, std::string_view minimum) {
-  const auto parsed_actual = ParseVersion(actual);
-  const auto parsed_minimum = ParseVersion(minimum);
-  return parsed_actual.has_value() && parsed_minimum.has_value() &&
-         *parsed_actual >= *parsed_minimum;
+std::optional<zfleet::core::Semver3> ParseVersion(std::string_view value) {
+  return zfleet::core::ParseSemver3(value);
 }
 
 nlohmann::json InstallPackageJson(const AgentPackageRecord& package) {
@@ -512,9 +482,12 @@ std::optional<HttpResponse> HandleInstallApi(const ApiContext& ctx) {
     const auto& installer = selection.installer;
     const auto agent_manifest =
         zfleet::package::ParseManifestJson(agent->manifest_json);
-    if (!installer.has_value() ||
-        !VersionAtLeast(installer->version,
-                        agent_manifest.min_installer_version)) {
+    const auto installer_version =
+        installer.has_value() ? ParseVersion(installer->version) : std::nullopt;
+    const auto minimum_version = ParseVersion(agent_manifest.min_installer_version);
+    if (!installer.has_value() || !installer_version.has_value() ||
+        !minimum_version.has_value() ||
+        *installer_version < *minimum_version) {
       return ErrorResponse(409, "no_compatible_installer_package",
                            "no published installer package satisfies agent "
                            "minimum installer version");
@@ -673,7 +646,10 @@ std::optional<HttpResponse> HandleAgentMutationApi(const ApiContext& ctx) {
       return ErrorResponse(400, "version_not_newer",
                            "upgrade target must be newer than current agent");
     }
-    if (!VersionAtLeast(package->version, agent->agent_version)) {
+    const auto package_version = ParseVersion(package->version);
+    const auto agent_version = ParseVersion(agent->agent_version);
+    if (!package_version.has_value() || !agent_version.has_value() ||
+        *package_version < *agent_version) {
       return ErrorResponse(400, "downgrade_not_allowed",
                            "agent downgrade is not allowed");
     }

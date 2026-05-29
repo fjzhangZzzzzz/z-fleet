@@ -9,7 +9,7 @@
 
 - 单元测试验证单个模块的纯逻辑、状态转换、序列化和边界校验。
 - 组件测试验证单个应用或库在本地文件系统、数据库、进程和局部网络条件下的行为。
-- 集成测试验证跨组件闭环，包括 agent、server、installer、launcher 和 HTTP/2 控制链路。
+- 集成测试验证跨组件闭环，包括 agent、server、installer、installer 内部 launcher stub 和 HTTP/2 控制链路。
 - 同一类行为只应在一个主层级里作为“主断言”，其他层级只做必要的联通验证。
 
 ## 目录约定
@@ -27,8 +27,7 @@
 | `libs/protocol` | `libs/protocol/tests/` | 单元 | 较完整 | 适合补非法组合和状态机边界 |
 | `libs/package` | `libs/package/tests/` | 单元 | 较完整 | 适合补损坏包、unsafe path、重复项 |
 | `libs/platform` | `libs/platform/tests/` | 单元 | 基础覆盖 | 适合补平台差异分支 |
-| `apps/launcher` | `apps/launcher/tests/` | 组件 | 基础覆盖 | 适合补 POSIX 和 Windows 差异 |
-| `apps/installer` | `apps/installer/tests/` | 组件 | 较完整 | 适合补失败恢复和重复执行幂等性 |
+| `apps/installer` | `apps/installer/tests/` 与 `apps/installer/launcher/tests/` | 组件 | 较完整 | 适合继续补 launcher 刷新、失败恢复和平台差异 |
 | `apps/packager` | `apps/packager/tests/` | 组件 | 较完整 | 适合补组合矩阵和错误输入 |
 | `apps/agent` | `apps/agent/tests/` | 组件 | 较完整 | 适合补网络失败、重试和半包场景 |
 | `apps/server` | `apps/server/tests/` | 组件 | 偏重集成 | 适合拆分纯逻辑与真实 IO |
