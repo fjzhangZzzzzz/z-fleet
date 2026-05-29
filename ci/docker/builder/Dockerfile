@@ -9,6 +9,7 @@ RUN dnf -y update && \
       cmake \
       git \
       gcc-toolset-12 \
+      gcc-toolset-12-libatomic-devel \
       ninja-build \
       perl \
       python3.12 \
