@@ -12,6 +12,8 @@ on:
 jobs:
   resolve-version:
     uses: ./.github/workflows/resolve-image-meta.yml
+    with:
+      checkout_ref: ${{ github.sha }}
 
   build-images:
     needs: resolve-version

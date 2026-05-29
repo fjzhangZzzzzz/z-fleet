@@ -2,132 +2,86 @@ name: CI Linux
 
 on:
   push:
+    paths:
+      - 'apps/**'
+      - 'libs/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - '.vcpkg-version'
+      - '.github/workflows/ci-images.yml'
+      - '.github/workflows/ci-linux.yml'
+      - '.github/workflows/ci-linux-core.yml'
+      - '.github/workflows/ci-linux-after-images.yml'
+      - '.github/workflows/resolve-image-meta.yml'
   pull_request:
     paths:
+      - 'apps/**'
+      - 'libs/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'ci/docker/**'
       - 'ci/images/version.txt'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - '.vcpkg-version'
+      - '.github/workflows/ci-images.yml'
       - '.github/workflows/ci-linux.yml'
+      - '.github/workflows/ci-linux-core.yml'
+      - '.github/workflows/ci-linux-after-images.yml'
       - '.github/workflows/resolve-image-meta.yml'
 
 jobs:
-  resolve-version:
-    uses: ./.github/workflows/resolve-image-meta.yml
-
-  linux-container:
-    needs: resolve-version
-    name: linux-container-${{ matrix.preset }}
+  gate:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/${{ needs.resolve-version.outputs.image_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        preset:
-          - linux-debug
-          - linux-release
-
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      ZF_BUILD_JOBS: 2
+    outputs:
+      run_core: ${{ steps.gate.outputs.run_core }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Restore vcpkg cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            build/vcpkg_installed
-            .cache/vcpkg/archives
-            .tools/vcpkg/downloads
-          key: linux-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
-          restore-keys: |
-            linux-${{ matrix.preset }}-
-            linux-
-
-      - name: Bootstrap vcpkg
-        run: ./scripts/vcpkg.sh bootstrap
-
-      - name: Build
-        run: ./scripts/build.sh ${{ matrix.preset }}
-
-      - name: Test
-        run: ./scripts/test.sh ${{ matrix.preset }}
-
-      - name: Package release components
-        if: matrix.preset == 'linux-release'
-        run: |
-          ./scripts/make-package.sh agent server installer --preset linux-release --out "$RUNNER_TEMP/packages" --zip --no-build
-
-      - name: Upload release packages
-        if: matrix.preset == 'linux-release'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-release-packages
-          path: ${{ runner.temp }}/packages/*.zip
-          if-no-files-found: error
-
-      - name: Inspect release binaries
-        if: matrix.preset == 'linux-release'
-        run: ./scripts/inspect-release-binaries.sh --preset linux-release
-
-      - name: Inspect release packages
-        if: matrix.preset == 'linux-release'
-        run: ./scripts/inspect-release-packages.sh --platform linux --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
-
-  linux-runtime-compat:
-    name: linux-runtime-compat-${{ matrix.distro }}
-    needs: linux-container
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - distro: rocky8
-            image: rockylinux:8
-            package_manager: dnf
-          - distro: alma8
-            image: almalinux:8
-            package_manager: dnf
-          - distro: ubuntu2204
-            image: ubuntu:22.04
-            package_manager: apt
-          - distro: debian12
-            image: debian:12
-            package_manager: apt
-
-    container:
-      image: ${{ matrix.image }}
-
-    defaults:
-      run:
+      - name: Decide whether to run the Linux core workflow
+        id: gate
         shell: bash
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install smoke dependencies
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
         run: |
-          if [[ "${{ matrix.package_manager }}" == "apt" ]]; then
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update
-            apt-get install -y python3 unzip ca-certificates
-          else
-            dnf -y install python3 unzip ca-certificates
+          run_core=true
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            changed_files="$(python3 - <<'PY'
+import json
+import os
+
+event_path = os.environ["EVENT_PATH"]
+with open(event_path, "r", encoding="utf-8") as f:
+    event = json.load(f)
+
+files = set()
+for commit in event.get("commits", []):
+    files.update(commit.get("added", []))
+    files.update(commit.get("modified", []))
+    files.update(commit.get("removed", []))
+
+for path in sorted(files):
+    print(path)
+PY
+)"
+
+            if printf '%s\n' "$changed_files" | grep -Eq '^(ci/docker/|ci/images/version\.txt$)'; then
+              run_core=false
+            fi
           fi
 
-      - name: Download release packages
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-release-packages
-          path: /tmp/linux-release-packages
+          echo "run_core=$run_core" >> "$GITHUB_OUTPUT"
 
-      - name: Run compatibility smoke test
-        run: |
-          bash ./scripts/linux-package-smoke.sh /tmp/linux-release-packages/*.zip
+  linux:
+    needs: gate
+    if: needs.gate.outputs.run_core == 'true'
+    uses: ./.github/workflows/ci-linux-core.yml
+    with:
+      checkout_ref: ${{ github.sha }}

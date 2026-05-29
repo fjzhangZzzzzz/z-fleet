@@ -1,0 +1,15 @@
+name: CI Linux After Images
+
+on:
+  workflow_run:
+    workflows:
+      - CI Images
+    types:
+      - completed
+
+jobs:
+  linux:
+    if: github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/ci-linux-core.yml
+    with:
+      checkout_ref: ${{ github.event.workflow_run.head_sha }}
