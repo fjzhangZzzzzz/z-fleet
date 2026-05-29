@@ -1,4 +1,5 @@
 #include "zfleet/core/component.h"
+#include "zfleet/core/path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -63,7 +64,30 @@ std::string BinaryNameForComponent(std::string_view component) {
 #endif
 }
 
-std::optional<std::string> ComponentForBinaryName(std::string_view binary_name) {
+std::string BinaryNameForExecutableStem(std::string_view stem) {
+  const auto validation = zfleet::core::ValidatePathSegment(stem);
+  if (!validation.ok) {
+    throw std::invalid_argument("invalid executable stem: " +
+                                validation.message);
+  }
+
+#ifdef _WIN32
+  return "zfleet_" + std::string(stem) + ".exe";
+#else
+  return "zfleet_" + std::string(stem);
+#endif
+}
+
+std::string BinaryNameForArtifact(BinaryArtifact artifact) {
+  switch (artifact) {
+    case BinaryArtifact::kLauncher:
+      return BinaryNameForExecutableStem("launcher");
+  }
+  throw std::invalid_argument("unknown binary artifact");
+}
+
+std::optional<std::string> ComponentForBinaryName(
+    std::string_view binary_name) {
   const auto lookup_name = BinaryLookupName(binary_name);
   if (lookup_name == "zfleet_agent") {
     return "agent";
@@ -73,6 +97,15 @@ std::optional<std::string> ComponentForBinaryName(std::string_view binary_name) 
   }
   if (lookup_name == "zfleet_installer") {
     return "installer";
+  }
+  return std::nullopt;
+}
+
+std::optional<BinaryArtifact> ArtifactForBinaryName(
+    std::string_view binary_name) {
+  const auto lookup_name = BinaryLookupName(binary_name);
+  if (lookup_name == "zfleet_launcher") {
+    return BinaryArtifact::kLauncher;
   }
   return std::nullopt;
 }

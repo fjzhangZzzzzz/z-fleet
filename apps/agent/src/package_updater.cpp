@@ -1,5 +1,6 @@
 #include "package_updater.h"
 
+#include "zfleet/core/component.h"
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/archive.h"
 #include "zfleet/platform/file_permissions.h"
@@ -59,11 +60,8 @@ std::string ReadTrimmed(const fs::path& path) {
 }
 
 fs::path InstallerBinary(const fs::path& root) {
-#ifdef _WIN32
-  return root / "installer" / "bin" / "zfleet_installer.exe";
-#else
-  return root / "installer" / "bin" / "zfleet_installer";
-#endif
+  return root / "installer" / "bin" /
+         zfleet::core::BinaryNameForComponent("installer");
 }
 
 int RunInstaller(const fs::path& installer, const fs::path& root,
@@ -73,8 +71,8 @@ int RunInstaller(const fs::path& installer, const fs::path& root,
   }
 #ifdef _WIN32
   return static_cast<int>(_spawnl(_P_WAIT, installer.string().c_str(),
-                                  installer.string().c_str(), "apply",
-                                  "--root", root.string().c_str(), "--package",
+                                  installer.string().c_str(), "apply", "--root",
+                                  root.string().c_str(), "--package",
                                   package.string().c_str(), nullptr));
 #else
   const auto child = fork();
@@ -82,9 +80,8 @@ int RunInstaller(const fs::path& installer, const fs::path& root,
     throw std::runtime_error("failed to fork installer process");
   }
   if (child == 0) {
-    execl(installer.c_str(), installer.c_str(), "apply", "--root",
-          root.c_str(), "--package", package.c_str(),
-          static_cast<char*>(nullptr));
+    execl(installer.c_str(), installer.c_str(), "apply", "--root", root.c_str(),
+          "--package", package.c_str(), static_cast<char*>(nullptr));
     _exit(127);
   }
   int status = 0;
@@ -124,17 +121,17 @@ int RunRollback(const fs::path& installer, const fs::path& root) {
 
 void StartNewAgent(const AgentConfig& config, const fs::path& root,
                    const std::string& version) {
+  const auto binary =
+      root / "agent" / "bin" / zfleet::core::BinaryNameForComponent("agent");
+  if (!zfleet::platform::IsExecutableFile(binary)) {
+    throw std::runtime_error("new agent binary is unavailable");
+  }
 #ifdef _WIN32
-  const auto binary = root / "agent" / "bin" / "zfleet_agent.exe";
   if (_spawnl(_P_NOWAIT, binary.string().c_str(), binary.string().c_str(),
               nullptr) == -1) {
     throw std::runtime_error("failed to start new agent");
   }
 #else
-  const auto binary = root / "agent" / "bin" / "zfleet_agent";
-  if (!zfleet::platform::IsExecutableFile(binary)) {
-    throw std::runtime_error("new agent binary is unavailable");
-  }
   const auto child = fork();
   if (child < 0) {
     throw std::runtime_error("failed to fork new agent process");
@@ -149,7 +146,7 @@ void StartNewAgent(const AgentConfig& config, const fs::path& root,
   (void)version;
 }
 
-} // namespace
+}  // namespace
 
 PackageUpdateExecutionResult ExecutePackageUpdate(
     const AgentConfig& config,
@@ -165,9 +162,9 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
         StartNewAgent(config, root,
                       ReadTrimmed(root / "agent" / "var" / "active-version"));
       } catch (const std::exception& ex) {
-        return {.error_code =
-                    zfleet::protocol::ErrorCode::start_new_agent_failed,
-                .message = ex.what()};
+        return {
+            .error_code = zfleet::protocol::ErrorCode::start_new_agent_failed,
+            .message = ex.what()};
       }
       return {.ok = true,
               .stop_agent = true,
@@ -183,9 +180,9 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
     }
     const auto manifest_bytes =
         zfleet::package::ReadArchiveFile(package_path, "META/manifest.json");
-    const auto manifest_sha = zfleet::crypto::Sha256BytesHex(std::string_view(
-        reinterpret_cast<const char*>(manifest_bytes.data()),
-        manifest_bytes.size()));
+    const auto manifest_sha = zfleet::crypto::Sha256BytesHex(
+        std::string_view(reinterpret_cast<const char*>(manifest_bytes.data()),
+                         manifest_bytes.size()));
     if (!input.manifest_sha256.empty() &&
         manifest_sha != input.manifest_sha256) {
       return {.error_code = zfleet::protocol::ErrorCode::checksum_mismatch,
@@ -201,9 +198,9 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
       try {
         StartNewAgent(config, root, input.version);
       } catch (const std::exception& ex) {
-        return {.error_code =
-                    zfleet::protocol::ErrorCode::start_new_agent_failed,
-                .message = ex.what()};
+        return {
+            .error_code = zfleet::protocol::ErrorCode::start_new_agent_failed,
+            .message = ex.what()};
       }
     }
     return {.ok = true,
@@ -215,4 +212,4 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
   }
 }
 
-} // namespace zfleet::agent
+}  // namespace zfleet::agent

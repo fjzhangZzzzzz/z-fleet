@@ -95,8 +95,7 @@ void WriteTextFile(const fs::path& path, const std::string& content) {
   fs::create_directories(path.parent_path());
   std::ofstream stream(path, std::ios::binary);
   if (!stream) {
-    throw std::runtime_error("failed to open file for write: " +
-                             path.string());
+    throw std::runtime_error("failed to open file for write: " + path.string());
   }
   stream << content;
   if (!stream) {
@@ -123,19 +122,13 @@ bool HasSymlinkInPackagePath(const fs::path& package_dir,
 }
 
 fs::path BinaryNamePath(std::string_view component) {
-#ifdef _WIN32
-  return fs::path("zfleet_" + std::string(component) + ".exe");
-#else
-  return fs::path("zfleet_" + std::string(component));
-#endif
+  return fs::path(zfleet::core::BinaryNameForComponent(component));
 }
 
 fs::path LauncherTemplatePath(const fs::path& installer_release_dir) {
-#ifdef _WIN32
-  return installer_release_dir / "bin" / "zfleet_launcher.exe";
-#else
-  return installer_release_dir / "bin" / "zfleet_launcher";
-#endif
+  return installer_release_dir / "bin" /
+         zfleet::core::BinaryNameForArtifact(
+             zfleet::core::BinaryArtifact::kLauncher);
 }
 
 fs::path LauncherStubPath(const fs::path& root, std::string_view component) {
@@ -191,16 +184,16 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
     const auto file_path = release_dir / file.target;
     const auto status = fs::symlink_status(file_path);
     if (fs::is_symlink(status)) {
-      return ReleaseValidation{.ok = false,
-                               .version = manifest.version,
-                               .message = "release file is symlink: " +
-                                              file.target};
+      return ReleaseValidation{
+          .ok = false,
+          .version = manifest.version,
+          .message = "release file is symlink: " + file.target};
     }
     if (!fs::exists(status) || !fs::is_regular_file(status)) {
-      return ReleaseValidation{.ok = false,
-                               .version = manifest.version,
-                               .message = "release file missing: " +
-                                              file.target};
+      return ReleaseValidation{
+          .ok = false,
+          .version = manifest.version,
+          .message = "release file missing: " + file.target};
     }
 
     const auto actual_size = fs::file_size(file_path);
@@ -215,10 +208,10 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
                                .message = "sha256 mismatch: " + file.target};
     }
     if (zfleet::platform::IsExecutableFile(file_path) != file.executable) {
-      return ReleaseValidation{.ok = false,
-                               .version = manifest.version,
-                               .message = "executable mismatch: " +
-                                              file.target};
+      return ReleaseValidation{
+          .ok = false,
+          .version = manifest.version,
+          .message = "executable mismatch: " + file.target};
     }
   }
 
@@ -226,15 +219,13 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
     if (const auto launcher_error =
             ValidateInstallerLauncherAssets(release_dir);
         launcher_error.has_value()) {
-      return ReleaseValidation{.ok = false,
-                               .version = manifest.version,
-                               .message = *launcher_error};
+      return ReleaseValidation{
+          .ok = false, .version = manifest.version, .message = *launcher_error};
     }
   }
 
-  return ReleaseValidation{.ok = true,
-                           .version = manifest.version,
-                           .message = {}};
+  return ReleaseValidation{
+      .ok = true, .version = manifest.version, .message = {}};
 }
 
 void WriteVersionFile(const fs::path& path, const std::string& version) {
@@ -251,8 +242,7 @@ void WriteVersionFile(const fs::path& path, const std::string& version) {
   }
 }
 
-void StageRelease(const fs::path& package_dir,
-                  const fs::path& staging_dir,
+void StageRelease(const fs::path& package_dir, const fs::path& staging_dir,
                   const Manifest& manifest) {
   fs::remove_all(staging_dir);
   fs::create_directories(staging_dir);
@@ -279,7 +269,8 @@ void StageRelease(const fs::path& package_dir,
 
     const auto destination = staging_dir / file.target;
     fs::create_directories(destination.parent_path());
-    fs::copy_file(source_path, destination, fs::copy_options::overwrite_existing);
+    fs::copy_file(source_path, destination,
+                  fs::copy_options::overwrite_existing);
     zfleet::platform::SetExecutable(destination, file.executable);
   }
 
@@ -329,7 +320,8 @@ std::string ResolveInstallerVersionForPackage(const fs::path& root,
   return installer_release.version;
 }
 
-void EnsureLauncherStub(const fs::path& root, const std::string& installer_version,
+void EnsureLauncherStub(const fs::path& root,
+                        const std::string& installer_version,
                         std::string_view component) {
   const auto installer_release_dir =
       BuildPaths(root, "installer").releases_root / installer_version;
@@ -436,7 +428,7 @@ RollbackResult MakeRollbackFailure(const std::string& component,
   };
 }
 
-} // namespace
+}  // namespace
 
 ApplyResult ApplyPackageDirectory(const fs::path& root,
                                   const fs::path& package_dir) {
@@ -457,12 +449,11 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
       const auto validation =
           ValidateReleaseDirectory(release_dir, manifest.component);
       if (!validation.ok) {
-        return ApplyResult{.ok = false,
-                           .component = manifest.component,
-                           .version = manifest.version,
-                           .message =
-                               "existing release is unhealthy: " +
-                               validation.message};
+        return ApplyResult{
+            .ok = false,
+            .component = manifest.component,
+            .version = manifest.version,
+            .message = "existing release is unhealthy: " + validation.message};
       }
 
       SwitchActiveVersion(paths, active_release, manifest.version);
@@ -471,8 +462,9 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
             root, manifest.version,
             {kManagedComponents.begin(), kManagedComponents.end()});
       } else {
-        EnsureLauncherStubs(root, installer_version,
-                            {"installer", std::string_view(manifest.component)});
+        EnsureLauncherStubs(
+            root, installer_version,
+            {"installer", std::string_view(manifest.component)});
       }
       return ApplyResult{.ok = true,
                          .component = manifest.component,
@@ -498,8 +490,9 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
             root, manifest.version,
             {kManagedComponents.begin(), kManagedComponents.end()});
       } else {
-        EnsureLauncherStubs(root, installer_version,
-                            {"installer", std::string_view(manifest.component)});
+        EnsureLauncherStubs(
+            root, installer_version,
+            {"installer", std::string_view(manifest.component)});
       }
     } catch (...) {
       std::error_code cleanup_error;
@@ -512,10 +505,8 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
                        .version = manifest.version,
                        .message = "applied"};
   } catch (const std::exception& ex) {
-    return ApplyResult{.ok = false,
-                       .component = {},
-                       .version = {},
-                       .message = ex.what()};
+    return ApplyResult{
+        .ok = false, .component = {}, .version = {}, .message = ex.what()};
   }
 }
 
@@ -525,26 +516,24 @@ ApplyResult ApplyPackage(const fs::path& root, const fs::path& package_path) {
   }
 
   if (!zfleet::package::IsArchivePath(package_path)) {
-    return ApplyResult{.ok = false,
-                       .component = {},
-                       .version = {},
-                       .message = "package must be a directory or .zip archive"};
+    return ApplyResult{
+        .ok = false,
+        .component = {},
+        .version = {},
+        .message = "package must be a directory or .zip archive"};
   }
 
   try {
     const zfleet::package::ScopedTempDir temp_dir("zfleet-installer");
 
-    zfleet::package::ExtractArchive(
-        {.archive_path = package_path,
-         .output_dir = temp_dir.path(),
-         .force = true});
+    zfleet::package::ExtractArchive({.archive_path = package_path,
+                                     .output_dir = temp_dir.path(),
+                                     .force = true});
 
     return ApplyPackageDirectory(root, temp_dir.path());
   } catch (const std::exception& ex) {
-    return ApplyResult{.ok = false,
-                       .component = {},
-                       .version = {},
-                       .message = ex.what()};
+    return ApplyResult{
+        .ok = false, .component = {}, .version = {}, .message = ex.what()};
   }
 }
 
@@ -559,12 +548,13 @@ RollbackResult RollbackComponent(const fs::path& root,
   const auto paths = BuildPaths(root, component);
   const auto active_release = InspectActiveRelease(paths, component);
   if (active_release.state == ActiveReleaseState::kMissing) {
-    return MakeRollbackFailure(component, {}, {}, "active release is not installed");
+    return MakeRollbackFailure(component, {}, {},
+                               "active release is not installed");
   }
   if (active_release.state == ActiveReleaseState::kCorrupt) {
-    return MakeRollbackFailure(component, active_release.version, {},
-                               "active release is corrupt: " +
-                                   active_release.message);
+    return MakeRollbackFailure(
+        component, active_release.version, {},
+        "active release is corrupt: " + active_release.message);
   }
 
   if (!fs::exists(paths.previous_version_path)) {
@@ -582,8 +572,7 @@ RollbackResult RollbackComponent(const fs::path& root,
 
   if (!IsSafeVersionString(previous_version)) {
     return MakeRollbackFailure(component, active_release.version,
-                               previous_version,
-                               "previous-version is invalid");
+                               previous_version, "previous-version is invalid");
   }
   if (previous_version == active_release.version) {
     return MakeRollbackFailure(component, active_release.version,
@@ -592,19 +581,18 @@ RollbackResult RollbackComponent(const fs::path& root,
   }
 
   const auto previous_release_dir = paths.releases_root / previous_version;
-  if (!fs::exists(previous_release_dir) || !fs::is_directory(previous_release_dir)) {
+  if (!fs::exists(previous_release_dir) ||
+      !fs::is_directory(previous_release_dir)) {
     return MakeRollbackFailure(component, active_release.version,
-                               previous_version,
-                               "previous release missing");
+                               previous_version, "previous release missing");
   }
 
   const auto validation =
       ValidateReleaseDirectory(previous_release_dir, component);
   if (!validation.ok) {
-    return MakeRollbackFailure(component, active_release.version,
-                               previous_version,
-                               "previous release is unhealthy: " +
-                                   validation.message);
+    return MakeRollbackFailure(
+        component, active_release.version, previous_version,
+        "previous release is unhealthy: " + validation.message);
   }
 
   try {
@@ -618,8 +606,9 @@ RollbackResult RollbackComponent(const fs::path& root,
                                  .version = previous_version,
                                  .min_installer_version = "0.0.0"});
     if (component == "installer") {
-      EnsureLauncherStubs(root, installer_version,
-                          {kManagedComponents.begin(), kManagedComponents.end()});
+      EnsureLauncherStubs(
+          root, installer_version,
+          {kManagedComponents.begin(), kManagedComponents.end()});
     } else {
       EnsureLauncherStubs(root, installer_version,
                           {"installer", std::string_view(component)});
@@ -674,4 +663,4 @@ StatusResult GetStatus(const fs::path& root, const std::string& component) {
   };
 }
 
-} // namespace zfleet::installer
+}  // namespace zfleet::installer

@@ -83,6 +83,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_installer_tests
     PRIVATE
       Catch2::Catch2WithMain
+      zfleet::core
       zfleet::crypto
       zfleet::package
       zfleet::platform

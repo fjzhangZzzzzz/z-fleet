@@ -2,6 +2,7 @@
 
 #include "test_util.h"
 
+#include <zfleet/core/component.h>
 #include <zfleet/crypto/sha256.h>
 #include <zfleet/package/archive.h>
 #include <zfleet/package/manifest.h>
@@ -26,8 +27,7 @@ struct PackageFileSpec {
 };
 
 std::string BuildManifestJson(
-    const std::string& component,
-    const std::string& version,
+    const std::string& component, const std::string& version,
     const std::vector<zfleet::package::ManifestFile>& files,
     const std::string& min_installer_version = "0.1.0") {
   return zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
@@ -42,16 +42,17 @@ std::string BuildManifestJson(
   });
 }
 
-fs::path CreatePackageArchive(const fs::path& root, const std::string& component,
-                             const std::string& version,
-                             const std::vector<PackageFileSpec>& files,
-                             const std::string& min_installer_version = "0.1.0") {
+fs::path CreatePackageArchive(
+    const fs::path& root, const std::string& component,
+    const std::string& version, const std::vector<PackageFileSpec>& files,
+    const std::string& min_installer_version = "0.1.0") {
   const auto package_dir = root / "package";
   fs::create_directories(package_dir / "META");
 
   std::vector<zfleet::package::ManifestFile> manifest_files;
   for (const auto& file : files) {
-    const auto payload_path = package_dir / "payload" / file.source_relative_path;
+    const auto payload_path =
+        package_dir / "payload" / file.source_relative_path;
     zfleet::test::WriteTextFile(payload_path, file.content);
     zfleet::platform::SetExecutable(payload_path, file.executable);
 
@@ -64,34 +65,41 @@ fs::path CreatePackageArchive(const fs::path& root, const std::string& component
     });
   }
 
-  zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
-                              BuildManifestJson(component, version,
-                                                manifest_files,
-                                                min_installer_version));
+  zfleet::test::WriteTextFile(
+      package_dir / "META" / "manifest.json",
+      BuildManifestJson(component, version, manifest_files,
+                        min_installer_version));
   const auto archive_path = root / (component + "-" + version + ".zip");
   zfleet::package::CreateArchive({package_dir, archive_path, true});
   return archive_path;
 }
 
-fs::path CreateInstallerArchive(const fs::path& root, const std::string& version,
+fs::path CreateInstallerArchive(const fs::path& root,
+                                const std::string& version,
                                 const std::string& launcher_tag) {
+  const auto installer_binary_name =
+      zfleet::core::BinaryNameForComponent("installer");
+  const auto launcher_binary_name = zfleet::core::BinaryNameForArtifact(
+      zfleet::core::BinaryArtifact::kLauncher);
   return CreatePackageArchive(
       root, "installer", version,
       {
-          PackageFileSpec{.source_relative_path = "bin/zfleet_installer",
-                          .target = "bin/zfleet_installer",
-                          .content = "installer-binary-" + version,
-                          .executable = true},
-          PackageFileSpec{.source_relative_path = "bin/zfleet_launcher",
-                          .target = "bin/zfleet_launcher",
+          PackageFileSpec{
+              .source_relative_path = "bin/" + installer_binary_name,
+              .target = "bin/" + installer_binary_name,
+              .content = "installer-binary-" + version,
+              .executable = true},
+          PackageFileSpec{.source_relative_path = "bin/" + launcher_binary_name,
+                          .target = "bin/" + launcher_binary_name,
                           .content = launcher_tag + "-template-" + version,
                           .executable = true},
       });
 }
 
-fs::path CreateComponentArchive(const fs::path& root, const std::string& component,
-                                const std::string& version,
-                                const std::string& min_installer_version = "0.1.0") {
+fs::path CreateComponentArchive(
+    const fs::path& root, const std::string& component,
+    const std::string& version,
+    const std::string& min_installer_version = "0.1.0") {
   return CreatePackageArchive(
       root, component, version,
       {PackageFileSpec{
@@ -108,12 +116,14 @@ std::string ReadFile(const fs::path& path) {
 }
 
 fs::path StubPath(const fs::path& root, const std::string& component) {
-  return root / component / "bin" / ("zfleet_" + component);
+  return root / component / "bin" /
+         zfleet::core::BinaryNameForComponent(component);
 }
 
-} // namespace
+}  // namespace
 
-TEST_CASE("installer integration flow refreshes stubs across apply and rollback") {
+TEST_CASE(
+    "installer integration flow refreshes stubs across apply and rollback") {
   const zfleet::test::ScopedTestDir test_dir("installer-integration");
   const auto root = test_dir.path();
 
@@ -121,11 +131,15 @@ TEST_CASE("installer integration flow refreshes stubs across apply and rollback"
       CreateInstallerArchive(root / "installer-v1", "0.1.0", "stub-v1");
   const auto installer_v2 =
       CreateInstallerArchive(root / "installer-v2", "0.2.0", "stub-v2");
-  const auto agent_v1 = CreateComponentArchive(root / "agent-v1", "agent", "0.1.0");
+  const auto agent_v1 =
+      CreateComponentArchive(root / "agent-v1", "agent", "0.1.0");
   const auto server_v1 =
       CreateComponentArchive(root / "server-v1", "server", "0.1.0");
 
-  REQUIRE(zfleet::installer::ApplyPackage(root, installer_v1).ok);
+  const auto install_v1 = zfleet::installer::ApplyPackage(root, installer_v1);
+  if (!install_v1.ok) {
+    FAIL(install_v1.message);
+  }
   REQUIRE(fs::exists(StubPath(root, "installer")));
   REQUIRE(fs::exists(StubPath(root, "agent")));
   REQUIRE(fs::exists(StubPath(root, "server")));
@@ -148,7 +162,9 @@ TEST_CASE("installer integration flow refreshes stubs across apply and rollback"
   REQUIRE(ReadFile(StubPath(root, "server")) == "stub-v1-template-0.1.0");
 }
 
-TEST_CASE("installer integration flow rejects component packages above active installer version") {
+TEST_CASE(
+    "installer integration flow rejects component packages above active "
+    "installer version") {
   const zfleet::test::ScopedTestDir test_dir("installer-integration");
   const auto root = test_dir.path();
 
@@ -157,9 +173,13 @@ TEST_CASE("installer integration flow rejects component packages above active in
   const auto agent_v2 =
       CreateComponentArchive(root / "agent-v2", "agent", "0.2.0", "0.2.0");
 
-  REQUIRE(zfleet::installer::ApplyPackage(root, installer_v1).ok);
+  const auto install_v1 = zfleet::installer::ApplyPackage(root, installer_v1);
+  if (!install_v1.ok) {
+    FAIL(install_v1.message);
+  }
   const auto result = zfleet::installer::ApplyPackage(root, agent_v2);
   REQUIRE_FALSE(result.ok);
   REQUIRE(result.message ==
-          "active installer version 0.1.0 does not satisfy min_installer_version 0.2.0");
+          "active installer version 0.1.0 does not satisfy "
+          "min_installer_version 0.2.0");
 }
