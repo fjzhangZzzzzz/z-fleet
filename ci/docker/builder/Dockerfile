@@ -11,9 +11,11 @@ RUN dnf -y update && \
       gcc-toolset-12 \
       ninja-build \
       perl \
-      python3 \
+      python3.12 \
       unzip \
       zip && \
+    alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 120 && \
+    alternatives --set python3 /usr/bin/python3.12 && \
     dnf clean all
 
 WORKDIR /work
