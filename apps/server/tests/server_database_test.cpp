@@ -201,7 +201,7 @@ TEST_CASE("server package validation checks archive metadata and filename") {
                               "agent-binary");
   const auto manifest =
       zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
-          .schema_version = 1,
+          .schema_version = 2,
           .component = "agent",
           .version = "0.1.0",
           .platform = "linux",
@@ -213,7 +213,7 @@ TEST_CASE("server package validation checks archive metadata and filename") {
               .target = "bin/zfleet_agent",
               .size = 12,
               .sha256 = zfleet::crypto::Sha256BytesHex("agent-binary"),
-              .executable = true,
+              .launchable = true,
           }},
       });
   zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json", manifest);
@@ -233,3 +233,4 @@ TEST_CASE("server package validation checks archive metadata and filename") {
   REQUIRE(metadata.arch == "x86_64");
   REQUIRE(metadata.build_type == "release");
 }
+

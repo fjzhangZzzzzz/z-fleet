@@ -202,7 +202,7 @@ manifest 最小 schema：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "component": "agent",
   "version": "0.1.0",
   "platform": "linux",
@@ -215,7 +215,7 @@ manifest 最小 schema：
       "target": "bin/zfleet_agent",
       "size": 123,
       "sha256": "64 lowercase hex chars",
-      "executable": true
+      "launchable": true
     }
   ]
 }

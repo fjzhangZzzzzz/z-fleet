@@ -40,7 +40,7 @@ struct PayloadFile {
   fs::path source_path;
   std::uintmax_t size_bytes = 0;
   std::string sha256_hex;
-  bool executable = false;
+  bool launchable = false;
 };
 
 std::string BuildManifestJson(const std::string& component,
@@ -51,7 +51,7 @@ std::string BuildManifestJson(const std::string& component,
                               const std::string& min_installer_version,
                               const std::vector<PayloadFile>& files) {
   zfleet::package::Manifest manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = component,
       .version = version,
       .platform = platform,
@@ -67,7 +67,7 @@ std::string BuildManifestJson(const std::string& component,
         .target = file.relative_path,
         .size = static_cast<std::uint64_t>(file.size_bytes),
         .sha256 = file.sha256_hex,
-        .executable = file.executable,
+        .launchable = file.launchable,
     });
   }
   return zfleet::package::SerializeManifestJson(manifest);
@@ -157,9 +157,10 @@ std::vector<PayloadFile> CollectPayloadFiles(const fs::path& payload_dir,
     file.source_path = it->path();
     file.size_bytes = fs::file_size(it->path());
     file.sha256_hex = zfleet::crypto::Sha256FileHex(it->path());
-    file.executable = relative_string == entry_path ||
-                      zfleet::platform::HasExecutablePermission(
-                          fs::status(it->path()).permissions());
+    file.launchable = relative_string == entry_path ||
+                      relative_string ==
+                          ("bin/" + zfleet::core::BinaryNameForArtifact(
+                                        zfleet::core::BinaryArtifact::kLauncher));
     if (relative_string == entry_path) {
       found_entry = true;
     }
@@ -194,7 +195,7 @@ void CopyPayloadFiles(const fs::path& package_payload_dir,
                                file.source_path.string());
     }
 #ifndef _WIN32
-    if (file.executable) {
+    if (file.launchable) {
       zfleet::platform::SetExecutable(target_path, true);
     }
 #endif

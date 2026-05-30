@@ -145,8 +145,8 @@ std::optional<std::string> ValidateInstallerLauncherAssets(
   if (!fs::exists(status) || !fs::is_regular_file(status)) {
     return "launcher asset missing: " + asset_path.string();
   }
-  if (!zfleet::platform::IsExecutableFile(asset_path)) {
-    return "launcher asset is not executable: " + asset_path.string();
+  if (!zfleet::platform::IsLaunchableProgram(asset_path)) {
+    return "launcher asset is not launchable: " + asset_path.string();
   }
   return std::nullopt;
 }
@@ -207,11 +207,12 @@ ReleaseValidation ValidateReleaseDirectory(const fs::path& release_dir,
                                .version = manifest.version,
                                .message = "sha256 mismatch: " + file.target};
     }
-    if (zfleet::platform::IsExecutableFile(file_path) != file.executable) {
+    if (file.launchable &&
+        !zfleet::platform::IsLaunchableProgram(file_path)) {
       return ReleaseValidation{
           .ok = false,
           .version = manifest.version,
-          .message = "executable mismatch: " + file.target};
+          .message = "launchable mismatch: " + file.target};
     }
   }
 
@@ -271,7 +272,7 @@ void StageRelease(const fs::path& package_dir, const fs::path& staging_dir,
     fs::create_directories(destination.parent_path());
     fs::copy_file(source_path, destination,
                   fs::copy_options::overwrite_existing);
-    zfleet::platform::SetExecutable(destination, file.executable);
+    zfleet::platform::SetExecutable(destination, file.launchable);
   }
 
   const auto manifest_source = package_dir / "META" / "manifest.json";
@@ -464,7 +465,7 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
       } else {
         EnsureLauncherStubs(
             root, installer_version,
-            {"installer", std::string_view(manifest.component)});
+            {std::string_view(manifest.component)});
       }
       return ApplyResult{.ok = true,
                          .component = manifest.component,
@@ -492,7 +493,7 @@ ApplyResult ApplyPackageDirectory(const fs::path& root,
       } else {
         EnsureLauncherStubs(
             root, installer_version,
-            {"installer", std::string_view(manifest.component)});
+            {std::string_view(manifest.component)});
       }
     } catch (...) {
       std::error_code cleanup_error;
@@ -611,7 +612,7 @@ RollbackResult RollbackComponent(const fs::path& root,
           {kManagedComponents.begin(), kManagedComponents.end()});
     } else {
       EnsureLauncherStubs(root, installer_version,
-                          {"installer", std::string_view(component)});
+                          {std::string_view(component)});
     }
   } catch (const std::exception& ex) {
     return MakeRollbackFailure(component, active_release.version,

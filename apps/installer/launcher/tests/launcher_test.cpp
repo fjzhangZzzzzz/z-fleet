@@ -3,6 +3,7 @@
 #include "test_util.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <zfleet/core/component.h>
 #include <zfleet/platform/file_permissions.h>
 
 #include <cstdlib>
@@ -57,14 +58,15 @@ TEST_CASE("resolve target derives component root from launcher path") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
-  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_binary = zfleet::core::BinaryNameForComponent("agent");
+  const auto launcher_path = test_root / "agent" / "bin" / launcher_binary;
   zfleet::test::WriteTextFile(test_root / "agent" / "var" / "active-version",
                               "1.2.3\n");
   zfleet::test::WriteTextFile(
-      test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent",
+      test_root / "agent" / "releases" / "1.2.3" / "bin" / launcher_binary,
       "agent-binary");
   zfleet::platform::SetExecutable(
-      test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent",
+      test_root / "agent" / "releases" / "1.2.3" / "bin" / launcher_binary,
       true);
 
   const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
@@ -74,7 +76,7 @@ TEST_CASE("resolve target derives component root from launcher path") {
   REQUIRE(resolved.target.component_root == test_root / "agent");
   REQUIRE(resolved.target.version == "1.2.3");
   REQUIRE(resolved.target.executable_path ==
-          test_root / "agent" / "releases" / "1.2.3" / "bin" / "zfleet_agent");
+          test_root / "agent" / "releases" / "1.2.3" / "bin" / launcher_binary);
 }
 
 TEST_CASE("forwarded argv preserves argv[1..] and replaces argv[0]") {
@@ -96,7 +98,8 @@ TEST_CASE("resolve target fails for invalid active version state") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
-  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_path =
+      test_root / "agent" / "bin" / zfleet::core::BinaryNameForComponent("agent");
 
   SECTION("missing active-version") {
     const auto resolved = zfleet::launcher::ResolveLaunchTarget(launcher_path);
@@ -134,7 +137,8 @@ TEST_CASE(
   const auto test_root = test_dir.path();
 
   const fs::path launcher_source = ZFLEET_TEST_AGENT_LAUNCHER;
-  const auto launcher_path = test_root / "agent" / "bin" / "zfleet_agent";
+  const auto launcher_path =
+      test_root / "agent" / "bin" / zfleet::core::BinaryNameForComponent("agent");
   fs::create_directories(launcher_path.parent_path());
   REQUIRE(fs::copy_file(launcher_source, launcher_path,
                         fs::copy_options::overwrite_existing));
@@ -145,7 +149,8 @@ TEST_CASE(
   const auto args_file = test_root / "args.txt";
   const auto env_file = test_root / "env.txt";
   const auto target_path =
-      test_root / "agent" / "releases" / "2.0.0" / "bin" / "zfleet_agent";
+      test_root / "agent" / "releases" / "2.0.0" / "bin" /
+      zfleet::core::BinaryNameForComponent("agent");
   zfleet::test::WriteTextFile(
       target_path,
       "#!/bin/sh\n"

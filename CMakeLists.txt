@@ -43,6 +43,24 @@ endif()
 include(CTest)
 find_package(Threads REQUIRED)
 
+function(zf_configure_runtime_layout target_name)
+  if(WIN32)
+    add_custom_command(TARGET ${target_name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_RUNTIME_DLLS:${target_name}>
+        $<TARGET_FILE_DIR:${target_name}>
+      COMMAND_EXPAND_LISTS
+    )
+  elseif(UNIX)
+    set_target_properties(${target_name} PROPERTIES
+      BUILD_RPATH "$ORIGIN/../lib"
+      INSTALL_RPATH "$ORIGIN/../lib"
+      SKIP_BUILD_RPATH FALSE
+      BUILD_WITH_INSTALL_RPATH FALSE
+    )
+  endif()
+endfunction()
+
 if(BUILD_TESTING)
   add_subdirectory(tests/support)
 endif()

@@ -71,7 +71,8 @@ struct FileWriteStats {
 
 class ByteReader {
  public:
-  explicit ByteReader(const std::vector<std::uint8_t>& data, std::size_t offset = 0)
+  explicit ByteReader(const std::vector<std::uint8_t>& data,
+                      std::size_t offset = 0)
       : data_(data), offset_(offset) {}
 
   std::size_t Remaining() const noexcept { return data_.size() - offset_; }
@@ -100,7 +101,8 @@ class ByteReader {
     Require(sizeof(std::uint64_t));
     std::uint64_t value = 0;
     for (int index = 0; index < 8; ++index) {
-      value |= static_cast<std::uint64_t>(data_[offset_ + index]) << (8 * index);
+      value |= static_cast<std::uint64_t>(data_[offset_ + index])
+               << (8 * index);
     }
     offset_ += sizeof(std::uint64_t);
     return value;
@@ -108,7 +110,8 @@ class ByteReader {
 
   std::string ReadString(std::size_t size) {
     Require(size);
-    std::string value(reinterpret_cast<const char*>(data_.data() + offset_), size);
+    std::string value(reinterpret_cast<const char*>(data_.data() + offset_),
+                      size);
     offset_ += size;
     return value;
   }
@@ -209,7 +212,8 @@ void EnsureStreamOk(const std::ios& stream, const std::string& message) {
 std::vector<std::uint8_t> ReadFileRange(const fs::path& path,
                                         std::uint64_t offset,
                                         std::uint64_t size) {
-  if (size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+  if (size >
+      static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
     throw std::runtime_error("requested range is too large: " + path.string());
   }
 
@@ -267,19 +271,16 @@ std::vector<SourceEntry> CollectSourceEntries(const fs::path& package_dir) {
 
     const auto file_size = GetFileSize(it->path());
     if (file_size > std::numeric_limits<std::uint32_t>::max()) {
-      throw std::runtime_error("file is too large for ZIP32: " + relative_string);
+      throw std::runtime_error("file is too large for ZIP32: " +
+                               relative_string);
     }
 
     SourceEntry entry;
     entry.path = relative_string;
     entry.source_path = it->path();
     entry.uncompressed_size = file_size;
-#ifndef _WIN32
     entry.executable = zfleet::platform::HasExecutablePermission(
         fs::status(it->path()).permissions());
-#else
-    entry.executable = false;
-#endif
     entries.push_back(std::move(entry));
   }
 
@@ -302,7 +303,8 @@ void WriteLocalFileHeader(std::ostream& stream, const SourceEntry& entry) {
   WriteU32(stream, 0U);
   WriteU16(stream, static_cast<std::uint16_t>(entry.path.size()));
   WriteU16(stream, 0U);
-  stream.write(entry.path.data(), static_cast<std::streamsize>(entry.path.size()));
+  stream.write(entry.path.data(),
+               static_cast<std::streamsize>(entry.path.size()));
 }
 
 void PatchLocalFileHeader(std::ostream& stream, std::streamoff header_offset,
@@ -323,16 +325,16 @@ void PatchLocalFileHeader(std::ostream& stream, std::streamoff header_offset,
   EnsureStreamOk(stream, "failed to restore archive position");
 }
 
-FileWriteStats WriteDeflatedFileData(const fs::path& source_path, std::ostream& stream) {
+FileWriteStats WriteDeflatedFileData(const fs::path& source_path,
+                                     std::ostream& stream) {
   std::ifstream input(source_path, std::ios::binary);
   if (!input) {
     throw std::runtime_error("failed to open file: " + source_path.string());
   }
 
   z_stream zstream{};
-  const int init_result =
-      deflateInit2(&zstream, Z_BEST_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8,
-                   Z_DEFAULT_STRATEGY);
+  const int init_result = deflateInit2(&zstream, Z_BEST_COMPRESSION, Z_DEFLATED,
+                                       -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
   if (init_result != Z_OK) {
     throw std::runtime_error("failed to initialize zlib deflate");
   }
@@ -350,21 +352,25 @@ FileWriteStats WriteDeflatedFileData(const fs::path& source_path, std::ostream& 
       const std::streamsize bytes_read = input.gcount();
       if (bytes_read < 0) {
         deflateEnd(&zstream);
-        throw std::runtime_error("failed to read file: " + source_path.string());
+        throw std::runtime_error("failed to read file: " +
+                                 source_path.string());
       }
       if (bytes_read == 0) {
         if (!input.eof()) {
           deflateEnd(&zstream);
-          throw std::runtime_error("failed to read file: " + source_path.string());
+          throw std::runtime_error("failed to read file: " +
+                                   source_path.string());
         }
         finished_input = true;
         zstream.next_in = Z_NULL;
         zstream.avail_in = 0;
       } else {
         stats.uncompressed_size += static_cast<std::uint64_t>(bytes_read);
-        if (stats.uncompressed_size > std::numeric_limits<std::uint32_t>::max()) {
+        if (stats.uncompressed_size >
+            std::numeric_limits<std::uint32_t>::max()) {
           deflateEnd(&zstream);
-          throw std::runtime_error("file is too large for ZIP32: " + source_path.string());
+          throw std::runtime_error("file is too large for ZIP32: " +
+                                   source_path.string());
         }
         stats.crc32 = crc32(stats.crc32, input_buffer.data(),
                             static_cast<uInt>(bytes_read));
@@ -426,9 +432,11 @@ std::uint32_t FileModeForEntry(bool executable) {
 #endif
 }
 
-void WriteCentralDirectoryEntry(std::ostream& stream, const ArchiveRecord& entry) {
+void WriteCentralDirectoryEntry(std::ostream& stream,
+                                const ArchiveRecord& entry) {
   WriteU32(stream, kCentralDirectorySignature);
-  WriteU16(stream, static_cast<std::uint16_t>((kUnixOsCode << 8) | kZipVersion));
+  WriteU16(stream,
+           static_cast<std::uint16_t>((kUnixOsCode << 8) | kZipVersion));
   WriteU16(stream, kZipVersion);
   WriteU16(stream, entry.general_purpose_bit_flag);
   WriteU16(stream, entry.compression_method);
@@ -442,31 +450,37 @@ void WriteCentralDirectoryEntry(std::ostream& stream, const ArchiveRecord& entry
   WriteU16(stream, 0U);
   WriteU16(stream, 0U);
   WriteU16(stream, 0U);
-  WriteU32(stream, static_cast<std::uint32_t>(FileModeForEntry(entry.executable) << 16));
+  WriteU32(stream, static_cast<std::uint32_t>(FileModeForEntry(entry.executable)
+                                              << 16));
   WriteU32(stream, static_cast<std::uint32_t>(entry.local_header_offset));
-  stream.write(entry.path.data(), static_cast<std::streamsize>(entry.path.size()));
+  stream.write(entry.path.data(),
+               static_cast<std::streamsize>(entry.path.size()));
 }
 
-std::uint32_t ReadU32FromTail(const std::vector<std::uint8_t>& data, std::size_t offset) {
+std::uint32_t ReadU32FromTail(const std::vector<std::uint8_t>& data,
+                              std::size_t offset) {
   return static_cast<std::uint32_t>(data[offset]) |
          (static_cast<std::uint32_t>(data[offset + 1]) << 8) |
          (static_cast<std::uint32_t>(data[offset + 2]) << 16) |
          (static_cast<std::uint32_t>(data[offset + 3]) << 24);
 }
 
-std::uint16_t ReadU16FromTail(const std::vector<std::uint8_t>& data, std::size_t offset) {
+std::uint16_t ReadU16FromTail(const std::vector<std::uint8_t>& data,
+                              std::size_t offset) {
   return static_cast<std::uint16_t>(data[offset]) |
          (static_cast<std::uint16_t>(data[offset + 1]) << 8);
 }
 
-EndOfCentralDirectory LocateEndOfCentralDirectory(const fs::path& archive_path) {
+EndOfCentralDirectory LocateEndOfCentralDirectory(
+    const fs::path& archive_path) {
   const auto file_size = GetFileSize(archive_path);
   if (file_size < 22U) {
     throw std::runtime_error("archive is too small to be a ZIP file: " +
                              archive_path.string());
   }
 
-  const std::uint64_t tail_size = std::min<std::uint64_t>(file_size, 22U + 0xffffU);
+  const std::uint64_t tail_size =
+      std::min<std::uint64_t>(file_size, 22U + 0xffffU);
   const auto tail =
       ReadFileRange(archive_path, file_size - tail_size, tail_size);
   if (tail.size() < 22U) {
@@ -482,11 +496,14 @@ EndOfCentralDirectory LocateEndOfCentralDirectory(const fs::path& archive_path) 
     EndOfCentralDirectory eocd;
     const std::size_t offset = index + 4U;
     const std::uint16_t disk_number = ReadU16FromTail(tail, offset);
-    const std::uint16_t central_directory_disk = ReadU16FromTail(tail, offset + 2U);
+    const std::uint16_t central_directory_disk =
+        ReadU16FromTail(tail, offset + 2U);
     const std::uint16_t entries_on_disk = ReadU16FromTail(tail, offset + 4U);
     const std::uint16_t total_entries = ReadU16FromTail(tail, offset + 6U);
-    const std::uint32_t central_directory_size = ReadU32FromTail(tail, offset + 8U);
-    const std::uint32_t central_directory_offset = ReadU32FromTail(tail, offset + 12U);
+    const std::uint32_t central_directory_size =
+        ReadU32FromTail(tail, offset + 8U);
+    const std::uint32_t central_directory_offset =
+        ReadU32FromTail(tail, offset + 12U);
     const std::uint16_t comment_length = ReadU16FromTail(tail, offset + 16U);
 
     if (index + 22U + comment_length != tail.size()) {
@@ -499,7 +516,8 @@ EndOfCentralDirectory LocateEndOfCentralDirectory(const fs::path& archive_path) 
     }
     if (central_directory_size == std::numeric_limits<std::uint32_t>::max() ||
         central_directory_offset == std::numeric_limits<std::uint32_t>::max()) {
-      throw std::runtime_error("ZIP64 archives are not supported: " + archive_path.string());
+      throw std::runtime_error("ZIP64 archives are not supported: " +
+                               archive_path.string());
     }
 
     eocd.central_directory_size = central_directory_size;
@@ -508,18 +526,21 @@ EndOfCentralDirectory LocateEndOfCentralDirectory(const fs::path& archive_path) 
     return eocd;
   }
 
-  throw std::runtime_error("archive is missing the EOCD record: " + archive_path.string());
+  throw std::runtime_error("archive is missing the EOCD record: " +
+                           archive_path.string());
 }
 
 std::vector<ArchiveRecord> ParseCentralDirectory(const fs::path& archive_path) {
   const auto eocd = LocateEndOfCentralDirectory(archive_path);
   const auto archive_size = GetFileSize(archive_path);
-  if (eocd.central_directory_offset + eocd.central_directory_size > archive_size) {
-    throw std::runtime_error("central directory is truncated: " + archive_path.string());
+  if (eocd.central_directory_offset + eocd.central_directory_size >
+      archive_size) {
+    throw std::runtime_error("central directory is truncated: " +
+                             archive_path.string());
   }
 
-  const auto central_directory = ReadFileRange(archive_path, eocd.central_directory_offset,
-                                               eocd.central_directory_size);
+  const auto central_directory = ReadFileRange(
+      archive_path, eocd.central_directory_offset, eocd.central_directory_size);
   ByteReader reader(central_directory);
 
   std::vector<ArchiveRecord> entries;
@@ -557,13 +578,16 @@ std::vector<ArchiveRecord> ParseCentralDirectory(const fs::path& archive_path) {
     reader.Skip(comment_length);
 
     if ((flags & 0x0001U) != 0U) {
-      throw std::runtime_error("encrypted ZIP entries are not supported: " + path);
+      throw std::runtime_error("encrypted ZIP entries are not supported: " +
+                               path);
     }
     if ((flags & 0x0008U) != 0U) {
-      throw std::runtime_error("ZIP data descriptors are not supported: " + path);
+      throw std::runtime_error("ZIP data descriptors are not supported: " +
+                               path);
     }
     if ((flags & 0x0040U) != 0U) {
-      throw std::runtime_error("strongly encrypted ZIP entries are not supported: " + path);
+      throw std::runtime_error(
+          "strongly encrypted ZIP entries are not supported: " + path);
     }
     if (compression_method != kStoredCompressionMethod &&
         compression_method != kDeflatedCompressionMethod) {
@@ -581,11 +605,13 @@ std::vector<ArchiveRecord> ParseCentralDirectory(const fs::path& archive_path) {
       throw std::runtime_error("duplicate archive entry path: " + path);
     }
     if (local_header_offset >= archive_size) {
-      throw std::runtime_error("archive entry points outside the ZIP file: " + path);
+      throw std::runtime_error("archive entry points outside the ZIP file: " +
+                               path);
     }
     if (compression_method == kStoredCompressionMethod &&
         compressed_size != uncompressed_size) {
-      throw std::runtime_error("stored ZIP entry has mismatched sizes: " + path);
+      throw std::runtime_error("stored ZIP entry has mismatched sizes: " +
+                               path);
     }
 
     ArchiveRecord entry;
@@ -601,7 +627,8 @@ std::vector<ArchiveRecord> ParseCentralDirectory(const fs::path& archive_path) {
       const std::uint32_t unix_mode = external_attributes >> 16;
       const std::uint32_t file_type = unix_mode & kUnixFileTypeMask;
       if (file_type == kUnixSymlinkFileType) {
-        throw std::runtime_error("symlink ZIP entries are not supported: " + path);
+        throw std::runtime_error("symlink ZIP entries are not supported: " +
+                                 path);
       }
       if (file_type != 0U && file_type != kUnixRegularFileType) {
         throw std::runtime_error("unsupported ZIP entry file type: " + path);
@@ -628,11 +655,13 @@ struct LocalFileInfo {
   std::uint64_t data_offset = 0;
 };
 
-LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_path,
+LocalFileInfo ReadLocalFileInfo(std::ifstream& stream,
+                                const fs::path& archive_path,
                                 const ArchiveRecord& entry) {
   stream.clear();
   stream.seekg(static_cast<std::streamoff>(entry.local_header_offset));
-  EnsureStreamOk(stream, "failed to seek within archive: " + archive_path.string());
+  EnsureStreamOk(stream,
+                 "failed to seek within archive: " + archive_path.string());
 
   std::array<std::uint8_t, 30> header{};
   stream.read(reinterpret_cast<char*>(header.data()),
@@ -645,7 +674,8 @@ LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_p
   ByteReader reader(header_bytes);
   const std::uint32_t signature = reader.ReadU32();
   if (signature != kLocalFileHeaderSignature) {
-    throw std::runtime_error("local file header signature mismatch: " + entry.path);
+    throw std::runtime_error("local file header signature mismatch: " +
+                             entry.path);
   }
   reader.Skip(2U);
 
@@ -660,17 +690,21 @@ LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_p
   const std::uint16_t extra_length = reader.ReadU16();
 
   if ((info.flags & 0x0001U) != 0U) {
-    throw std::runtime_error("encrypted ZIP entries are not supported: " + entry.path);
+    throw std::runtime_error("encrypted ZIP entries are not supported: " +
+                             entry.path);
   }
   if ((info.flags & 0x0008U) != 0U) {
-    throw std::runtime_error("ZIP data descriptors are not supported: " + entry.path);
+    throw std::runtime_error("ZIP data descriptors are not supported: " +
+                             entry.path);
   }
   if (info.compression_method != entry.compression_method) {
     throw std::runtime_error("ZIP compression method mismatch: " + entry.path);
   }
-  if (info.crc32 != entry.crc32 || info.compressed_size != entry.compressed_size ||
+  if (info.crc32 != entry.crc32 ||
+      info.compressed_size != entry.compressed_size ||
       info.uncompressed_size != entry.uncompressed_size) {
-    throw std::runtime_error("ZIP local header metadata mismatch: " + entry.path);
+    throw std::runtime_error("ZIP local header metadata mismatch: " +
+                             entry.path);
   }
 
   std::vector<std::uint8_t> name_bytes(name_length);
@@ -681,7 +715,8 @@ LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_p
       throw std::runtime_error("local file name is truncated: " + entry.path);
     }
   }
-  const std::string name(reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+  const std::string name(reinterpret_cast<const char*>(name_bytes.data()),
+                         name_bytes.size());
   if (name != entry.path) {
     throw std::runtime_error("ZIP local header path mismatch: " + entry.path);
   }
@@ -689,11 +724,13 @@ LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_p
   if (extra_length > 0U) {
     stream.ignore(static_cast<std::streamsize>(extra_length));
     if (!stream) {
-      throw std::runtime_error("ZIP local header extra field is truncated: " + entry.path);
+      throw std::runtime_error("ZIP local header extra field is truncated: " +
+                               entry.path);
     }
   }
 
-  info.data_offset = entry.local_header_offset + 30U + name_length + extra_length;
+  info.data_offset =
+      entry.local_header_offset + 30U + name_length + extra_length;
   const auto archive_size = GetFileSize(archive_path);
   if (info.data_offset + entry.compressed_size > archive_size) {
     throw std::runtime_error("ZIP entry is truncated: " + entry.path);
@@ -702,7 +739,8 @@ LocalFileInfo ReadLocalFileInfo(std::ifstream& stream, const fs::path& archive_p
 }
 
 template <typename Sink>
-void CopyStoredEntry(std::ifstream& archive, const ArchiveRecord& entry, Sink&& sink) {
+void CopyStoredEntry(std::ifstream& archive, const ArchiveRecord& entry,
+                     Sink&& sink) {
   std::array<std::uint8_t, kBufferSize> buffer{};
   std::uint64_t remaining = entry.compressed_size;
   std::uint64_t written = 0;
@@ -747,7 +785,8 @@ void InflateDeflatedEntry(std::ifstream& archive, const ArchiveRecord& entry,
                    static_cast<std::streamsize>(chunk_size));
       if (archive.gcount() != static_cast<std::streamsize>(chunk_size)) {
         inflateEnd(&zstream);
-        throw std::runtime_error("deflated ZIP entry is truncated: " + entry.path);
+        throw std::runtime_error("deflated ZIP entry is truncated: " +
+                                 entry.path);
       }
       remaining -= chunk_size;
       zstream.next_in = reinterpret_cast<Bytef*>(input_buffer.data());
@@ -774,13 +813,15 @@ void InflateDeflatedEntry(std::ifstream& archive, const ArchiveRecord& entry,
     if (result == Z_STREAM_END) {
       if (remaining != 0U || zstream.avail_in != 0U) {
         inflateEnd(&zstream);
-        throw std::runtime_error("deflated ZIP entry contains trailing data: " + entry.path);
+        throw std::runtime_error("deflated ZIP entry contains trailing data: " +
+                                 entry.path);
       }
       break;
     }
     if (finished_input && zstream.avail_in == 0U) {
       inflateEnd(&zstream);
-      throw std::runtime_error("deflated ZIP entry is truncated: " + entry.path);
+      throw std::runtime_error("deflated ZIP entry is truncated: " +
+                               entry.path);
     }
   }
 
@@ -793,7 +834,8 @@ void InflateDeflatedEntry(std::ifstream& archive, const ArchiveRecord& entry,
 }
 
 template <typename Sink>
-void TransferArchiveEntryData(std::ifstream& archive, const fs::path& archive_path,
+void TransferArchiveEntryData(std::ifstream& archive,
+                              const fs::path& archive_path,
                               const ArchiveRecord& entry, Sink&& sink) {
   const LocalFileInfo info = ReadLocalFileInfo(archive, archive_path, entry);
   archive.clear();
@@ -813,10 +855,9 @@ void TransferArchiveEntryData(std::ifstream& archive, const fs::path& archive_pa
 
 ArchiveRecord FindArchiveRecord(const std::vector<ArchiveRecord>& records,
                                 std::string_view path) {
-  const auto it = std::find_if(records.begin(), records.end(),
-                               [path](const ArchiveRecord& record) {
-                                 return record.path == path;
-                               });
+  const auto it = std::find_if(
+      records.begin(), records.end(),
+      [path](const ArchiveRecord& record) { return record.path == path; });
   if (it == records.end()) {
     throw std::runtime_error("archive entry not found: " + std::string(path));
   }
@@ -824,7 +865,7 @@ ArchiveRecord FindArchiveRecord(const std::vector<ArchiveRecord>& records,
 }
 
 std::vector<std::uint8_t> ReadArchiveEntryBytes(const fs::path& archive_path,
-                                               const ArchiveRecord& entry) {
+                                                const ArchiveRecord& entry) {
   std::ifstream archive(archive_path, std::ios::binary);
   if (!archive) {
     throw std::runtime_error("failed to open file: " + archive_path.string());
@@ -832,7 +873,8 @@ std::vector<std::uint8_t> ReadArchiveEntryBytes(const fs::path& archive_path,
 
   std::vector<std::uint8_t> contents;
   if (entry.uncompressed_size > std::numeric_limits<std::size_t>::max()) {
-    throw std::runtime_error("archive entry is too large to load: " + entry.path);
+    throw std::runtime_error("archive entry is too large to load: " +
+                             entry.path);
   }
   contents.reserve(static_cast<std::size_t>(entry.uncompressed_size));
 
@@ -846,11 +888,14 @@ std::vector<std::uint8_t> ReadArchiveEntryBytes(const fs::path& archive_path,
   return contents;
 }
 
-void ExtractArchiveEntry(const fs::path& archive_path, const ArchiveRecord& entry,
+void ExtractArchiveEntry(const fs::path& archive_path,
+                         const ArchiveRecord& entry,
                          const fs::path& output_root) {
-  const fs::path target_path = (output_root / fs::path(entry.path)).lexically_normal();
+  const fs::path target_path =
+      (output_root / fs::path(entry.path)).lexically_normal();
   if (!IsWithinBase(output_root.lexically_normal(), target_path)) {
-    throw std::runtime_error("archive entry escapes output directory: " + entry.path);
+    throw std::runtime_error("archive entry escapes output directory: " +
+                             entry.path);
   }
 
   if (const auto parent = target_path.parent_path(); !parent.empty()) {
@@ -859,7 +904,8 @@ void ExtractArchiveEntry(const fs::path& archive_path, const ArchiveRecord& entr
 
   std::ofstream output(target_path, std::ios::binary | std::ios::trunc);
   if (!output) {
-    throw std::runtime_error("failed to open file for write: " + target_path.string());
+    throw std::runtime_error("failed to open file for write: " +
+                             target_path.string());
   }
 
   std::ifstream archive(archive_path, std::ios::binary);
@@ -868,7 +914,8 @@ void ExtractArchiveEntry(const fs::path& archive_path, const ArchiveRecord& entr
   }
 
   auto sink = [&output](const std::uint8_t* data, std::size_t size) {
-    output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    output.write(reinterpret_cast<const char*>(data),
+                 static_cast<std::streamsize>(size));
     EnsureStreamOk(output, "failed to write extracted file");
   };
   TransferArchiveEntryData(archive, archive_path, entry, sink);
@@ -882,11 +929,9 @@ void ExtractArchiveEntry(const fs::path& archive_path, const ArchiveRecord& entr
 #endif
 }
 
-} // namespace
+}  // namespace
 
-bool IsArchivePath(const fs::path& path) {
-  return path.extension() == ".zip";
-}
+bool IsArchivePath(const fs::path& path) { return path.extension() == ".zip"; }
 
 void CreateArchive(const CreateArchiveOptions& options) {
   if (options.package_dir.empty()) {
@@ -909,7 +954,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
                              options.package_dir.string());
   }
 
-  if (options.package_dir.lexically_normal() == options.archive_path.lexically_normal()) {
+  if (options.package_dir.lexically_normal() ==
+      options.archive_path.lexically_normal()) {
     throw std::runtime_error("package directory and archive path must differ");
   }
   const auto normalized_package_dir =
@@ -917,8 +963,9 @@ void CreateArchive(const CreateArchiveOptions& options) {
   const auto normalized_archive_path =
       fs::absolute(options.archive_path).lexically_normal();
   if (IsWithinBase(normalized_package_dir, normalized_archive_path)) {
-    throw std::runtime_error("archive path cannot be inside the package directory: " +
-                             options.archive_path.string());
+    throw std::runtime_error(
+        "archive path cannot be inside the package directory: " +
+        options.archive_path.string());
   }
 
   const auto entries = CollectSourceEntries(options.package_dir);
@@ -926,13 +973,15 @@ void CreateArchive(const CreateArchiveOptions& options) {
       entries.begin(), entries.end(),
       [](const SourceEntry& entry) { return entry.path == kManifestPath; });
   if (!has_manifest) {
-    throw std::runtime_error("package directory must include META/manifest.json");
+    throw std::runtime_error(
+        "package directory must include META/manifest.json");
   }
 
   if (fs::exists(options.archive_path)) {
     if (!fs::is_regular_file(fs::symlink_status(options.archive_path))) {
-      throw std::runtime_error("archive path exists but is not a regular file: " +
-                               options.archive_path.string());
+      throw std::runtime_error(
+          "archive path exists but is not a regular file: " +
+          options.archive_path.string());
     }
     if (!options.force) {
       throw std::runtime_error("archive path already exists: " +
@@ -945,7 +994,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
     fs::create_directories(parent);
   }
 
-  std::ofstream archive(options.archive_path, std::ios::binary | std::ios::trunc);
+  std::ofstream archive(options.archive_path,
+                        std::ios::binary | std::ios::trunc);
   if (!archive) {
     throw std::runtime_error("failed to open file for write: " +
                              options.archive_path.string());
@@ -963,7 +1013,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
     WriteLocalFileHeader(archive, entry);
     EnsureStreamOk(archive, "failed to write ZIP local header");
 
-    const FileWriteStats stats = WriteDeflatedFileData(entry.source_path, archive);
+    const FileWriteStats stats =
+        WriteDeflatedFileData(entry.source_path, archive);
     const auto data_end = archive.tellp();
     if (data_end == std::streampos(-1)) {
       throw std::runtime_error("failed to query archive position");
@@ -981,7 +1032,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
     written_entry.crc32 = stats.crc32;
     written_entry.compressed_size = stats.compressed_size;
     written_entry.uncompressed_size = stats.uncompressed_size;
-    written_entry.local_header_offset = static_cast<std::uint64_t>(header_offset);
+    written_entry.local_header_offset =
+        static_cast<std::uint64_t>(header_offset);
     written_entries.push_back(std::move(written_entry));
   }
 
@@ -989,8 +1041,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
   if (central_directory_offset_pos == std::streampos(-1)) {
     throw std::runtime_error("failed to query archive position");
   }
-  const auto central_directory_offset =
-      static_cast<std::uint64_t>(static_cast<std::streamoff>(central_directory_offset_pos));
+  const auto central_directory_offset = static_cast<std::uint64_t>(
+      static_cast<std::streamoff>(central_directory_offset_pos));
   if (central_directory_offset > std::numeric_limits<std::uint32_t>::max()) {
     throw std::runtime_error("ZIP64 archives are not supported");
   }
@@ -1004,8 +1056,8 @@ void CreateArchive(const CreateArchiveOptions& options) {
   if (central_directory_end_pos == std::streampos(-1)) {
     throw std::runtime_error("failed to query archive position");
   }
-  const auto central_directory_end =
-      static_cast<std::uint64_t>(static_cast<std::streamoff>(central_directory_end_pos));
+  const auto central_directory_end = static_cast<std::uint64_t>(
+      static_cast<std::streamoff>(central_directory_end_pos));
   if (central_directory_end < central_directory_offset) {
     throw std::runtime_error("failed to finalize ZIP central directory");
   }
@@ -1085,7 +1137,8 @@ std::vector<std::uint8_t> ReadArchiveFile(const fs::path& archive_path,
     throw std::runtime_error("archive path must use the .zip extension");
   }
   if (!IsSafeRelativeArchivePath(path)) {
-    throw std::runtime_error("archive entry path is not safe: " + std::string(path));
+    throw std::runtime_error("archive entry path is not safe: " +
+                             std::string(path));
   }
 
   const auto records = ParseCentralDirectory(archive_path);
@@ -1093,4 +1146,4 @@ std::vector<std::uint8_t> ReadArchiveFile(const fs::path& archive_path,
   return ReadArchiveEntryBytes(archive_path, record);
 }
 
-} // namespace zfleet::package
+}  // namespace zfleet::package

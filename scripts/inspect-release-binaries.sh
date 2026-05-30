@@ -9,9 +9,6 @@ Usage: ./scripts/inspect-release-binaries.sh --preset <linux-release|windows-rel
 EOF
 }
 
-# skip temprorily until we have a chance to fix the issues with the release binaries
-exit 0
-
 preset=
 while [[ $# -gt 0 ]]; do
   case "$1" in

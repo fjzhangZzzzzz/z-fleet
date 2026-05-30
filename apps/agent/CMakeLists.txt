@@ -50,6 +50,7 @@ target_link_libraries(zfleet_agent
 )
 
 target_compile_features(zfleet_agent PRIVATE cxx_std_20)
+zf_configure_runtime_layout(zfleet_agent)
 
 set(ZFLEET_AGENT_RELEASE_MAX_BYTES 20971520 CACHE STRING
   "Maximum allowed stripped release size for zfleet_agent in bytes"

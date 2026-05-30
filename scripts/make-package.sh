@@ -18,6 +18,68 @@ do_build=1
 force=0
 zip=0
 
+copy_linux_runtime_libs() {
+  local source_binary="$1"
+  local payload_dir="$2"
+  local lib_dir="$payload_dir/lib"
+  mkdir -p "$lib_dir" || zf_fail_exec "failed to create payload lib dir"
+
+  command -v ldd >/dev/null 2>&1 || zf_fail_exec "ldd not found in PATH"
+
+  mapfile -t runtime_libs < <(
+    ldd "$source_binary" 2>/dev/null |
+      awk '
+        /=> \// { print $3 }
+        /^\// { print $1 }
+      ' |
+      sed '/^$/d' |
+      sort -u
+  )
+
+  local copied=0
+  for lib_path in "${runtime_libs[@]}"; do
+    [[ -f "$lib_path" ]] || continue
+    local lib_name
+    lib_name="$(basename "$lib_path")"
+    case "$lib_name" in
+      libatomic.so*|libstdc++.so*|libgcc_s.so*)
+        cp -p "$lib_path" "$lib_dir/$lib_name" ||
+          zf_fail_exec "failed to stage runtime library: $lib_path"
+        copied=1
+        ;;
+    esac
+  done
+
+  if [[ $copied -eq 0 ]]; then
+    zf_log "warning: no Linux runtime libs matched libatomic/libstdc++/libgcc_s for $source_binary"
+  fi
+}
+
+copy_windows_runtime_dlls() {
+  local payload_dir="$1"
+  shift
+  local payload_bin_dir="$payload_dir/bin"
+  mkdir -p "$payload_bin_dir" || zf_fail_exec "failed to create payload bin dir"
+
+  local copied=0
+  local source_dir dll_path dll_name
+  shopt -s nullglob
+  for source_dir in "$@"; do
+    [[ -d "$source_dir" ]] || continue
+    for dll_path in "$source_dir"/*.dll; do
+      dll_name="$(basename "$dll_path")"
+      cp -p "$dll_path" "$payload_bin_dir/$dll_name" ||
+        zf_fail_exec "failed to stage runtime dll: $dll_path"
+      copied=1
+    done
+  done
+  shopt -u nullglob
+
+  if [[ $copied -eq 0 ]]; then
+    zf_log "warning: no runtime dll found for source directories: $*"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --preset)
@@ -145,6 +207,16 @@ for component in "${components[@]}"; do
       zf_fail_exec "failed to create server Web asset staging dir"
     cp -Rp "$web_source_dir" "$payload_dir/share/web" ||
       zf_fail_exec "failed to stage server Web static assets"
+  fi
+
+  if [[ "$package_platform" == "linux" ]]; then
+    copy_linux_runtime_libs "$source_binary" "$payload_dir"
+  elif [[ "$package_platform" == "windows" ]]; then
+    runtime_dirs=("$(dirname "$source_binary")")
+    if [[ "$component" == "installer" ]]; then
+      runtime_dirs+=("$(dirname "$launcher_source")")
+    fi
+    copy_windows_runtime_dlls "$payload_dir" "${runtime_dirs[@]}"
   fi
   payload_dir_arg="$(zf_to_native_path_if_needed "$payload_dir")"
 

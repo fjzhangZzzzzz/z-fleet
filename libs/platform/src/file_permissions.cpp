@@ -18,14 +18,15 @@ bool HasExecutablePermission(fs::perms permissions) noexcept {
 #endif
 }
 
-bool IsExecutableFile(const fs::path& path) {
+bool IsLaunchableProgram(const fs::path& path) {
   const auto target_status = fs::symlink_status(path);
   if (!fs::exists(target_status) || !fs::is_regular_file(target_status)) {
     return false;
   }
 
 #ifdef _WIN32
-  return true;
+  const auto extension = path.extension().string();
+  return extension == ".exe" || extension == ".EXE";
 #else
   return HasExecutablePermission(fs::status(path).permissions());
 #endif

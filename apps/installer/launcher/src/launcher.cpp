@@ -102,7 +102,7 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
 
   const auto executable_path =
       component_root / "releases" / version / "bin" / executable_name;
-  if (!zfleet::platform::IsExecutableFile(executable_path)) {
+  if (!zfleet::platform::IsLaunchableProgram(executable_path)) {
     return ResolveResult{
         .ok = false,
         .target = {},

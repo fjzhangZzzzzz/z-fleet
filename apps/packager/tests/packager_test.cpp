@@ -28,7 +28,7 @@ void ExtractArchiveTo(const fs::path& archive_path, const fs::path& output_dir) 
 struct ExpectedFile {
   std::string relative_path;
   fs::path path;
-  bool executable = false;
+  bool launchable = false;
 };
 
 std::string ExpectedManifestJson(const std::string& component,
@@ -37,7 +37,7 @@ std::string ExpectedManifestJson(const std::string& component,
                                  const std::string& min_installer_version,
                                  const std::vector<ExpectedFile>& files) {
   zfleet::package::Manifest manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = component,
       .version = version,
       .platform = "linux",
@@ -53,7 +53,7 @@ std::string ExpectedManifestJson(const std::string& component,
         .target = file.relative_path,
         .size = static_cast<std::uint64_t>(fs::file_size(file.path)),
         .sha256 = zfleet::crypto::Sha256FileHex(file.path),
-        .executable = file.executable,
+        .launchable = file.launchable,
     });
   }
   return zfleet::package::SerializeManifestJson(manifest);
@@ -105,15 +105,15 @@ TEST_CASE("pack creates package layout from payload directory") {
               "agent", "1.2.3", "debug", "0.1.0",
               {ExpectedFile{.relative_path = "bin/zfleet_agent",
                             .path = binary_path,
-                            .executable = true},
+                            .launchable = true},
                ExpectedFile{.relative_path = "lib/libagent_support.so",
                             .path = library_path,
-                            .executable = false},
+                            .launchable = false},
                ExpectedFile{.relative_path = "share/agent.conf",
                             .path = config_path,
-                            .executable = false}}));
+                            .launchable = false}}));
 #ifndef _WIN32
-  REQUIRE(zfleet::platform::IsExecutableFile(package_dir / "payload" / "bin" /
+  REQUIRE(zfleet::platform::IsLaunchableProgram(package_dir / "payload" / "bin" /
                                              "zfleet_agent"));
 #endif
 }
@@ -163,10 +163,10 @@ TEST_CASE("pack creates a zip archive from payload directory") {
               "server", "3.4.5", "release", "0.1.0",
               {ExpectedFile{.relative_path = "bin/zfleet_server",
                             .path = binary_path,
-                            .executable = true},
+                            .launchable = true},
                ExpectedFile{.relative_path = "lib/libserver_support.so",
                             .path = library_path,
-                            .executable = false}}));
+                            .launchable = false}}));
 }
 
 TEST_CASE("pack rejects existing output unless force is set") {

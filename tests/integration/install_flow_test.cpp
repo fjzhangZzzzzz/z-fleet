@@ -386,7 +386,7 @@ TEST_CASE(
   const std::string arch = zfleet::platform::architecture_name();
 
   zfleet::package::Manifest agent_manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = "agent",
       .version = "0.2.0",
       .platform = platform,
@@ -396,7 +396,7 @@ TEST_CASE(
       .files = {},
   };
   zfleet::package::Manifest installer_manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = "installer",
       .version = "0.1.0",
       .platform = platform,
@@ -622,3 +622,4 @@ TEST_CASE(
     std::rethrow_exception(control_error);
   }
 }
+

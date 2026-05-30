@@ -13,7 +13,7 @@ struct ManifestFile {
   std::string target;
   std::uint64_t size;
   std::string sha256;
-  bool executable;
+  bool launchable;
 };
 
 struct Manifest {

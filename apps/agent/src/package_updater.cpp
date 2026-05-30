@@ -66,7 +66,7 @@ fs::path InstallerBinary(const fs::path& root) {
 
 int RunInstaller(const fs::path& installer, const fs::path& root,
                  const fs::path& package) {
-  if (!zfleet::platform::IsExecutableFile(installer)) {
+  if (!zfleet::platform::IsLaunchableProgram(installer)) {
     throw std::runtime_error("active installer binary is unavailable");
   }
 #ifdef _WIN32
@@ -93,7 +93,7 @@ int RunInstaller(const fs::path& installer, const fs::path& root,
 }
 
 int RunRollback(const fs::path& installer, const fs::path& root) {
-  if (!zfleet::platform::IsExecutableFile(installer)) {
+  if (!zfleet::platform::IsLaunchableProgram(installer)) {
     throw std::runtime_error("active installer binary is unavailable");
   }
 #ifdef _WIN32
@@ -123,7 +123,7 @@ void StartNewAgent(const AgentConfig& config, const fs::path& root,
                    const std::string& version) {
   const auto binary =
       root / "agent" / "bin" / zfleet::core::BinaryNameForComponent("agent");
-  if (!zfleet::platform::IsExecutableFile(binary)) {
+  if (!zfleet::platform::IsLaunchableProgram(binary)) {
     throw std::runtime_error("new agent binary is unavailable");
   }
 #ifdef _WIN32

@@ -56,6 +56,7 @@ target_link_libraries(zfleet_installer
 )
 
 target_compile_features(zfleet_installer PRIVATE cxx_std_20)
+zf_configure_runtime_layout(zfleet_installer)
 
 add_executable(zfleet_launcher
   launcher/src/main.cpp
@@ -71,6 +72,7 @@ set_target_properties(zfleet_launcher PROPERTIES
 )
 
 target_compile_features(zfleet_launcher PRIVATE cxx_std_20)
+zf_configure_runtime_layout(zfleet_launcher)
 
 if(BUILD_TESTING)
   find_package(Catch2 CONFIG REQUIRED)

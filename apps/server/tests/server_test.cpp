@@ -377,7 +377,7 @@ std::filesystem::path CreatePackageArchive(
 
   const auto manifest = zfleet::package::SerializeManifestJson(
       zfleet::package::Manifest{
-          .schema_version = 1,
+          .schema_version = 2,
           .component = component,
           .version = version,
           .platform = "linux",
@@ -389,7 +389,7 @@ std::filesystem::path CreatePackageArchive(
               .target = "bin/" + binary,
               .size = static_cast<std::uint64_t>(contents.size()),
               .sha256 = zfleet::crypto::Sha256BytesHex(contents),
-              .executable = true,
+              .launchable = true,
           }},
       });
   zfleet::test::WriteTextFile(package_dir / "META" / "manifest.json",
@@ -423,3 +423,4 @@ void WriteWebStaticFiles(const std::filesystem::path& root) {
 }
 
 } // namespace
+

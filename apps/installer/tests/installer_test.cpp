@@ -26,7 +26,7 @@ struct PackageFileSpec {
   std::string source_relative_path;
   std::string target;
   std::string content;
-  bool executable = false;
+  bool launchable = false;
 };
 
 std::string BuildManifestJson(
@@ -34,7 +34,7 @@ std::string BuildManifestJson(
     const std::vector<zfleet::package::ManifestFile>& files,
     const std::string& min_installer_version = "0.1.0") {
   return zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = component,
       .version = version,
       .platform = "linux",
@@ -50,20 +50,42 @@ std::string BuildManifest(const std::string& component,
                           const std::vector<PackageFileSpec>& files,
                           const fs::path& package_dir,
                           const std::string& min_installer_version = "0.1.0") {
+  auto NormalizeBinaryRelativePath = [](const std::string& relative_path) {
+    constexpr std::string_view kPrefix = "bin/zfleet_";
+    if (!std::string_view(relative_path).starts_with(kPrefix)) {
+      return relative_path;
+    }
+    const auto stem = relative_path.substr(4);
+    if (const auto component = zfleet::core::ComponentForBinaryName(stem)) {
+      return std::string("bin/") +
+             zfleet::core::BinaryNameForComponent(*component);
+    }
+    if (zfleet::core::ArtifactForBinaryName(stem) ==
+        zfleet::core::BinaryArtifact::kLauncher) {
+      return std::string("bin/") +
+             zfleet::core::BinaryNameForArtifact(
+                 zfleet::core::BinaryArtifact::kLauncher);
+    }
+    return relative_path;
+  };
+
   std::vector<zfleet::package::ManifestFile> manifest_files;
 
   for (const auto& file : files) {
+    const auto normalized_source =
+        NormalizeBinaryRelativePath(file.source_relative_path);
+    const auto normalized_target = NormalizeBinaryRelativePath(file.target);
     const auto payload_path =
-        package_dir / "payload" / file.source_relative_path;
+        package_dir / "payload" / normalized_source;
     WriteTextFile(payload_path, file.content);
-    zfleet::platform::SetExecutable(payload_path, file.executable);
+    zfleet::platform::SetExecutable(payload_path, file.launchable);
 
     manifest_files.push_back(zfleet::package::ManifestFile{
-        .source = "payload/" + file.source_relative_path,
-        .target = file.target,
+        .source = "payload/" + normalized_source,
+        .target = normalized_target,
         .size = static_cast<std::uint64_t>(fs::file_size(payload_path)),
         .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
-        .executable = file.executable,
+        .launchable = file.launchable,
     });
   }
 
@@ -107,7 +129,7 @@ fs::path PreviousVersionPath(const fs::path& root,
 
 fs::path ReleaseBinaryPath(const fs::path& root, const std::string& component,
                            const std::string& version) {
-  const auto binary_name = "zfleet_" + component;
+  const auto binary_name = zfleet::core::BinaryNameForComponent(component);
   return ComponentRoot(root, component) / "releases" / version / "bin" /
          binary_name;
 }
@@ -131,11 +153,11 @@ fs::path CreateInstallerPackage(const fs::path& root,
               .source_relative_path = "bin/" + installer_binary_name,
               .target = "bin/" + installer_binary_name,
               .content = "installer-binary-" + version,
-              .executable = true},
+              .launchable = true},
           PackageFileSpec{.source_relative_path = "bin/" + launcher_binary_name,
                           .target = "bin/" + launcher_binary_name,
                           .content = launcher_tag + "-template-" + version,
-                          .executable = true},
+                          .launchable = true},
       });
 }
 
@@ -161,18 +183,20 @@ TEST_CASE("apply writes release content and active-version") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
 
   REQUIRE(result.ok);
   const auto release_root = test_root / "agent" / "releases" / "0.1.0";
-  REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(fs::exists(release_root / "bin" /
+                     zfleet::core::BinaryNameForComponent("agent")));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
-  REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") ==
+  REQUIRE(ReadTextFile(release_root / "bin" /
+                       zfleet::core::BinaryNameForComponent("agent")) ==
           "agent-binary");
-  REQUIRE(zfleet::platform::IsExecutableFile(release_root / "bin" /
-                                             "zfleet_agent"));
+  REQUIRE(zfleet::platform::IsLaunchableProgram(
+      release_root / "bin" / zfleet::core::BinaryNameForComponent("agent")));
   REQUIRE(fs::exists(LauncherStubPath(test_root, "agent")));
   REQUIRE(ReadTextFile(LauncherStubPath(test_root, "agent")) ==
           "launcher-template-0.1.0");
@@ -190,7 +214,7 @@ TEST_CASE(
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto archive_path = test_root / "package.zip";
   CreateArchivePackage(package_dir, archive_path);
 
@@ -200,12 +224,14 @@ TEST_CASE(
   REQUIRE(result.component == "agent");
   REQUIRE(result.version == "0.1.0");
   const auto release_root = test_root / "agent" / "releases" / "0.1.0";
-  REQUIRE(fs::exists(release_root / "bin" / "zfleet_agent"));
+  REQUIRE(fs::exists(release_root / "bin" /
+                     zfleet::core::BinaryNameForComponent("agent")));
   REQUIRE(fs::exists(release_root / "META" / "manifest.json"));
-  REQUIRE(ReadTextFile(release_root / "bin" / "zfleet_agent") ==
+  REQUIRE(ReadTextFile(release_root / "bin" /
+                       zfleet::core::BinaryNameForComponent("agent")) ==
           "agent-binary");
-  REQUIRE(zfleet::platform::IsExecutableFile(release_root / "bin" /
-                                             "zfleet_agent"));
+  REQUIRE(zfleet::platform::IsLaunchableProgram(
+      release_root / "bin" / zfleet::core::BinaryNameForComponent("agent")));
   REQUIRE(fs::exists(LauncherStubPath(test_root, "agent")));
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.1.0\n");
 }
@@ -222,8 +248,9 @@ TEST_CASE(
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}});
-    WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent",
+                         .launchable = true}});
+    WriteTextFile(package_dir / "payload" / "bin" /
+                      zfleet::core::BinaryNameForComponent("agent"),
                   "tampered-binary");
 
     const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
@@ -237,16 +264,18 @@ TEST_CASE(
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}});
-    const auto payload_path = package_dir / "payload" / "bin" / "zfleet_agent";
+                         .launchable = true}});
+    const auto payload_path = package_dir / "payload" / "bin" /
+                              zfleet::core::BinaryNameForComponent("agent");
     const auto manifest = BuildManifestJson(
         "agent", "0.1.0",
         {zfleet::package::ManifestFile{
-            .source = "payload/bin/zfleet_agent",
-            .target = "bin/zfleet_agent",
+            .source = "payload/bin/" +
+                      zfleet::core::BinaryNameForComponent("agent"),
+            .target = "bin/" + zfleet::core::BinaryNameForComponent("agent"),
             .size = 999U,
             .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
-            .executable = true,
+            .launchable = true,
         }});
     WriteTextFile(package_dir / "META" / "manifest.json", manifest);
 
@@ -258,7 +287,8 @@ TEST_CASE(
   SECTION("payload directory symlink") {
     const auto package_dir = test_root / "symlink-case" / "package";
     const auto outside_dir = test_root / "outside-payload";
-    const auto outside_file = outside_dir / "bin" / "zfleet_agent";
+    const auto outside_file =
+        outside_dir / "bin" / zfleet::core::BinaryNameForComponent("agent");
     WriteTextFile(outside_file, "agent-binary");
 
     fs::create_directories(package_dir / "META");
@@ -269,11 +299,13 @@ TEST_CASE(
       const auto manifest = BuildManifestJson(
           "agent", "0.1.0",
           {zfleet::package::ManifestFile{
-              .source = "payload/bin/zfleet_agent",
-              .target = "bin/zfleet_agent",
+              .source = "payload/bin/" +
+                        zfleet::core::BinaryNameForComponent("agent"),
+              .target =
+                  "bin/" + zfleet::core::BinaryNameForComponent("agent"),
               .size = static_cast<std::uint64_t>(fs::file_size(outside_file)),
               .sha256 = zfleet::crypto::Sha256FileHex(outside_file),
-              .executable = false,
+              .launchable = false,
           }});
       WriteTextFile(package_dir / "META" / "manifest.json", manifest);
 
@@ -295,7 +327,7 @@ TEST_CASE(
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   SECTION("missing installer") {
     const auto result =
@@ -311,7 +343,7 @@ TEST_CASE(
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}},
+                         .launchable = true}},
         nullptr, "0.2.0");
 
     const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
@@ -333,7 +365,7 @@ TEST_CASE("installer package must carry launcher assets and deploy stubs") {
         {PackageFileSpec{.source_relative_path = "bin/" + installer_binary_name,
                          .target = "bin/" + installer_binary_name,
                          .content = "installer-binary",
-                         .executable = true}});
+                         .launchable = true}});
 
     const auto result = zfleet::installer::ApplyPackage(test_root, package_dir);
     REQUIRE_FALSE(result.ok);
@@ -374,7 +406,7 @@ TEST_CASE("same healthy version can be applied repeatedly") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
   const auto second_result =
@@ -395,13 +427,13 @@ TEST_CASE(
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v1",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto package_v2 =
       CreatePackage(test_root / "v2", "agent", "0.2.0",
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
@@ -411,7 +443,8 @@ TEST_CASE(
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "agent")) == "0.2.0\n");
   REQUIRE(ReadTextFile(PreviousVersionPath(test_root, "agent")) == "0.1.0\n");
   REQUIRE(ReadTextFile(test_root / "agent" / "releases" / "0.1.0" / "bin" /
-                       "zfleet_agent") == "agent-binary-v1");
+                       zfleet::core::BinaryNameForComponent("agent")) ==
+          "agent-binary-v1");
 }
 
 TEST_CASE("same active version does not rewrite previous-version to self") {
@@ -423,13 +456,13 @@ TEST_CASE("same active version does not rewrite previous-version to self") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v1",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto package_v2 =
       CreatePackage(test_root / "v2", "agent", "0.2.0",
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
@@ -450,13 +483,13 @@ TEST_CASE(
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v1",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto package_v2 =
       CreatePackage(test_root / "v2", "agent", "0.2.0",
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.1.0"),
@@ -478,13 +511,13 @@ TEST_CASE("rollback swaps active and previous versions") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v1",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto package_v2 =
       CreatePackage(test_root / "v2", "agent", "0.2.0",
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
@@ -509,13 +542,13 @@ TEST_CASE("rollback can switch between adjacent versions repeatedly") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v1",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto package_v2 =
       CreatePackage(test_root / "v2", "agent", "0.2.0",
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
 
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
@@ -541,7 +574,7 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
 
     const auto rollback =
@@ -558,13 +591,13 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v1",
-                         .executable = true}});
+                         .launchable = true}});
     const auto package_v2 = CreatePackage(
         test_root / "v2", "agent", "0.2.0",
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v2",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
     WriteTextFile(PreviousVersionPath(test_root, "agent"), "../bad\n");
@@ -584,7 +617,7 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v2",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
     WriteTextFile(PreviousVersionPath(test_root, "agent"), "0.2.0\n");
 
@@ -602,13 +635,13 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v1",
-                         .executable = true}});
+                         .launchable = true}});
     const auto package_v2 = CreatePackage(
         test_root / "v2", "agent", "0.2.0",
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v2",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
     fs::remove_all(ComponentRoot(test_root, "agent") / "releases" / "0.1.0");
@@ -627,13 +660,13 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v1",
-                         .executable = true}});
+                         .launchable = true}});
     const auto package_v2 = CreatePackage(
         test_root / "v2", "agent", "0.2.0",
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v2",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
     WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.1.0"),
@@ -653,13 +686,13 @@ TEST_CASE("rollback failures keep active-version unchanged") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v1",
-                         .executable = true}});
+                         .launchable = true}});
     const auto package_v2 = CreatePackage(
         test_root / "v2", "agent", "0.2.0",
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary-v2",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v1).ok);
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_v2).ok);
     WriteTextFile(ReleaseBinaryPath(test_root, "agent", "0.2.0"),
@@ -692,7 +725,7 @@ TEST_CASE("status reports installation health") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
 
     const auto status = zfleet::installer::GetStatus(test_root, "agent");
@@ -719,11 +752,11 @@ TEST_CASE("status reports installation health") {
         {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                          .target = "bin/zfleet_agent",
                          .content = "agent-binary",
-                         .executable = true}});
+                         .launchable = true}});
     REQUIRE(zfleet::installer::ApplyPackage(test_root, package_dir).ok);
-    WriteTextFile(
-        test_root / "agent" / "releases" / "0.1.0" / "bin" / "zfleet_agent",
-        "tampered-binary");
+    WriteTextFile(test_root / "agent" / "releases" / "0.1.0" / "bin" /
+                      zfleet::core::BinaryNameForComponent("agent"),
+                  "tampered-binary");
 
     const auto status = zfleet::installer::GetStatus(test_root, "agent");
 
@@ -742,13 +775,13 @@ TEST_CASE("component installs stay isolated under the shared root") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary",
-                                     .executable = true}});
+                                     .launchable = true}});
   const auto server_package = CreatePackage(
       test_root / "server-pkg", "server", "0.1.0",
       {PackageFileSpec{.source_relative_path = "bin/zfleet_server",
                        .target = "bin/zfleet_server",
                        .content = "server-binary",
-                       .executable = true}});
+                       .launchable = true}});
   REQUIRE(zfleet::installer::ApplyPackage(test_root, agent_package).ok);
   REQUIRE(zfleet::installer::ApplyPackage(test_root, server_package).ok);
   const auto agent_package_v2 =
@@ -756,14 +789,14 @@ TEST_CASE("component installs stay isolated under the shared root") {
                     {PackageFileSpec{.source_relative_path = "bin/zfleet_agent",
                                      .target = "bin/zfleet_agent",
                                      .content = "agent-binary-v2",
-                                     .executable = true}});
+                                     .launchable = true}});
   REQUIRE(zfleet::installer::ApplyPackage(test_root, agent_package_v2).ok);
   REQUIRE(zfleet::installer::RollbackComponent(test_root, "agent").ok);
 
   REQUIRE(fs::exists(test_root / "agent" / "releases" / "0.1.0" / "bin" /
-                     "zfleet_agent"));
+                     zfleet::core::BinaryNameForComponent("agent")));
   REQUIRE(fs::exists(test_root / "server" / "releases" / "0.1.0" / "bin" /
-                     "zfleet_server"));
+                     zfleet::core::BinaryNameForComponent("server")));
   REQUIRE(fs::exists(test_root / "installer" / "releases" / "0.1.0" / "bin" /
                      zfleet::core::BinaryNameForComponent("installer")));
   REQUIRE(ReadTextFile(LauncherStubPath(test_root, "agent")) ==
@@ -777,3 +810,4 @@ TEST_CASE("component installs stay isolated under the shared root") {
   REQUIRE(ReadTextFile(ActiveVersionPath(test_root, "installer")) == "0.1.0\n");
   REQUIRE_FALSE(fs::exists(PreviousVersionPath(test_root, "installer")));
 }
+

@@ -64,6 +64,7 @@ target_link_libraries(zfleet_server
 )
 
 target_compile_features(zfleet_server PRIVATE cxx_std_20)
+zf_configure_runtime_layout(zfleet_server)
 
 if(BUILD_TESTING)
   find_package(Catch2 CONFIG REQUIRED)

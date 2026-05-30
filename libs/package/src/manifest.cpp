@@ -114,8 +114,8 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
       .files = {},
   };
 
-  if (manifest.schema_version != 1) {
-    throw std::invalid_argument("schema_version must be 1");
+  if (manifest.schema_version != 2) {
+    throw std::invalid_argument("schema_version must be 2");
   }
   if (manifest.min_installer_version.empty()) {
     throw std::invalid_argument("min_installer_version must not be empty");
@@ -147,7 +147,7 @@ Manifest ParseManifestJson(std::string_view manifest_json) {
                                        "target"),
         .size = RequiredSize(file_json, "size"),
         .sha256 = Required<std::string>(file_json, "sha256"),
-        .executable = Required<bool>(file_json, "executable"),
+        .launchable = Required<bool>(file_json, "launchable"),
     };
 
     if (!file.source.starts_with("payload/")) {
@@ -186,7 +186,7 @@ std::string SerializeManifestJson(const Manifest& manifest) {
     file_json["target"] = file.target;
     file_json["size"] = file.size;
     file_json["sha256"] = file.sha256;
-    file_json["executable"] = file.executable;
+    file_json["launchable"] = file.launchable;
     files.push_back(std::move(file_json));
   }
   payload["files"] = std::move(files);

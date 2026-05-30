@@ -17,7 +17,7 @@ constexpr char kEmptySha256[] =
 
 TEST_CASE("manifest json supports serialization and parsing") {
   const zfleet::package::Manifest manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = "agent",
       .version = "0.1.0",
       .platform = "linux",
@@ -29,14 +29,14 @@ TEST_CASE("manifest json supports serialization and parsing") {
           .target = "bin/zfleet_agent",
           .size = 0,
           .sha256 = kEmptySha256,
-          .executable = true,
+          .launchable = true,
       }},
   };
 
   const auto serialized = zfleet::package::SerializeManifestJson(manifest);
   const auto parsed = zfleet::package::ParseManifestJson(serialized);
 
-  REQUIRE(parsed.schema_version == 1);
+  REQUIRE(parsed.schema_version == 2);
   REQUIRE(parsed.component == "agent");
   REQUIRE(parsed.version == "0.1.0");
   REQUIRE(parsed.platform == "linux");
@@ -48,7 +48,7 @@ TEST_CASE("manifest json supports serialization and parsing") {
   REQUIRE(parsed.files.front().target == "bin/zfleet_agent");
   REQUIRE(parsed.files.front().size == 0);
   REQUIRE(parsed.files.front().sha256 == kEmptySha256);
-  REQUIRE(parsed.files.front().executable);
+  REQUIRE(parsed.files.front().launchable);
 }
 
 TEST_CASE("manifest json loader reads from disk") {
@@ -57,7 +57,7 @@ TEST_CASE("manifest json loader reads from disk") {
   zfleet::test::WriteTextFile(
       manifest_path,
       zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
-          .schema_version = 1,
+          .schema_version = 2,
           .component = "server",
           .version = "1.2.3",
           .platform = "linux",
@@ -77,7 +77,7 @@ TEST_CASE("manifest json loader reads from disk") {
 TEST_CASE("manifest json rejects malformed package metadata") {
   SECTION("missing required field") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "files": []
@@ -86,7 +86,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("unknown component") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "worker",
       "version": "0.1.0",
       "platform": "linux",
@@ -100,7 +100,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("invalid sha256") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",
@@ -113,7 +113,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
           "target": "bin/zfleet_agent",
           "size": 1,
           "sha256": "not-a-valid-sha",
-          "executable": true
+          "launchable": true
         }
       ],
       "signatures": []
@@ -122,7 +122,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("unsafe paths") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",
@@ -135,7 +135,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
           "target": "bin/zfleet_agent",
           "size": 1,
           "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
+          "launchable": true
         }
       ],
       "signatures": []
@@ -144,7 +144,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("target under META") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",
@@ -157,7 +157,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
           "target": "META/manifest.json",
           "size": 1,
           "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
+          "launchable": true
         }
       ],
       "signatures": []
@@ -166,7 +166,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("duplicate target") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",
@@ -179,14 +179,14 @@ TEST_CASE("manifest json rejects malformed package metadata") {
           "target": "bin/zfleet_agent",
           "size": 1,
           "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
+          "launchable": true
         },
         {
           "source": "payload/bin/b",
           "target": "bin/zfleet_agent",
           "size": 1,
           "sha256": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          "executable": true
+          "launchable": true
         }
       ],
       "signatures": []
@@ -195,7 +195,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("missing build type") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",
@@ -207,7 +207,7 @@ TEST_CASE("manifest json rejects malformed package metadata") {
 
   SECTION("invalid build type") {
     REQUIRE_THROWS(zfleet::package::ParseManifestJson(R"({
-      "schema_version": 1,
+      "schema_version": 2,
       "component": "agent",
       "version": "0.1.0",
       "platform": "linux",

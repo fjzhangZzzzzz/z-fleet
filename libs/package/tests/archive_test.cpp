@@ -70,7 +70,8 @@ void WriteStoredZip(const fs::path& archive_path,
     WriteU32(stream, static_cast<std::uint32_t>(entry.contents.size()));
     WriteU16(stream, static_cast<std::uint16_t>(entry.path.size()));
     WriteU16(stream, 0U);
-    stream.write(entry.path.data(), static_cast<std::streamsize>(entry.path.size()));
+    stream.write(entry.path.data(),
+                 static_cast<std::streamsize>(entry.path.size()));
     stream.write(entry.contents.data(),
                  static_cast<std::streamsize>(entry.contents.size()));
     REQUIRE(stream);
@@ -104,14 +105,15 @@ void WriteStoredZip(const fs::path& archive_path,
     WriteU16(stream, 0U);
     WriteU32(stream, entry.unix_mode << 16U);
     WriteU32(stream, record.local_header_offset);
-    stream.write(entry.path.data(), static_cast<std::streamsize>(entry.path.size()));
+    stream.write(entry.path.data(),
+                 static_cast<std::streamsize>(entry.path.size()));
     REQUIRE(stream);
   }
 
   const auto central_directory_end = stream.tellp();
   REQUIRE(central_directory_end != std::streampos(-1));
-  const auto central_directory_size =
-      static_cast<std::uint32_t>(central_directory_end - central_directory_offset);
+  const auto central_directory_size = static_cast<std::uint32_t>(
+      central_directory_end - central_directory_offset);
 
   WriteU32(stream, 0x06054b50U);
   WriteU16(stream, 0U);
@@ -131,20 +133,22 @@ TEST_CASE("create list read and extract zip archive") {
   const auto test_root = test_dir.path();
 
   const auto package_dir = test_root / "package";
-  WriteTextFile(package_dir / "META" / "manifest.json", R"({"component":"agent"})");
-  WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent", "agent-binary");
+  WriteTextFile(package_dir / "META" / "manifest.json",
+                R"({"component":"agent"})");
+  WriteTextFile(package_dir / "payload" / "bin" / "zfleet_agent",
+                "agent-binary");
 #ifndef _WIN32
-  zfleet::platform::SetExecutable(package_dir / "payload" / "bin" /
-                                      "zfleet_agent",
-                                  true);
+  zfleet::platform::SetExecutable(
+      package_dir / "payload" / "bin" / "zfleet_agent", true);
 #endif
 
   const auto archive_path = test_root / "package.zip";
   REQUIRE(zfleet::package::IsArchivePath(archive_path));
   REQUIRE_FALSE(zfleet::package::IsArchivePath(test_root / "package.tar"));
 
-  zfleet::package::CreateArchive(
-      {.package_dir = package_dir, .archive_path = archive_path, .force = false});
+  zfleet::package::CreateArchive({.package_dir = package_dir,
+                                  .archive_path = archive_path,
+                                  .force = false});
 
   const auto entries = zfleet::package::ListArchiveEntries(archive_path);
   REQUIRE(entries.size() == 2);
@@ -161,11 +165,13 @@ TEST_CASE("create list read and extract zip archive") {
   }));
 #endif
 
-  const auto manifest = zfleet::package::ReadArchiveFile(archive_path,
-                                                         "META/manifest.json");
-  REQUIRE(std::string(manifest.begin(), manifest.end()) == R"({"component":"agent"})");
-  REQUIRE_THROWS_AS(zfleet::package::ReadArchiveFile(archive_path, "missing.txt"),
-                    std::runtime_error);
+  const auto manifest =
+      zfleet::package::ReadArchiveFile(archive_path, "META/manifest.json");
+  REQUIRE(std::string(manifest.begin(), manifest.end()) ==
+          R"({"component":"agent"})");
+  REQUIRE_THROWS_AS(
+      zfleet::package::ReadArchiveFile(archive_path, "missing.txt"),
+      std::runtime_error);
 
   const auto output_dir = test_root / "extracted";
   zfleet::package::ExtractArchive(
@@ -174,10 +180,8 @@ TEST_CASE("create list read and extract zip archive") {
           R"({"component":"agent"})");
   REQUIRE(ReadTextFile(output_dir / "payload" / "bin" / "zfleet_agent") ==
           "agent-binary");
-#ifndef _WIN32
-  REQUIRE(zfleet::platform::IsExecutableFile(output_dir / "payload" / "bin" /
-                                             "zfleet_agent"));
-#endif
+  REQUIRE(zfleet::platform::IsLaunchableProgram(output_dir / "payload" / "bin" /
+                                                "zfleet_agent"));
 }
 
 TEST_CASE("archive create and extract honor force overwrite") {
@@ -189,24 +193,26 @@ TEST_CASE("archive create and extract honor force overwrite") {
   WriteTextFile(package_dir / "payload" / "file.txt", "payload");
 
   const auto archive_path = test_root / "package.zip";
-  zfleet::package::CreateArchive(
-      {.package_dir = package_dir, .archive_path = archive_path, .force = false});
-  REQUIRE_THROWS_AS(zfleet::package::CreateArchive(
-                        {.package_dir = package_dir,
-                         .archive_path = archive_path,
-                         .force = false}),
-                    std::runtime_error);
-  zfleet::package::CreateArchive(
-      {.package_dir = package_dir, .archive_path = archive_path, .force = true});
+  zfleet::package::CreateArchive({.package_dir = package_dir,
+                                  .archive_path = archive_path,
+                                  .force = false});
+  REQUIRE_THROWS_AS(
+      zfleet::package::CreateArchive({.package_dir = package_dir,
+                                      .archive_path = archive_path,
+                                      .force = false}),
+      std::runtime_error);
+  zfleet::package::CreateArchive({.package_dir = package_dir,
+                                  .archive_path = archive_path,
+                                  .force = true});
 
   const auto output_dir = test_root / "output";
   zfleet::package::ExtractArchive(
       {.archive_path = archive_path, .output_dir = output_dir, .force = false});
-  REQUIRE_THROWS_AS(zfleet::package::ExtractArchive(
-                        {.archive_path = archive_path,
-                         .output_dir = output_dir,
-                         .force = false}),
-                    std::runtime_error);
+  REQUIRE_THROWS_AS(
+      zfleet::package::ExtractArchive({.archive_path = archive_path,
+                                       .output_dir = output_dir,
+                                       .force = false}),
+      std::runtime_error);
   zfleet::package::ExtractArchive(
       {.archive_path = archive_path, .output_dir = output_dir, .force = true});
 }
@@ -219,11 +225,12 @@ TEST_CASE("create archive rejects output inside the package tree") {
   WriteTextFile(package_dir / "META" / "manifest.json", "{}");
   WriteTextFile(package_dir / "payload" / "file.txt", "payload");
 
-  REQUIRE_THROWS_AS(zfleet::package::CreateArchive(
-                        {.package_dir = package_dir,
-                         .archive_path = package_dir / "payload" / "package.zip",
-                         .force = false}),
-                    std::runtime_error);
+  REQUIRE_THROWS_AS(
+      zfleet::package::CreateArchive(
+          {.package_dir = package_dir,
+           .archive_path = package_dir / "payload" / "package.zip",
+           .force = false}),
+      std::runtime_error);
 }
 
 TEST_CASE("zip reader rejects unsafe duplicate and symlink entries") {
@@ -237,17 +244,17 @@ TEST_CASE("zip reader rejects unsafe duplicate and symlink entries") {
                     std::runtime_error);
 
   const auto duplicate_archive = test_root / "duplicate.zip";
-  WriteStoredZip(duplicate_archive,
-                 {StoredZipEntry{.path = "payload/file.txt", .contents = "one"},
-                  StoredZipEntry{.path = "payload/file.txt", .contents = "two"}});
+  WriteStoredZip(
+      duplicate_archive,
+      {StoredZipEntry{.path = "payload/file.txt", .contents = "one"},
+       StoredZipEntry{.path = "payload/file.txt", .contents = "two"}});
   REQUIRE_THROWS_AS(zfleet::package::ListArchiveEntries(duplicate_archive),
                     std::runtime_error);
 
   const auto symlink_archive = test_root / "symlink.zip";
-  WriteStoredZip(symlink_archive,
-                 {StoredZipEntry{.path = "payload/link",
-                                  .contents = "target",
-                                  .unix_mode = 0120777U}});
+  WriteStoredZip(symlink_archive, {StoredZipEntry{.path = "payload/link",
+                                                  .contents = "target",
+                                                  .unix_mode = 0120777U}});
   REQUIRE_THROWS_AS(zfleet::package::ListArchiveEntries(symlink_archive),
                     std::runtime_error);
 }
@@ -270,11 +277,11 @@ TEST_CASE("create archive rejects symlinks in package tree") {
     return;
   }
 
-  REQUIRE_THROWS_AS(zfleet::package::CreateArchive(
-                        {.package_dir = package_dir,
-                         .archive_path = test_root / "package.zip",
-                         .force = false}),
-                    std::runtime_error);
+  REQUIRE_THROWS_AS(
+      zfleet::package::CreateArchive({.package_dir = package_dir,
+                                      .archive_path = test_root / "package.zip",
+                                      .force = false}),
+      std::runtime_error);
 #endif
 }
 

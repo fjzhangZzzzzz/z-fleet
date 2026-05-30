@@ -23,7 +23,7 @@ struct PackageFileSpec {
   std::string source_relative_path;
   std::string target;
   std::string content;
-  bool executable = false;
+  bool launchable = false;
 };
 
 std::string BuildManifestJson(
@@ -31,7 +31,7 @@ std::string BuildManifestJson(
     const std::vector<zfleet::package::ManifestFile>& files,
     const std::string& min_installer_version = "0.1.0") {
   return zfleet::package::SerializeManifestJson(zfleet::package::Manifest{
-      .schema_version = 1,
+      .schema_version = 2,
       .component = component,
       .version = version,
       .platform = "linux",
@@ -54,14 +54,14 @@ fs::path CreatePackageArchive(
     const auto payload_path =
         package_dir / "payload" / file.source_relative_path;
     zfleet::test::WriteTextFile(payload_path, file.content);
-    zfleet::platform::SetExecutable(payload_path, file.executable);
+    zfleet::platform::SetExecutable(payload_path, file.launchable);
 
     manifest_files.push_back(zfleet::package::ManifestFile{
         .source = "payload/" + file.source_relative_path,
         .target = file.target,
         .size = static_cast<std::uint64_t>(fs::file_size(payload_path)),
         .sha256 = zfleet::crypto::Sha256FileHex(payload_path),
-        .executable = file.executable,
+        .launchable = file.launchable,
     });
   }
 
@@ -88,11 +88,11 @@ fs::path CreateInstallerArchive(const fs::path& root,
               .source_relative_path = "bin/" + installer_binary_name,
               .target = "bin/" + installer_binary_name,
               .content = "installer-binary-" + version,
-              .executable = true},
+              .launchable = true},
           PackageFileSpec{.source_relative_path = "bin/" + launcher_binary_name,
                           .target = "bin/" + launcher_binary_name,
                           .content = launcher_tag + "-template-" + version,
-                          .executable = true},
+                          .launchable = true},
       });
 }
 
@@ -106,7 +106,7 @@ fs::path CreateComponentArchive(
           .source_relative_path = "bin/zfleet_" + component,
           .target = "bin/zfleet_" + component,
           .content = component + "-binary-" + version,
-          .executable = true,
+          .launchable = true,
       }},
       min_installer_version);
 }
@@ -183,3 +183,4 @@ TEST_CASE(
           "active installer version 0.1.0 does not satisfy "
           "min_installer_version 0.2.0");
 }
+
