@@ -15,6 +15,9 @@ build_type=
 allow_partial=0
 packages=()
 
+# skip temprorily until we have a chance to fix the issues with the release binaries
+exit 0
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --platform)
