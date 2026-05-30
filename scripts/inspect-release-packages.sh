@@ -55,6 +55,15 @@ done
 [[ -n "$build_type" ]] || zf_fail_arg "missing --build-type"
 [[ ${#packages[@]} -ge 1 ]] || zf_fail_arg "missing package path"
 
+python_cmd=
+for cmd in python3 python; do
+  if command -v "$cmd" >/dev/null 2>&1 && "$cmd" -c 'import json, zipfile' >/dev/null 2>&1; then
+    python_cmd="$cmd"
+    break
+  fi
+done
+[[ -n "$python_cmd" ]] || zf_fail_exec "python runtime unavailable: require a working 'python3' or 'python' in PATH"
+
 declare -A package_by_component
 suffix=
 if [[ "$platform" == "windows" ]]; then
@@ -70,8 +79,8 @@ trap cleanup EXIT
 
 for package_path in "${packages[@]}"; do
   [[ -f "$package_path" ]] || zf_fail_exec "package archive not found: $package_path"
-  metadata="$(
-    python3 - "$package_path" "$platform" "$arch" "$build_type" "$suffix" <<'PY'
+  if ! metadata="$(
+    "$python_cmd" - "$package_path" "$platform" "$arch" "$build_type" "$suffix" 2>&1 <<'PY'
 import json
 import pathlib
 import sys
@@ -83,24 +92,46 @@ arch = sys.argv[3]
 build_type = sys.argv[4]
 suffix = sys.argv[5]
 
-with zipfile.ZipFile(package) as zf:
-    manifest = json.loads(zf.read("META/manifest.json"))
-    names = set(zf.namelist())
-    assert manifest["platform"] == platform
-    assert manifest["arch"] == arch
-    assert manifest["build_type"] == build_type
-    component = manifest["component"]
-    if component not in {"agent", "server", "installer"}:
-        raise AssertionError(f"unexpected component: {component}")
-    if component == "installer":
-        path = f"payload/bin/zfleet_launcher{suffix}"
-        if path not in names:
-            raise AssertionError(f"installer package missing launcher asset: {path}")
-        if not any(file["target"] == f"bin/zfleet_launcher{suffix}" for file in manifest["files"]):
-            raise AssertionError("manifest missing launcher asset target")
-    print(component)
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+try:
+    with zipfile.ZipFile(package) as zf:
+        try:
+            manifest = json.loads(zf.read("META/manifest.json"))
+        except KeyError as exc:
+            fail(f"missing manifest file in archive: {exc}")
+        except json.JSONDecodeError as exc:
+            fail(f"manifest JSON is invalid: {exc}")
+
+        names = set(zf.namelist())
+
+        if manifest.get("platform") != platform:
+            fail(f"manifest platform mismatch: expected '{platform}', got '{manifest.get('platform')}'")
+        if manifest.get("arch") != arch:
+            fail(f"manifest arch mismatch: expected '{arch}', got '{manifest.get('arch')}'")
+        if manifest.get("build_type") != build_type:
+            fail(f"manifest build_type mismatch: expected '{build_type}', got '{manifest.get('build_type')}'")
+
+        component = manifest.get("component")
+        if component not in {"agent", "server", "installer"}:
+            fail(f"unexpected component: {component}")
+
+        if component == "installer":
+            path = f"payload/bin/zfleet_launcher{suffix}"
+            if path not in names:
+                fail(f"installer package missing launcher asset: {path}")
+            if not any(file.get("target") == f"bin/zfleet_launcher{suffix}" for file in manifest.get("files", [])):
+                fail("manifest missing launcher asset target")
+
+        print(component)
+except zipfile.BadZipFile:
+    fail(f"invalid zip archive: {package}")
 PY
-  )" || zf_fail_exec "package inspection failed: $package_path"
+  )"; then
+    zf_fail_exec "package inspection failed: $package_path: ${metadata:-unknown error}"
+  fi
 
   component="$(printf '%s\n' "$metadata" | sed -n '1p')"
   [[ -n "$component" ]] ||
@@ -108,7 +139,7 @@ PY
   package_by_component["$component"]="$package_path"
 
   if [[ "$component" == "installer" ]]; then
-    python3 - "$package_path" "$bootstrap_dir" <<'PY'
+    "$python_cmd" - "$package_path" "$bootstrap_dir" <<'PY'
 import pathlib
 import sys
 import zipfile
@@ -125,9 +156,11 @@ PY
       chmod +x "$bootstrap_binary"
       [[ -x "$bootstrap_binary" ]] ||
         zf_fail_exec "bootstrap installer binary is not executable: $bootstrap_binary"
-      "$bootstrap_binary" --help >/dev/null
+      "$bootstrap_binary" --help >/dev/null ||
+        zf_fail_exec "bootstrap installer --help failed: $bootstrap_binary"
     else
-      "$bootstrap_binary" --help >/dev/null
+      "$bootstrap_binary" --help >/dev/null ||
+        zf_fail_exec "bootstrap installer --help failed: $bootstrap_binary"
     fi
   fi
 done
@@ -145,7 +178,8 @@ if [[ -z "${package_by_component[installer]:-}" ]]; then
 fi
 
 bootstrap_binary="$bootstrap_dir/payload/bin/$(zf_component_binary_name installer)"
-"$bootstrap_binary" apply --root "$install_root" --package "${package_by_component[installer]}"
+"$bootstrap_binary" apply --root "$install_root" --package "${package_by_component[installer]}" ||
+  zf_fail_exec "installer apply failed for package: ${package_by_component[installer]}"
 
 installed_installer="$install_root/installer/bin/$(zf_component_binary_name installer)"
 [[ -f "$installed_installer" ]] ||
@@ -160,7 +194,8 @@ if [[ $allow_partial -eq 1 ]]; then
 fi
 
 for component in agent server; do
-  "$installed_installer" apply --root "$install_root" --package "${package_by_component[$component]}"
+  "$installed_installer" apply --root "$install_root" --package "${package_by_component[$component]}" ||
+    zf_fail_exec "installer apply failed for $component package: ${package_by_component[$component]}"
   stub_path="$install_root/$component/bin/$(zf_component_binary_name "$component")"
   [[ -f "$stub_path" ]] || zf_fail_exec "installed stub missing: $stub_path"
   if [[ "$platform" != "windows" ]]; then
