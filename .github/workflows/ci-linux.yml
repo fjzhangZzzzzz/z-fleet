@@ -48,12 +48,13 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_PATH: ${{ github.event_path }}
         run: |
           run_core=true
 
           if [[ "$EVENT_NAME" == "push" ]]; then
-            changed_files="$(python3 -c "import json, os; event_path = os.environ['EVENT_PATH']; event = json.load(open(event_path, 'r', encoding='utf-8')); files = set(); [files.update(commit.get(key, [])) for commit in event.get('commits', []) for key in ('added', 'modified', 'removed')]; print('\n'.join(sorted(files)))")"
+            changed_files="$(
+              python3 -c 'import json, os; event_path = os.environ.get("GITHUB_EVENT_PATH", ""); files = set(); event = json.load(open(event_path, "r", encoding="utf-8")) if event_path and os.path.exists(event_path) else {}; [files.update(commit.get(key, [])) for commit in event.get("commits", []) for key in ("added", "modified", "removed")]; print("\n".join(sorted(files)))'
+            )"
 
             if printf '%s\n' "$changed_files" | grep -Eq '^(ci/docker/|ci/images/version\.txt$)'; then
               run_core=false
