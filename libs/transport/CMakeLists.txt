@@ -51,6 +51,7 @@ if(BUILD_TESTING)
   target_link_libraries(zfleet_transport_tests
     PRIVATE
       Catch2::Catch2WithMain
+      Threads::Threads
       zfleet::transport
   )
 

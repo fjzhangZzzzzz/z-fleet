@@ -16,6 +16,7 @@ target_include_directories(zfleet_test_support
 target_link_libraries(zfleet_test_support
   PUBLIC
     SQLiteCpp
+    Threads::Threads
     zfleet::protocol
     zfleet::transport
 )

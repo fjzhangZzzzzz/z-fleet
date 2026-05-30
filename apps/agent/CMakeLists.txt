@@ -18,6 +18,7 @@ target_link_libraries(zfleet_agent_app
   PUBLIC
     Boost::system
     Boost::beast
+    Threads::Threads
     tomlplusplus::tomlplusplus
     zfleet::core
     zfleet::crypto

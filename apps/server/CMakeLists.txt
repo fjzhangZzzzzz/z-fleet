@@ -29,6 +29,7 @@ target_link_libraries(zfleet_server_app
   PUBLIC
     Boost::beast
     Boost::system
+    Threads::Threads
     nlohmann_json::nlohmann_json
     SQLiteCpp
     tomlplusplus::tomlplusplus

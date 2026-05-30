@@ -41,6 +41,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 if(BUILD_TESTING)
   add_subdirectory(tests/support)
