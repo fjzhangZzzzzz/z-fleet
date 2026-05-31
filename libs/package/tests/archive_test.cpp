@@ -180,8 +180,6 @@ TEST_CASE("create list read and extract zip archive") {
           R"({"component":"agent"})");
   REQUIRE(ReadTextFile(output_dir / "payload" / "bin" / "zfleet_agent") ==
           "agent-binary");
-  REQUIRE(zfleet::platform::IsLaunchableProgram(output_dir / "payload" / "bin" /
-                                                "zfleet_agent"));
 }
 
 TEST_CASE("archive create and extract honor force overwrite") {

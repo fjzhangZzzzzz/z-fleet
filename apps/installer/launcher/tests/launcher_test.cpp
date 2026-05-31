@@ -94,7 +94,7 @@ TEST_CASE("resolve target fails for invalid active version state") {
 }
 
 TEST_CASE(
-    "launcher executable forwards args and propagates exit code on POSIX") {
+    "launcher executable forwards args and propagates exit code") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
   const auto test_root = test_dir.path();
 
@@ -110,24 +110,21 @@ TEST_CASE(
                               "2.0.0\n");
   const auto args_file = test_root / "args.txt";
   const auto env_file = test_root / "env.txt";
+  const fs::path fixture_source = ZFLEET_TEST_LAUNCHER_TARGET_FIXTURE;
   const auto target_path =
       test_root / "agent" / "releases" / "2.0.0" / "bin" /
       zfleet::core::BinaryNameForComponent("agent");
-  zfleet::test::WriteTextFile(
-      target_path,
-      "#!/bin/sh\n"
-      "printf '%s\\n' \"$@\" > \"" +
-          args_file.string() +
-          "\"\n"
-          "printf '%s\\n' \"$ZFLEET_COMPONENT_ROOT\" > \"" +
-          env_file.string() +
-          "\"\n"
-          "exit 23\n");
-  zfleet::platform::SetExecutable(target_path, true);
+  fs::create_directories(target_path.parent_path());
+  REQUIRE(fs::copy_file(fixture_source, target_path,
+                        fs::copy_options::overwrite_existing));
+  fs::permissions(target_path, fs::status(fixture_source).permissions());
 
   const auto status = zfleet::platform::Run({
       .executable = launcher_path,
       .args = {"alpha", "beta gamma", "--flag"},
+      .env =
+          {std::string("ZFLEET_TEST_ARGS_FILE=") + args_file.string(),
+           std::string("ZFLEET_TEST_ENV_FILE=") + env_file.string()},
   });
 
   REQUIRE(status.exited);

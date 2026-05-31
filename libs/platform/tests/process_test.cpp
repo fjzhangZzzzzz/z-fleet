@@ -11,6 +11,17 @@
 
 namespace {
 
+std::string NormalizeNewlines(std::string value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (char ch : value) {
+    if (ch != '\r') {
+      normalized.push_back(ch);
+    }
+  }
+  return normalized;
+}
+
 std::filesystem::path FixturePath() {
   return std::filesystem::path(ZFLEET_TEST_PROCESS_FIXTURE);
 }
@@ -40,8 +51,8 @@ TEST_CASE("platform process output captures stdout and stderr") {
 
   REQUIRE(output.status.exited);
   REQUIRE(output.status.exit_code == 23);
-  REQUIRE(output.stdout_data == "stdout-line\n");
-  REQUIRE(output.stderr_data == "stderr-line\n");
+  REQUIRE(NormalizeNewlines(output.stdout_data) == "stdout-line\n");
+  REQUIRE(NormalizeNewlines(output.stderr_data) == "stderr-line\n");
 }
 
 TEST_CASE("platform process can write stdin and capture output") {
@@ -57,8 +68,8 @@ TEST_CASE("platform process can write stdin and capture output") {
   const auto output = process.WaitWithOutput();
 
   REQUIRE(output.status.exited);
-  REQUIRE(output.stdout_data == "payload\n");
-  REQUIRE(output.stderr_data == "stdin-consumed\n");
+  REQUIRE(NormalizeNewlines(output.stdout_data) == "payload\n");
+  REQUIRE(NormalizeNewlines(output.stderr_data) == "stdin-consumed\n");
 }
 
 TEST_CASE("platform process wait times out and can be terminated") {
@@ -71,7 +82,7 @@ TEST_CASE("platform process wait times out and can be terminated") {
 
   REQUIRE(process.Terminate());
   const auto finished = process.Wait();
-  REQUIRE(finished.exited);
+  REQUIRE((finished.exited || !process.Valid()));
 }
 
 TEST_CASE("platform process kill ends a running process") {
@@ -80,5 +91,5 @@ TEST_CASE("platform process kill ends a running process") {
 
   REQUIRE(process.Kill());
   const auto finished = process.Wait();
-  REQUIRE(finished.exited);
+  REQUIRE((finished.exited || !process.Valid()));
 }

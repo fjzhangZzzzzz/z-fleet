@@ -91,7 +91,11 @@ bp::child SpawnChild(const ProcessOptions& options, bp::opstream* stdin_pipe,
 ProcessExitStatus WaitForChild(bp::child* child,
                                const ProcessWaitOptions& options) {
   ProcessExitStatus status;
-  if (child == nullptr || !child->valid()) {
+  if (child == nullptr) {
+    return status;
+  }
+  if (!child->valid()) {
+    status.exited = true;
     return status;
   }
 
@@ -245,6 +249,7 @@ bool Process::Kill() {
     return false;
   }
   impl_->child.terminate();
+  impl_->child.wait();
   return true;
 }
 
@@ -254,6 +259,7 @@ bool Process::Terminate() {
   }
 #ifdef _WIN32
   impl_->child.terminate();
+  impl_->child.wait();
 #else
   if (::kill(impl_->child.id(), SIGTERM) != 0) {
     return false;

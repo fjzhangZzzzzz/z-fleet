@@ -105,6 +105,9 @@ if(BUILD_TESTING)
   add_executable(zfleet_installer_launcher_tests
     launcher/tests/launcher_test.cpp
   )
+  add_executable(zfleet_launcher_target_fixture
+    launcher/tests/launcher_target_fixture.cpp
+  )
 
   target_link_libraries(zfleet_installer_launcher_tests
     PRIVATE
@@ -122,9 +125,11 @@ if(BUILD_TESTING)
   target_compile_definitions(zfleet_installer_launcher_tests
     PRIVATE
       ZFLEET_TEST_AGENT_LAUNCHER="$<TARGET_FILE:zfleet_launcher>"
+      ZFLEET_TEST_LAUNCHER_TARGET_FIXTURE="$<TARGET_FILE:zfleet_launcher_target_fixture>"
   )
 
   target_compile_features(zfleet_installer_launcher_tests PRIVATE cxx_std_20)
+  target_compile_features(zfleet_launcher_target_fixture PRIVATE cxx_std_20)
 
   catch_discover_tests(zfleet_installer_launcher_tests)
 endif()
