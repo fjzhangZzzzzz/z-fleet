@@ -4,23 +4,14 @@
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/archive.h"
 #include "zfleet/platform/file_permissions.h"
+#include "zfleet/platform/process.h"
 #include "zfleet/transport/http_download.h"
 
-#include <cstdlib>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 
 namespace zfleet::agent {
 namespace {
@@ -46,104 +37,41 @@ fs::path InstallRoot(const AgentConfig& config) {
   return config.install_dir->parent_path();
 }
 
-std::string ReadTrimmed(const fs::path& path) {
-  std::ifstream stream(path);
-  if (!stream) {
-    throw std::runtime_error("failed to read active installer version");
-  }
-  std::string value{std::istreambuf_iterator<char>(stream),
-                    std::istreambuf_iterator<char>()};
-  while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
-    value.pop_back();
-  }
-  return value;
-}
-
 fs::path InstallerBinary(const fs::path& root) {
   return root / "installer" / "bin" /
          zfleet::core::BinaryNameForComponent("installer");
 }
 
-int RunInstaller(const fs::path& installer, const fs::path& root,
-                 const fs::path& package) {
+int RunInstallerCommand(const fs::path& installer,
+                        const std::vector<std::string>& args) {
   if (!zfleet::platform::IsLaunchableProgram(installer)) {
     throw std::runtime_error("active installer binary is unavailable");
   }
-#ifdef _WIN32
-  return static_cast<int>(_spawnl(_P_WAIT, installer.string().c_str(),
-                                  installer.string().c_str(), "apply", "--root",
-                                  root.string().c_str(), "--package",
-                                  package.string().c_str(), nullptr));
-#else
-  const auto child = fork();
-  if (child < 0) {
-    throw std::runtime_error("failed to fork installer process");
-  }
-  if (child == 0) {
-    execl(installer.c_str(), installer.c_str(), "apply", "--root", root.c_str(),
-          "--package", package.c_str(), static_cast<char*>(nullptr));
-    _exit(127);
-  }
-  int status = 0;
-  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status)) {
-    return 1;
-  }
-  return WEXITSTATUS(status);
-#endif
+  const auto status = zfleet::platform::Run({
+      .executable = installer,
+      .args = args,
+  });
+  return status.exited ? status.exit_code : 1;
 }
 
 int RunRollback(const fs::path& installer, const fs::path& root) {
-  if (!zfleet::platform::IsLaunchableProgram(installer)) {
-    throw std::runtime_error("active installer binary is unavailable");
-  }
-#ifdef _WIN32
-  return static_cast<int>(_spawnl(_P_WAIT, installer.string().c_str(),
-                                  installer.string().c_str(), "rollback",
-                                  "--root", root.string().c_str(),
-                                  "--component", "agent", nullptr));
-#else
-  const auto child = fork();
-  if (child < 0) {
-    throw std::runtime_error("failed to fork installer process");
-  }
-  if (child == 0) {
-    execl(installer.c_str(), installer.c_str(), "rollback", "--root",
-          root.c_str(), "--component", "agent", static_cast<char*>(nullptr));
-    _exit(127);
-  }
-  int status = 0;
-  if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status)) {
-    return 1;
-  }
-  return WEXITSTATUS(status);
-#endif
+  return RunInstallerCommand(installer,
+                             {"rollback", "--root", root.string(),
+                              "--component", "agent"});
 }
 
-void StartNewAgent(const AgentConfig& config, const fs::path& root,
-                   const std::string& version) {
+void StartNewAgent(const AgentConfig& config, const fs::path& root) {
   const auto binary =
       root / "agent" / "bin" / zfleet::core::BinaryNameForComponent("agent");
   if (!zfleet::platform::IsLaunchableProgram(binary)) {
     throw std::runtime_error("new agent binary is unavailable");
   }
-#ifdef _WIN32
-  if (_spawnl(_P_NOWAIT, binary.string().c_str(), binary.string().c_str(),
-              nullptr) == -1) {
-    throw std::runtime_error("failed to start new agent");
-  }
-#else
-  const auto child = fork();
-  if (child < 0) {
-    throw std::runtime_error("failed to fork new agent process");
-  }
-  if (child == 0) {
-    setenv("ZFLEET_COMPONENT_ROOT", (root / "agent").c_str(), 1);
-    execl(binary.c_str(), binary.c_str(), static_cast<char*>(nullptr));
-    _exit(127);
-  }
-#endif
+  auto process = zfleet::platform::Process::Spawn({
+      .executable = binary,
+      .env = {"ZFLEET_COMPONENT_ROOT=" + (root / "agent").string()},
+  });
+  process.Detach();
   (void)config;
-  (void)version;
 }
 
 }  // namespace
@@ -159,8 +87,7 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
                 .message = "installer rollback failed"};
       }
       try {
-        StartNewAgent(config, root,
-                      ReadTrimmed(root / "agent" / "var" / "active-version"));
+        StartNewAgent(config, root);
       } catch (const std::exception& ex) {
         return {
             .error_code = zfleet::protocol::ErrorCode::start_new_agent_failed,
@@ -190,13 +117,15 @@ PackageUpdateExecutionResult ExecutePackageUpdate(
     }
 
     const auto root = InstallRoot(config);
-    if (RunInstaller(InstallerBinary(root), root, package_path) != 0) {
+    if (RunInstallerCommand(InstallerBinary(root),
+                            {"apply", "--root", root.string(), "--package",
+                             package_path.string()}) != 0) {
       return {.error_code = zfleet::protocol::ErrorCode::apply_failed,
               .message = "installer apply failed"};
     }
     if (input.component == "agent") {
       try {
-        StartNewAgent(config, root, input.version);
+        StartNewAgent(config, root);
       } catch (const std::exception& ex) {
         return {
             .error_code = zfleet::protocol::ErrorCode::start_new_agent_failed,

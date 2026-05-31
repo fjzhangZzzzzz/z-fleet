@@ -5,52 +5,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <zfleet/core/component.h>
 #include <zfleet/platform/file_permissions.h>
+#include <zfleet/platform/process.h>
 
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
-
 namespace {
 
 namespace fs = std::filesystem;
-
-#ifndef _WIN32
-int RunProcess(const fs::path& executable,
-               const std::vector<std::string>& args) {
-  const auto pid = fork();
-  REQUIRE(pid >= 0);
-
-  if (pid == 0) {
-    std::vector<std::string> argv_strings;
-    argv_strings.reserve(args.size() + 1);
-    argv_strings.push_back(executable.string());
-    argv_strings.insert(argv_strings.end(), args.begin(), args.end());
-
-    std::vector<char*> raw_args;
-    raw_args.reserve(argv_strings.size() + 1);
-    for (auto& value : argv_strings) {
-      raw_args.push_back(value.data());
-    }
-    raw_args.push_back(nullptr);
-
-    execv(executable.c_str(), raw_args.data());
-    _exit(127);
-  }
-
-  int status = 0;
-  REQUIRE(waitpid(pid, &status, 0) == pid);
-  REQUIRE(WIFEXITED(status));
-  return WEXITSTATUS(status);
-}
-#endif
 
 }  // namespace
 
@@ -130,7 +93,6 @@ TEST_CASE("resolve target fails for invalid active version state") {
   }
 }
 
-#ifndef _WIN32
 TEST_CASE(
     "launcher executable forwards args and propagates exit code on POSIX") {
   const zfleet::test::ScopedTestDir test_dir("launcher");
@@ -163,13 +125,15 @@ TEST_CASE(
           "exit 23\n");
   zfleet::platform::SetExecutable(target_path, true);
 
-  const auto exit_code =
-      RunProcess(launcher_path, {"alpha", "beta gamma", "--flag"});
+  const auto status = zfleet::platform::Run({
+      .executable = launcher_path,
+      .args = {"alpha", "beta gamma", "--flag"},
+  });
 
-  REQUIRE(exit_code == 23);
+  REQUIRE(status.exited);
+  REQUIRE(status.exit_code == 23);
   REQUIRE(zfleet::test::ReadTextFile(args_file) ==
           "alpha\nbeta gamma\n--flag\n");
   REQUIRE(zfleet::test::ReadTextFile(env_file) ==
           (test_root / "agent").string() + "\n");
 }
-#endif

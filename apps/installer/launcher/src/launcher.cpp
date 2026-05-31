@@ -3,11 +3,10 @@
 #include "zfleet/core/component.h"
 #include "zfleet/core/path.h"
 #include "zfleet/platform/file_permissions.h"
+#include "zfleet/platform/process.h"
 
 #include <cerrno>
 #include <cctype>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -15,13 +14,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace zfleet::launcher {
 namespace {
@@ -124,14 +118,6 @@ ResolveResult ResolveLaunchTarget(const fs::path& launcher_path) {
   };
 }
 
-void SetComponentRootEnvironment(const fs::path& component_root) {
-#ifdef _WIN32
-  _putenv_s(kComponentRootEnvVar, component_root.string().c_str());
-#else
-  setenv(kComponentRootEnvVar, component_root.string().c_str(), 1);
-#endif
-}
-
 std::vector<std::string> BuildForwardedArgv(const fs::path& executable_path,
                                             int argc, char* const argv[]) {
   std::vector<std::string> forwarded;
@@ -150,37 +136,23 @@ int RunLauncher(const fs::path& launcher_path, int argc, char* argv[]) {
     return 1;
   }
 
-  auto forwarded =
-      BuildForwardedArgv(resolved.target.executable_path, argc, argv);
-  SetComponentRootEnvironment(resolved.target.component_root);
-
-#ifdef _WIN32
-  std::vector<char*> raw_args;
-  raw_args.reserve(forwarded.size() + 1);
-  for (auto& value : forwarded) {
-    raw_args.push_back(value.data());
+  std::vector<std::string> forwarded_args;
+  forwarded_args.reserve(argc > 0 ? static_cast<std::size_t>(argc - 1) : 0U);
+  for (int index = 1; index < argc; ++index) {
+    forwarded_args.emplace_back(argv[index] == nullptr ? "" : argv[index]);
   }
-  raw_args.push_back(nullptr);
 
-  const auto exit_code =
-      _spawnv(_P_WAIT, forwarded.front().c_str(), raw_args.data());
-  if (exit_code == -1) {
-    std::cerr << "failed to spawn target: " << std::strerror(errno) << '\n';
+  const auto status = zfleet::platform::Run({
+      .executable = resolved.target.executable_path,
+      .args = std::move(forwarded_args),
+      .env = {std::string(kComponentRootEnvVar) + "=" +
+              resolved.target.component_root.string()},
+  });
+  if (!status.exited) {
+    std::cerr << "failed to run target executable\n";
     return 1;
   }
-  return exit_code;
-#else
-  std::vector<char*> raw_args;
-  raw_args.reserve(forwarded.size() + 1);
-  for (auto& value : forwarded) {
-    raw_args.push_back(value.data());
-  }
-  raw_args.push_back(nullptr);
-
-  execv(forwarded.front().c_str(), raw_args.data());
-  std::cerr << "failed to exec target: " << std::strerror(errno) << '\n';
-  return 1;
-#endif
+  return status.exit_code;
 }
 
 }  // namespace zfleet::launcher

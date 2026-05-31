@@ -6,6 +6,7 @@
   "dependencies": [
     "boost-asio",
     "boost-beast",
+    "boost-process",
     "boost-uuid",
     "catch2",
     "cli11",
