@@ -58,11 +58,11 @@ ctest --preset linux-debug
 发布前的验证流程除了 `scripts/test.sh` 之外，还应补充二进制与安装包检查脚本，分别确认 release 产物可执行、依赖完整，以及 package 内容和 manifest 约束正确：
 
 ```bash
-./scripts/inspect-release-binaries.sh --preset linux-release
-./scripts/inspect-release-packages.sh --platform linux --arch x86_64 --build-type release <package.zip>...
+./scripts/check.sh binaries --preset linux-release
+./scripts/check.sh packages --platform linux --arch x86_64 --build-type release <package.zip>...
 ```
 
-Linux release 场景下，建议按以下顺序执行：先用 `scripts/builder.sh linux-release` 构建，再运行 `scripts/inspect-release-binaries.sh`，最后运行 `scripts/inspect-release-packages.sh` 校验包产物。
+Linux release 场景下，建议按以下顺序执行：先用 `scripts/builder.sh linux-release` 构建，再运行 `scripts/check.sh binaries`，最后运行 `scripts/check.sh packages` 校验包产物。
 
 ## vcpkg
 

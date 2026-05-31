@@ -58,8 +58,8 @@ jobs:
 
       - name: Inspect release binaries
         if: matrix.preset == 'windows-release'
-        run: ./scripts/inspect-release-binaries.sh --preset windows-release
+        run: ./scripts/check.sh binaries --preset windows-release
 
       - name: Inspect release packages
         if: matrix.preset == 'windows-release'
-        run: ./scripts/inspect-release-packages.sh --platform windows --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
+        run: ./scripts/check.sh packages --platform windows --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip

@@ -48,7 +48,7 @@
 
 5. **发布检查脚本不得以临时短路绕过真实安装路径。**
 
-   `scripts/inspect-release-binaries.sh` 与 `scripts/inspect-release-packages.sh` 必须长期保持可执行，作为发布前门禁的一部分。
+   `scripts/check.sh binaries` 与 `scripts/check.sh packages` 必须长期保持可执行，作为发布前门禁的一部分。
 
 ## 备选方案
 

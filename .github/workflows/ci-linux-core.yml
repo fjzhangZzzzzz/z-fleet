@@ -76,11 +76,11 @@ jobs:
 
       - name: Inspect release binaries
         if: matrix.preset == 'linux-release'
-        run: ./scripts/inspect-release-binaries.sh --preset linux-release
+        run: ./scripts/check.sh binaries --preset linux-release
 
       - name: Inspect release packages
         if: matrix.preset == 'linux-release'
-        run: ./scripts/inspect-release-packages.sh --platform linux --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
+        run: ./scripts/check.sh packages --platform linux --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
 
   linux-runtime-compat:
     name: linux-runtime-compat-${{ matrix.distro }}

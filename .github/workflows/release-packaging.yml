@@ -102,7 +102,7 @@ jobs:
               exit 1
               ;;
           esac
-          ./scripts/inspect-release-packages.sh \
+          ./scripts/check.sh packages \
             --platform "$platform" \
             --arch "$arch" \
             --build-type release \
