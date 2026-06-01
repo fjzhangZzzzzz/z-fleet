@@ -7,18 +7,15 @@ usage() {
   cat >&2 <<'USAGE'
 Usage:
   ./scripts/vcpkg.sh bootstrap
-  eval "$(./scripts/vcpkg.sh env)"
-  ./scripts/vcpkg.sh list [filter]
-  ./scripts/vcpkg.sh install [--jobs <n>] [vcpkg-install-args...]
   ./scripts/vcpkg.sh exec <vcpkg-args...>
 
 Project defaults:
   tool root:     .tools/vcpkg
-  installed dir: build/vcpkg_installed
+  installed dir: build/vcpkg_installed/<triplet>
   binary cache:  .cache/vcpkg/archives
 
-Concurrency:
-  --jobs <n> or ZF_BUILD_JOBS=<n> limits vcpkg build concurrency.
+CMake manifest mode installs dependencies during configure; use scripts/build.sh
+for normal builds.
 USAGE
 }
 
@@ -26,8 +23,36 @@ zf_vcpkg_root_posix() {
   printf '%s/.tools/vcpkg\n' "$ZF_REPO_ROOT"
 }
 
+zf_vcpkg_requested_triplet() {
+  local explicit_triplet="${VCPKG_TARGET_TRIPLET:-}"
+  local arg
+  local expect_value=0
+  for arg in "$@"; do
+    if [[ "$expect_value" -eq 1 ]]; then
+      printf '%s\n' "$arg"
+      return 0
+    fi
+    case "$arg" in
+      --triplet=*)
+        printf '%s\n' "${arg#--triplet=}"
+        return 0
+        ;;
+      --triplet)
+        expect_value=1
+        ;;
+    esac
+  done
+
+  if [[ -n "$explicit_triplet" ]]; then
+    printf '%s\n' "$explicit_triplet"
+  else
+    zf_vcpkg_default_triplet
+  fi
+}
+
 zf_vcpkg_installed_dir_posix() {
-  printf '%s/build/vcpkg_installed\n' "$ZF_REPO_ROOT"
+  local triplet="${1:-$(zf_vcpkg_requested_triplet)}"
+  printf '%s/build/vcpkg_installed/%s\n' "$ZF_REPO_ROOT" "$triplet"
 }
 
 zf_vcpkg_binary_cache_dir_posix() {
@@ -83,6 +108,29 @@ zf_vcpkg_should_skip_bootstrap() {
   return 0
 }
 
+zf_vcpkg_checkout_matches_ref() {
+  local vcpkg_dir="$1"
+  local vcpkg_ref="$2"
+  [[ -d "$vcpkg_dir/.git" ]] || return 1
+
+  local current_ref
+  local target_ref
+  current_ref="$(git -C "$vcpkg_dir" rev-parse --verify HEAD 2>/dev/null)" ||
+    return 1
+  target_ref="$(git -C "$vcpkg_dir" rev-parse --verify "$vcpkg_ref^{commit}" 2>/dev/null)" ||
+    return 1
+
+  [[ "$current_ref" == "$target_ref" ]]
+}
+
+zf_vcpkg_is_ready() {
+  local vcpkg_dir="$1"
+  local vcpkg_ref="$2"
+
+  zf_vcpkg_checkout_matches_ref "$vcpkg_dir" "$vcpkg_ref" &&
+    zf_vcpkg_should_skip_bootstrap "$vcpkg_dir"
+}
+
 zf_validate_build_jobs() {
   local jobs="$1"
   [[ "$jobs" =~ ^[1-9][0-9]*$ ]] ||
@@ -90,8 +138,7 @@ zf_validate_build_jobs() {
 }
 
 zf_apply_build_jobs() {
-  local jobs="${1:-${ZF_BUILD_JOBS:-}}"
-  [[ -n "$jobs" ]] || return 0
+  local jobs="${1:-${ZF_BUILD_JOBS:-4}}"
 
   zf_validate_build_jobs "$jobs"
   export CMAKE_BUILD_PARALLEL_LEVEL="$jobs"
@@ -111,19 +158,31 @@ zf_vcpkg_bootstrap() {
 
   mkdir -p "$(dirname "$vcpkg_dir")"
 
+  export VCPKG_ROOT="$vcpkg_root"
+  export VCPKG_DISABLE_METRICS=1
+
+  if zf_vcpkg_is_ready "$vcpkg_dir" "$vcpkg_ref"; then
+    printf 'Reusing pinned vcpkg checkout and tool binary.\n'
+    printf 'VCPKG_ROOT=%s\n' "$VCPKG_ROOT"
+    return 0
+  fi
+
   if [[ ! -d "$vcpkg_dir/.git" ]]; then
     git init "$vcpkg_dir"
     git -C "$vcpkg_dir" remote add origin https://github.com/microsoft/vcpkg.git
   fi
 
-  if ! git -C "$vcpkg_dir" rev-parse --verify "$vcpkg_ref^{commit}" >/dev/null 2>&1; then
-    git -C "$vcpkg_dir" fetch --depth 1 origin "$vcpkg_ref"
+  if [[ "$(git -C "$vcpkg_dir" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')" == "true" ]]; then
+    git -C "$vcpkg_dir" fetch --unshallow origin
   fi
 
-  git -C "$vcpkg_dir" checkout --detach "$vcpkg_ref"
+  if ! git -C "$vcpkg_dir" rev-parse --verify "$vcpkg_ref^{commit}" >/dev/null 2>&1; then
+    git -C "$vcpkg_dir" fetch origin "$vcpkg_ref"
+  fi
 
-  export VCPKG_ROOT="$vcpkg_root"
-  export VCPKG_DISABLE_METRICS=1
+  if ! zf_vcpkg_checkout_matches_ref "$vcpkg_dir" "$vcpkg_ref"; then
+    git -C "$vcpkg_dir" checkout --detach "$vcpkg_ref"
+  fi
 
   if zf_vcpkg_should_skip_bootstrap "$vcpkg_dir"; then
     printf 'Reusing existing vcpkg tool binary (set ZF_FORCE_VCPKG_BOOTSTRAP=1 to force re-bootstrap).\n'
@@ -141,13 +200,20 @@ zf_vcpkg_bootstrap() {
 zf_vcpkg_setup_project_env() {
   local vcpkg_dir
   local cache_dir
+  local triplet="${1:-$(zf_vcpkg_requested_triplet)}"
+  local installed_dir
   vcpkg_dir="$(zf_vcpkg_root_posix)"
   cache_dir="$(zf_vcpkg_binary_cache_dir_posix)"
+  installed_dir="$(zf_vcpkg_installed_dir_posix "$triplet")"
 
   mkdir -p "$cache_dir"
 
   export VCPKG_ROOT
   VCPKG_ROOT="$(zf_to_native_path_if_needed "$vcpkg_dir")"
+  export VCPKG_TARGET_TRIPLET
+  VCPKG_TARGET_TRIPLET="$triplet"
+  export VCPKG_INSTALLED_DIR
+  VCPKG_INSTALLED_DIR="$(zf_to_native_path_if_needed "$installed_dir")"
   export VCPKG_DISABLE_METRICS=1
   export VCPKG_BINARY_SOURCES
   VCPKG_BINARY_SOURCES="clear;files,$(zf_to_native_path_if_needed "$cache_dir"),readwrite"
@@ -178,74 +244,9 @@ zf_vcpkg_run() {
   (cd "$ZF_REPO_ROOT" && "$vcpkg_bin" "$@")
 }
 
-cmd_env() {
-  [[ "$#" -eq 0 ]] || zf_fail_arg "env does not accept arguments"
-
-  local vcpkg_root
-  local cache_dir
-  mkdir -p "$(zf_vcpkg_binary_cache_dir_posix)"
-
-  vcpkg_root="$(zf_to_native_path_if_needed "$(zf_vcpkg_root_posix)")"
-  cache_dir="$(zf_to_native_path_if_needed "$(zf_vcpkg_binary_cache_dir_posix)")"
-
-  printf 'export VCPKG_ROOT=%q\n' "$vcpkg_root"
-  printf 'export VCPKG_DISABLE_METRICS=%q\n' '1'
-  printf 'export VCPKG_BINARY_SOURCES=%q\n' "clear;files,$cache_dir,readwrite"
-}
-
 cmd_bootstrap() {
   [[ "$#" -eq 0 ]] || zf_fail_arg "bootstrap does not accept arguments"
   zf_vcpkg_bootstrap
-}
-
-cmd_list() {
-  zf_vcpkg_bootstrap
-  zf_vcpkg_setup_project_env
-
-  local installed_dir
-  installed_dir="$(zf_to_native_path_if_needed "$(zf_vcpkg_installed_dir_posix)")"
-  zf_vcpkg_run list --x-install-root="$installed_dir" "$@"
-}
-
-cmd_install() {
-  local jobs="${ZF_BUILD_JOBS:-}"
-  local args=()
-
-  while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-      --jobs)
-        shift
-        [[ "$#" -gt 0 ]] || zf_fail_arg "missing value for --jobs"
-        jobs="$1"
-        ;;
-      --jobs=*)
-        jobs="${1#--jobs=}"
-        [[ -n "$jobs" ]] || zf_fail_arg "missing value for --jobs"
-        ;;
-      --)
-        shift
-        args+=("$@")
-        break
-        ;;
-      *)
-        args+=("$1")
-        ;;
-    esac
-    shift
-  done
-
-  zf_apply_build_jobs "$jobs"
-  zf_vcpkg_bootstrap
-  zf_vcpkg_setup_project_env
-
-  local installed_dir
-  installed_dir="$(zf_to_native_path_if_needed "$(zf_vcpkg_installed_dir_posix)")"
-
-  if ! zf_vcpkg_has_triplet_arg "${args[@]}"; then
-    args=(--triplet "$(zf_vcpkg_default_triplet)" "${args[@]}")
-  fi
-
-  zf_vcpkg_run install --x-install-root="$installed_dir" "${args[@]}"
 }
 
 cmd_exec() {
@@ -263,15 +264,6 @@ main() {
   case "$command" in
     bootstrap)
       cmd_bootstrap "$@"
-      ;;
-    env)
-      cmd_env "$@"
-      ;;
-    list)
-      cmd_list "$@"
-      ;;
-    install)
-      cmd_install "$@"
       ;;
     exec)
       cmd_exec "$@"

@@ -5,23 +5,22 @@ on:
   pull_request:
 
 jobs:
-  windows-msvc:
-    name: windows-msvc-${{ matrix.preset }}
+  warmup:
+    name: windows-warmup-${{ matrix.triplet }}
     runs-on: windows-latest
 
     strategy:
       fail-fast: false
       matrix:
-        preset:
-          - windows-debug
-          - windows-release
+        include:
+          - triplet: x64-windows
 
     defaults:
       run:
         shell: bash
 
     env:
-      ZF_BUILD_JOBS: 2
+      ZF_BUILD_JOBS: 4
 
     steps:
       - name: Checkout
@@ -34,13 +33,55 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build/vcpkg_installed
             .cache/vcpkg/archives
             .tools/vcpkg/downloads
-          key: windows-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            windows-${{ matrix.preset }}-
-            windows-
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
+
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Warm up triplet dependencies
+        run: |
+          mkdir -p .cache/vcpkg/archives
+          cmake --preset ${{ matrix.triplet }}-release
+
+  windows-msvc:
+    needs: warmup
+    name: windows-msvc-${{ matrix.preset }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: x64-windows-release
+            triplet: x64-windows
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ZF_BUILD_JOBS: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
 
       - name: Bootstrap vcpkg
         run: ./scripts/vcpkg.sh bootstrap
@@ -52,14 +93,17 @@ jobs:
         run: ./scripts/test.sh ${{ matrix.preset }}
 
       - name: Package release components
-        if: matrix.preset == 'windows-release'
+        if: matrix.preset == 'x64-windows-release'
         run: |
-          ./scripts/make-package.sh agent server installer --preset windows-release --out "$RUNNER_TEMP/packages" --zip --no-build
+          ./scripts/make-package.sh agent server installer --preset x64-windows-release --out "$RUNNER_TEMP/packages" --zip --no-build
 
       - name: Inspect release binaries
-        if: matrix.preset == 'windows-release'
-        run: ./scripts/check.sh binaries --preset windows-release
+        if: matrix.preset == 'x64-windows-release'
+        run: ./scripts/check.sh binaries --preset x64-windows-release
 
       - name: Inspect release packages
-        if: matrix.preset == 'windows-release'
-        run: ./scripts/check.sh packages --platform windows --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
+        if: matrix.preset == 'x64-windows-release'
+        run: |
+          source ./scripts/lib/common.sh
+          arch="$(zf_preset_manifest_arch "${{ matrix.preset }}")"
+          ./scripts/check.sh packages --platform windows --arch "$arch" --build-type release "$RUNNER_TEMP/packages"/*.zip

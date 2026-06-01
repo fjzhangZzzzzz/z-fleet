@@ -125,31 +125,14 @@ for component in "${components[@]}"; do
 done
 mkdir -p "$output_dir" || zf_fail_exec "failed to create output dir: $output_dir"
 output_dir_abs="$(zf_make_absolute_path "$output_dir")"
-case "$preset" in
-  linux-debug)
-    package_platform="linux"
-    package_arch="x86_64"
-    package_build_type="debug"
-    ;;
-  linux-release)
-    package_platform="linux"
-    package_arch="x86_64"
-    package_build_type="release"
-    ;;
-  windows-debug)
-    package_platform="windows"
-    package_arch="x86_64"
-    package_build_type="debug"
-    ;;
-  windows-release)
-    package_platform="windows"
-    package_arch="x86_64"
-    package_build_type="release"
-    ;;
-  *)
-    zf_fail_arg "cannot infer target platform and architecture from preset: $preset"
-    ;;
-esac
+package_triplet="$(zf_preset_triplet "$preset")" ||
+  zf_fail_arg "cannot infer triplet from preset: $preset"
+package_platform="$(zf_triplet_platform "$package_triplet")" ||
+  zf_fail_arg "cannot infer platform from preset: $preset"
+package_arch="$(zf_triplet_manifest_arch "$package_triplet")" ||
+  zf_fail_arg "cannot infer architecture from preset: $preset"
+package_build_type="$(zf_preset_build_type "$preset")" ||
+  zf_fail_arg "cannot infer build type from preset: $preset"
 
 packager_binary_name="zfleet_packager"
 if zf_is_windows_host; then
@@ -215,6 +198,15 @@ for component in "${components[@]}"; do
     runtime_dirs=("$(dirname "$source_binary")")
     if [[ "$component" == "installer" ]]; then
       runtime_dirs+=("$(dirname "$launcher_source")")
+    fi
+    if zf_is_windows_host; then
+      shopt -s nullglob
+      for runtime_dir in \
+        /c/Program\ Files\ \(x86\)/Windows\ Kits/10/Redist/*/ucrt/DLLs/x64 \
+        /c/Program\ Files\ \(x86\)/Microsoft\ Visual\ Studio/2022/BuildTools/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT; do
+        runtime_dirs+=("$runtime_dir")
+      done
+      shopt -u nullglob
     fi
     copy_windows_runtime_dlls "$payload_dir" "${runtime_dirs[@]}"
   fi

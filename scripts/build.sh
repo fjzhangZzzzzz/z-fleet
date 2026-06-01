@@ -55,10 +55,13 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 preset="${preset:-$(zf_default_preset)}"
+zf_preset_triplet "$preset" >/dev/null ||
+  zf_fail_arg "unsupported preset: $preset"
 
 zf_apply_build_jobs "$jobs"
 zf_vcpkg_bootstrap
-zf_vcpkg_setup_project_env
+mkdir -p "$(zf_vcpkg_binary_cache_dir_posix)"
+export VCPKG_DISABLE_METRICS=1
 
 zf_run_in_msvc_env cmake --preset "$preset"
 zf_run_in_msvc_env cmake --build --preset "$preset"

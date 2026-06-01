@@ -25,3 +25,4 @@ CMakeUserPresets.json
 .vscode/
 .codex/
 .agents/
+AGENTS.override.md

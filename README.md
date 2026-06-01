@@ -88,27 +88,20 @@ z-fleet/
 ./scripts/test.sh
 ```
 
-Windows 本地构建要求在 Git Bash 中执行脚本，并提前安装 Visual Studio Build Tools、CMake、Ninja 和 Git。
-未指定 preset 时，Linux 默认使用 `linux-debug`，Windows Git Bash 默认使用 `windows-debug`。
+Windows 本地构建使用 Git Bash 执行同一套脚本，并提前安装 Visual Studio Build Tools、CMake、Ninja 和 Git。
+未指定 preset 时，本地 Linux 默认使用 `x64-linux-debug`，Windows Git Bash 默认使用 `x64-windows-debug`。
+当前 CI 仅运行 `x64-linux-release` 与 `x64-windows-release`，`debug` 预设仅保留给本地开发与排障。
 需要限制本地构建并发时，使用 `--jobs` 或 `ZF_BUILD_JOBS`：
 
 ```bash
-./scripts/build.sh linux-debug --jobs 4
-ZF_BUILD_JOBS=4 ./scripts/build.sh linux-debug
+./scripts/build.sh x64-linux-debug --jobs 4
+ZF_BUILD_JOBS=4 ./scripts/build.sh x64-linux-debug
 ```
 
-项目感知的 vcpkg 入口为：
+vcpkg 由 CMake manifest mode 在 configure 阶段安装依赖。项目固定使用 `.tools/vcpkg`、`build/vcpkg_installed/<triplet>` 和 `.cache/vcpkg/archives`，普通开发不需要手动执行 `vcpkg install` 或导入额外环境。需要单独准备 vcpkg tool 时可运行：
 
 ```bash
 ./scripts/vcpkg.sh bootstrap
-./scripts/vcpkg.sh list
-./scripts/vcpkg.sh install --jobs 4
-```
-
-脚本固定使用 `.tools/vcpkg`、`build/vcpkg_installed` 和 `.cache/vcpkg/archives`，避免直接运行 vcpkg 默认目录导致状态不一致。需要手动运行 `cmake --preset` 时，先执行：
-
-```bash
-eval "$(./scripts/vcpkg.sh env)"
 ```
 
 更多构建、配置、运行和排障说明见 [docs/operations.md](docs/operations.md)。

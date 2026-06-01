@@ -6,9 +6,9 @@
   "dependencies": [
     "boost-asio",
     "boost-beast",
+    "boost-filesystem",
     "boost-process",
     "boost-uuid",
-    "catch2",
     "cli11",
     "nlohmann-json",
     "nghttp2",
@@ -19,5 +19,13 @@
     "sqlite3",
     "sqlitecpp",
     "tomlplusplus"
-  ]
+  ],
+  "features": {
+    "tests": {
+      "description": "Dependencies required when building the test suite.",
+      "dependencies": [
+        "catch2"
+      ]
+    }
+  }
 }

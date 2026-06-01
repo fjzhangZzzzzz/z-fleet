@@ -135,6 +135,25 @@ fs::path LauncherStubPath(const fs::path& root, std::string_view component) {
   return root / component / "bin" / BinaryNamePath(component);
 }
 
+void CopyLauncherRuntimeDependencies(const fs::path& installer_release_dir,
+                                     const fs::path& stub_dir) {
+  const auto release_bin_dir = installer_release_dir / "bin";
+  if (!fs::exists(release_bin_dir) || !fs::is_directory(release_bin_dir)) {
+    return;
+  }
+
+  fs::create_directories(stub_dir);
+  for (const auto& entry : fs::directory_iterator(release_bin_dir)) {
+    const auto status = entry.symlink_status();
+    if (!fs::is_regular_file(status) || entry.path().extension() != ".dll") {
+      continue;
+    }
+    const auto destination = stub_dir / entry.path().filename();
+    fs::copy_file(entry.path(), destination,
+                  fs::copy_options::overwrite_existing);
+  }
+}
+
 std::optional<std::string> ValidateInstallerLauncherAssets(
     const fs::path& installer_release_dir) {
   const auto asset_path = LauncherTemplatePath(installer_release_dir);
@@ -337,6 +356,7 @@ void EnsureLauncherStub(const fs::path& root,
   fs::create_directories(stub_path.parent_path());
   fs::copy_file(asset_path, stub_path, fs::copy_options::overwrite_existing);
   zfleet::platform::SetExecutable(stub_path, true);
+  CopyLauncherRuntimeDependencies(installer_release_dir, stub_path.parent_path());
 }
 
 void EnsureLauncherStubs(const fs::path& root,

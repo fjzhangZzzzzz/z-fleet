@@ -13,9 +13,9 @@ jobs:
     with:
       checkout_ref: ${{ inputs.checkout_ref }}
 
-  linux-container:
+  warmup:
     needs: resolve-version
-    name: linux-container-${{ matrix.preset }}
+    name: linux-warmup-${{ matrix.triplet }}
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ needs.resolve-version.outputs.image_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
@@ -23,16 +23,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset:
-          - linux-debug
-          - linux-release
+        include:
+          - triplet: x64-linux
 
     defaults:
       run:
         shell: bash
 
     env:
-      ZF_BUILD_JOBS: 2
+      ZF_BUILD_JOBS: 4
 
     steps:
       - name: Checkout
@@ -44,13 +43,58 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build/vcpkg_installed
             .cache/vcpkg/archives
             .tools/vcpkg/downloads
-          key: linux-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            linux-${{ matrix.preset }}-
-            linux-
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
+
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Warm up triplet dependencies
+        run: |
+          mkdir -p .cache/vcpkg/archives
+          cmake --preset ${{ matrix.triplet }}-release
+
+  linux-container:
+    needs:
+      - resolve-version
+      - warmup
+    name: linux-container-${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ needs.resolve-version.outputs.image_owner }}/zfleet-builder:${{ needs.resolve-version.outputs.image_tag }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: x64-linux-release
+            triplet: x64-linux
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ZF_BUILD_JOBS: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
 
       - name: Bootstrap vcpkg
         run: ./scripts/vcpkg.sh bootstrap
@@ -62,25 +106,23 @@ jobs:
         run: ./scripts/test.sh ${{ matrix.preset }}
 
       - name: Package release components
-        if: matrix.preset == 'linux-release'
-        run: |
-          ./scripts/make-package.sh agent server installer --preset linux-release --out "$RUNNER_TEMP/packages" --zip --no-build
+        run: ./scripts/make-package.sh agent server installer --preset "${{ matrix.preset }}" --out "$RUNNER_TEMP/packages" --zip --no-build
 
       - name: Upload release packages
-        if: matrix.preset == 'linux-release'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-release-packages
+          name: ${{ matrix.preset }}-packages
           path: ${{ runner.temp }}/packages/*.zip
           if-no-files-found: error
 
       - name: Inspect release binaries
-        if: matrix.preset == 'linux-release'
-        run: ./scripts/check.sh binaries --preset linux-release
+        run: ./scripts/check.sh binaries --preset "${{ matrix.preset }}"
 
       - name: Inspect release packages
-        if: matrix.preset == 'linux-release'
-        run: ./scripts/check.sh packages --platform linux --arch x86_64 --build-type release "$RUNNER_TEMP/packages"/*.zip
+        run: |
+          source ./scripts/lib/common.sh
+          arch="$(zf_preset_manifest_arch "${{ matrix.preset }}")"
+          ./scripts/check.sh packages --platform linux --arch "$arch" --build-type release "$RUNNER_TEMP/packages"/*.zip
 
   linux-runtime-compat:
     name: linux-runtime-compat-${{ matrix.distro }}
@@ -130,9 +172,11 @@ jobs:
       - name: Download release packages
         uses: actions/download-artifact@v4
         with:
-          name: linux-release-packages
+          name: x64-linux-release-packages
           path: /tmp/linux-release-packages
 
       - name: Run compatibility smoke test
         run: |
-          bash ./scripts/linux-package-smoke.sh /tmp/linux-release-packages/*.zip
+          source ./scripts/lib/common.sh
+          arch="$(zf_preset_manifest_arch x64-linux-release)"
+          bash ./scripts/linux-package-smoke.sh --arch "$arch" /tmp/linux-release-packages/*.zip

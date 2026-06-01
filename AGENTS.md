@@ -1,32 +1,34 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## 项目结构与模块组织
 
-`z-fleet` is a C++20 monorepo built with CMake and vcpkg manifest mode. Application entry points live in `apps/agent/` and `apps/server/`. Shared code belongs in `libs/core/`, `libs/protocol/`, and `libs/platform/`, each with `src/`, `include/`, and `tests/`. Cross-component tests go in `tests/integration/`. Design and maintenance docs live in `docs/`, with ADRs under `docs/adr/`.
+`z-fleet` 是基于 C++20 的 monorepo，使用 CMake + vcpkg manifest mode。应用入口位于 `apps/agent/` 与 `apps/server/`。共享库位于 `libs/`，当前包含 `core/`、`crypto/`、`package/`、`platform/`、`protocol/`、`transport/`，各模块通常采用 `src/`、`include/`、`tests/` 结构。跨组件测试放在 `tests/integration/`，测试辅助代码放在 `tests/support/`。设计与维护文档位于 `docs/`，ADR 位于 `docs/adr/`。
 
-## Build, Test, and Development Commands
+## 构建、测试与开发命令
 
-Use the repository scripts so local and CI behavior stay aligned:
+Linux 环境优先使用容器化构建脚本 `builder.sh`，其次再使用通用 `build.sh`，以保证与 CI 和发布流程一致：
 
-- `./scripts/build.sh linux-debug`: bootstrap vcpkg, configure CMake, and build the Linux debug preset.
-- `./scripts/build.sh linux-release`: build the Linux release preset.
-- `./scripts/test.sh linux-debug`: run `ctest` for the Linux debug preset.
-- `cmake --preset linux-debug`: configure only, useful when iterating on build files.
+- `./scripts/builder.sh linux-debug`：优先方式，使用容器化流程构建 Linux Debug 预设。
+- `./scripts/builder.sh linux-release`：优先方式，使用容器化流程构建 Linux Release 预设。
+- `./scripts/build.sh linux-debug`：非容器化备用方式，引导 vcpkg、配置 CMake，并构建 Linux Debug 预设。
+- `./scripts/build.sh linux-release`：非容器化备用方式，构建 Linux Release 预设。
+- `./scripts/test.sh linux-debug`：运行 Linux Debug 预设下的 `ctest`。
+- `cmake --preset linux-debug`：仅配置，适合迭代 CMake 文件。
 
-Windows builds use the matching `windows-debug` and `windows-release` presets from Git Bash.
+Windows 下使用 Git Bash 执行对应的 `windows-debug` 与 `windows-release` 预设。
 
-## Coding Style & Naming Conventions
+## 编码风格与命名约定
 
-Use the Google C++ Style Guide as the default for all production code and C++ snippets in documentation. In this repository that means 2-space indentation, braces on the same line, and small translation units consistent with the current codebase. Use project namespaces such as `zfleet::core` and keep public headers under `include/zfleet/...`. Source and test files use lowercase snake_case, for example `version.cpp` and `version_test.cpp`. Keep document filenames stable: core docs use English names like `architecture.md`, and ADRs use `NNNN-short-name.md`.
+生产代码与文档中的 C++ 片段默认遵循 Google C++ Style Guide。仓库内约定包括：2 空格缩进、同一行大括号、保持与现有代码一致的小型翻译单元。命名空间采用项目前缀（如 `zfleet::core`），公开头文件放在 `include/zfleet/...`。源码和测试文件使用小写蛇形命名，如 `version.cpp`、`version_test.cpp`。文档文件名保持稳定：核心文档使用英文名（如 `architecture.md`），ADR 使用 `NNNN-short-name.md`。
 
-## Testing Guidelines
+## 测试约定
 
-Tests are currently lightweight executable checks wired into CTest. Add unit tests beside the owning module under `libs/*/tests/` or `apps/*/tests/`; use `tests/integration/` only for end-to-end flows. Name test files with the `_test.cpp` suffix. Run at least `./scripts/test.sh linux-debug` before opening a PR.
+当前测试以接入 CTest 的轻量可执行检查为主。新增单元测试请放在对应模块目录（`libs/*/tests/` 或 `apps/*/tests/`）；仅端到端流程放到 `tests/integration/`。测试文件名使用 `_test.cpp` 后缀。提交 PR 前至少运行一次 `./scripts/test.sh linux-debug`。
 
-## Commit & Pull Request Guidelines
+## 提交与 PR 约定
 
-Recent history uses short conventional prefixes, for example `feat: 重构文档组织结构` and `feat: 项目最小骨架搭建`. Keep commit subjects imperative and scoped; prefer `feat:`, `fix:`, `docs:`, `build:`, or `test:`. PRs should describe the problem, summarize the change, list validation commands, and link the relevant issue or ADR. Include screenshots only when UI work is introduced.
+提交信息采用简短约定式前缀，如 `feat:`、`fix:`、`docs:`、`build:`、`test:`，主题使用祈使句并尽量聚焦。PR 需说明问题背景、变更摘要、验证命令，并关联对应 issue 或 ADR。仅在引入 UI 变更时附截图。
 
-## Documentation & Security Notes
+## 文档与安全说明
 
-Documentation is maintained under `docs/README.md`; keep prose in Chinese unless English is required for identifiers, commands, paths, or external standards. Do not introduce shell execution, write-capable tasks, or update paths that bypass the project’s documented safety model in `docs/security.md`.
+文档维护入口在 `docs/README.md`。除标识符、命令、路径或外部标准外，文档正文默认使用中文。不要引入绕过 `docs/security.md` 中既定安全模型的执行方式、可写任务或路径更新。

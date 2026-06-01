@@ -9,8 +9,8 @@ on:
       - 'installer/v*'
 
 jobs:
-  package:
-    name: package-${{ matrix.os }}
+  warmup:
+    name: warmup-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -18,16 +18,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            preset: linux-release
+            preset: x64-linux-release
+            triplet: x64-linux
           - os: windows-latest
-            preset: windows-release
+            preset: x64-windows-release
+            triplet: x64-windows
 
     defaults:
       run:
         shell: bash
 
     env:
-      ZF_BUILD_JOBS: 2
+      ZF_BUILD_JOBS: 4
 
     steps:
       - name: Checkout
@@ -43,13 +45,62 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build/vcpkg_installed
             .cache/vcpkg/archives
             .tools/vcpkg/downloads
-          key: release-${{ matrix.preset }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakeLists.txt', 'CMakePresets.json') }}
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            release-${{ matrix.preset }}-
-            release-
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
+
+      - name: Bootstrap vcpkg
+        run: ./scripts/vcpkg.sh bootstrap
+
+      - name: Warm up triplet dependencies
+        run: |
+          mkdir -p .cache/vcpkg/archives
+          cmake --preset ${{ matrix.preset }}
+
+  package:
+    needs: warmup
+    name: package-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            preset: x64-linux-release
+            triplet: x64-linux
+          - os: windows-latest
+            preset: x64-windows-release
+            triplet: x64-windows
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ZF_BUILD_JOBS: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .tools/vcpkg/downloads
+          key: vcpkg-${{ runner.os }}-${{ matrix.triplet }}-${{ hashFiles('.vcpkg-version', 'vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.triplet }}-
 
       - name: Parse tag
         id: tag
@@ -88,20 +139,9 @@ jobs:
 
       - name: Inspect release package
         run: |
-          case "${{ matrix.preset }}" in
-            linux-release)
-              platform=linux
-              arch=x86_64
-              ;;
-            windows-release)
-              platform=windows
-              arch=x86_64
-              ;;
-            *)
-              echo "unsupported preset: ${{ matrix.preset }}" >&2
-              exit 1
-              ;;
-          esac
+          source ./scripts/lib/common.sh
+          platform="$(zf_preset_platform "${{ matrix.preset }}")"
+          arch="$(zf_preset_manifest_arch "${{ matrix.preset }}")"
           ./scripts/check.sh packages \
             --platform "$platform" \
             --arch "$arch" \

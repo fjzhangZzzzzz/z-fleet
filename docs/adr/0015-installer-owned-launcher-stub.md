@@ -1,6 +1,6 @@
 # ADR 0015：launcher stub 归属 installer 的安装模型补充
 
-状态：草案
+状态：已接受
 日期：2026-05-29
 补充： [ADR 0006](0006-manifest-driven-installer.md)
 

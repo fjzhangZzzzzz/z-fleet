@@ -11,15 +11,19 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;files,${sourceDir}/.cache/vcpkg/archives,readwrite",
+        "VCPKG_DISABLE_METRICS": "1"
+      },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed"
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_FEATURES": "tests"
       }
     },
     {
-      "name": "linux-debug",
-      "displayName": "Linux Debug",
+      "name": "x64-linux",
+      "hidden": true,
       "inherits": "base",
       "condition": {
         "type": "equals",
@@ -27,13 +31,13 @@
         "rhs": "Linux"
       },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed/x64-linux",
         "VCPKG_TARGET_TRIPLET": "x64-linux"
       }
     },
     {
-      "name": "linux-release",
-      "displayName": "Linux Release",
+      "name": "arm64-linux",
+      "hidden": true,
       "inherits": "base",
       "condition": {
         "type": "equals",
@@ -41,13 +45,13 @@
         "rhs": "Linux"
       },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "VCPKG_TARGET_TRIPLET": "x64-linux"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed/arm64-linux",
+        "VCPKG_TARGET_TRIPLET": "arm64-linux"
       }
     },
     {
-      "name": "windows-debug",
-      "displayName": "Windows Debug",
+      "name": "x64-windows",
+      "hidden": true,
       "inherits": "base",
       "condition": {
         "type": "equals",
@@ -55,47 +59,89 @@
         "rhs": "Windows"
       },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed/x64-windows",
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
-      "name": "windows-release",
-      "displayName": "Windows Release",
-      "inherits": "base",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
+      "name": "x64-linux-debug",
+      "displayName": "x64 Linux Debug",
+      "inherits": "x64-linux",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "x64-linux-release",
+      "displayName": "x64 Linux Release",
+      "inherits": "x64-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "arm64-linux-debug",
+      "displayName": "arm64 Linux Debug",
+      "inherits": "arm64-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "arm64-linux-release",
+      "displayName": "arm64 Linux Release",
+      "inherits": "arm64-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "x64-windows-debug",
+      "displayName": "x64 Windows Debug",
+      "inherits": "x64-windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "x64-windows-release",
+      "displayName": "x64 Windows Release",
+      "inherits": "x64-windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "linux-debug",
-      "configurePreset": "linux-debug"
+      "name": "x64-linux-debug",
+      "configurePreset": "x64-linux-debug"
     },
     {
-      "name": "linux-release",
-      "configurePreset": "linux-release"
+      "name": "x64-linux-release",
+      "configurePreset": "x64-linux-release"
     },
     {
-      "name": "windows-debug",
-      "configurePreset": "windows-debug"
+      "name": "arm64-linux-debug",
+      "configurePreset": "arm64-linux-debug"
     },
     {
-      "name": "windows-release",
-      "configurePreset": "windows-release"
+      "name": "arm64-linux-release",
+      "configurePreset": "arm64-linux-release"
+    },
+    {
+      "name": "x64-windows-debug",
+      "configurePreset": "x64-windows-debug"
+    },
+    {
+      "name": "x64-windows-release",
+      "configurePreset": "x64-windows-release"
     }
   ],
   "testPresets": [
     {
-      "name": "linux-debug",
-      "configurePreset": "linux-debug",
+      "name": "x64-linux-debug",
+      "configurePreset": "x64-linux-debug",
       "output": {
         "outputOnFailure": true
       },
@@ -104,8 +150,8 @@
       }
     },
     {
-      "name": "linux-release",
-      "configurePreset": "linux-release",
+      "name": "x64-linux-release",
+      "configurePreset": "x64-linux-release",
       "output": {
         "outputOnFailure": true
       },
@@ -114,8 +160,8 @@
       }
     },
     {
-      "name": "windows-debug",
-      "configurePreset": "windows-debug",
+      "name": "arm64-linux-debug",
+      "configurePreset": "arm64-linux-debug",
       "output": {
         "outputOnFailure": true
       },
@@ -124,8 +170,28 @@
       }
     },
     {
-      "name": "windows-release",
-      "configurePreset": "windows-release",
+      "name": "arm64-linux-release",
+      "configurePreset": "arm64-linux-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    },
+    {
+      "name": "x64-windows-debug",
+      "configurePreset": "x64-windows-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "ignore"
+      }
+    },
+    {
+      "name": "x64-windows-release",
+      "configurePreset": "x64-windows-release",
       "output": {
         "outputOnFailure": true
       },

@@ -6,7 +6,8 @@ add_library(zfleet_platform
 
 add_library(zfleet::platform ALIAS zfleet_platform)
 
-find_package(Boost REQUIRED COMPONENTS process system)
+find_package(Boost REQUIRED COMPONENTS filesystem process system)
+find_package(boost_filesystem CONFIG REQUIRED)
 
 target_include_directories(zfleet_platform
   PUBLIC
@@ -17,6 +18,7 @@ target_compile_features(zfleet_platform PUBLIC cxx_std_20)
 
 target_link_libraries(zfleet_platform
   PUBLIC
+    Boost::filesystem
     Boost::process
 )
 

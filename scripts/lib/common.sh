@@ -30,10 +30,143 @@ zf_is_windows_host() {
 
 zf_default_preset() {
   if zf_is_windows_host; then
-    printf 'windows-debug\n'
+    printf 'x64-windows-debug\n'
   else
-    printf 'linux-debug\n'
+    printf 'x64-linux-debug\n'
   fi
+}
+
+zf_preset_build_type() {
+  local preset="$1"
+  local build_type="${preset##*-}"
+  case "$build_type" in
+    debug|release)
+      printf '%s\n' "$build_type"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_preset_triplet() {
+  local preset="$1"
+  local build_type
+  build_type="$(zf_preset_build_type "$preset")" || return 1
+  printf '%s\n' "${preset%-${build_type}}"
+}
+
+zf_triplet_arch() {
+  local triplet="$1"
+  case "$triplet" in
+    x64-*)
+      printf 'x64\n'
+      ;;
+    arm64-*)
+      printf 'arm64\n'
+      ;;
+    x86-*)
+      printf 'x86\n'
+      ;;
+    arm-*)
+      printf 'arm\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_host_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      printf 'x64\n'
+      ;;
+    aarch64|arm64)
+      printf 'arm64\n'
+      ;;
+    i386|i686)
+      printf 'x86\n'
+      ;;
+    armv7l|armv8l|arm)
+      printf 'arm\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_triplet_platform() {
+  local triplet="$1"
+  case "$triplet" in
+    *-linux)
+      printf 'linux\n'
+      ;;
+    *-windows)
+      printf 'windows\n'
+      ;;
+    *-macos|*-osx)
+      printf 'macos\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_triplet_manifest_arch() {
+  local triplet="$1"
+  case "$(zf_triplet_arch "$triplet")" in
+    x64)
+      printf 'x86_64\n'
+      ;;
+    arm64)
+      printf 'arm64\n'
+      ;;
+    x86)
+      printf 'x86\n'
+      ;;
+    arm)
+      printf 'arm\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_manifest_arch_triplet_arch() {
+  local manifest_arch="$1"
+  case "$manifest_arch" in
+    x86_64)
+      printf 'x64\n'
+      ;;
+    arm64)
+      printf 'arm64\n'
+      ;;
+    x86)
+      printf 'x86\n'
+      ;;
+    arm)
+      printf 'arm\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+zf_preset_platform() {
+  zf_triplet_platform "$(zf_preset_triplet "$1")"
+}
+
+zf_preset_arch() {
+  zf_triplet_arch "$(zf_preset_triplet "$1")"
+}
+
+zf_preset_manifest_arch() {
+  zf_triplet_manifest_arch "$(zf_preset_triplet "$1")"
 }
 
 zf_expand_home_path() {

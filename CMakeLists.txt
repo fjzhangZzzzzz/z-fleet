@@ -42,6 +42,8 @@ endif()
 
 include(CTest)
 find_package(Threads REQUIRED)
+find_package(boost_filesystem CONFIG REQUIRED)
+find_package(boost_process CONFIG REQUIRED)
 
 function(zf_configure_runtime_layout target_name)
   if(WIN32)
