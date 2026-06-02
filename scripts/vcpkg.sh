@@ -123,11 +123,22 @@ zf_vcpkg_checkout_matches_ref() {
   [[ "$current_ref" == "$target_ref" ]]
 }
 
+zf_vcpkg_is_shallow_repository() {
+  local vcpkg_dir="$1"
+  [[ -d "$vcpkg_dir/.git" ]] || return 1
+
+  local is_shallow
+  is_shallow="$(git -C "$vcpkg_dir" rev-parse --is-shallow-repository 2>/dev/null ||
+    printf 'false')"
+  [[ "$is_shallow" == "true" ]]
+}
+
 zf_vcpkg_is_ready() {
   local vcpkg_dir="$1"
   local vcpkg_ref="$2"
 
   zf_vcpkg_checkout_matches_ref "$vcpkg_dir" "$vcpkg_ref" &&
+    ! zf_vcpkg_is_shallow_repository "$vcpkg_dir" &&
     zf_vcpkg_should_skip_bootstrap "$vcpkg_dir"
 }
 
@@ -172,7 +183,7 @@ zf_vcpkg_bootstrap() {
     git -C "$vcpkg_dir" remote add origin https://github.com/microsoft/vcpkg.git
   fi
 
-  if [[ "$(git -C "$vcpkg_dir" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')" == "true" ]]; then
+  if zf_vcpkg_is_shallow_repository "$vcpkg_dir"; then
     git -C "$vcpkg_dir" fetch --unshallow origin
   fi
 

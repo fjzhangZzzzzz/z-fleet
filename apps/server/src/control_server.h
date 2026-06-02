@@ -4,6 +4,7 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/strand.hpp>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -76,11 +77,13 @@ class ControlServer {
   };
 
   void StartAccept();
+  void StartAcceptOnStrand();
   void ReapFinishedSessions();
 
   boost::asio::ip::tcp::endpoint endpoint_;
   boost::asio::io_context io_context_;
   boost::asio::ip::tcp::acceptor acceptor_;
+  boost::asio::strand<boost::asio::io_context::executor_type> accept_strand_;
   ServerStore* store_;
   const ControlService* service_;
   ControlConnectionRegistry* registry_;
@@ -90,6 +93,7 @@ class ControlServer {
   std::vector<std::thread> io_threads_;
   std::mutex sessions_mutex_;
   std::vector<ActiveSession> sessions_;
+  std::atomic_bool stopping_{false};
 };
 
 }  // namespace zfleet::server

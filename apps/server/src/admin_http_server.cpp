@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <boost/asio/bind_executor.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
@@ -9,6 +10,7 @@
 #include <charconv>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -1031,8 +1033,9 @@ class ManagementHttpSession
                         const std::filesystem::path& package_repository,
                         const StaticFileService& static_files,
                         AdminHttpServerOptions options)
-      : socket_(std::move(socket)),
-        timer_(socket_.get_executor()),
+      : executor_(boost::asio::make_strand(socket.get_executor())),
+        socket_(std::move(socket)),
+        timer_(executor_),
         database_(database),
         package_repository_(package_repository),
         static_files_(static_files),
@@ -1053,24 +1056,33 @@ class ManagementHttpSession
   }
 
   void Start() {
+    auto self = shared_from_this();
+    boost::asio::dispatch(executor_, [self]() { self->StartOnStrand(); });
+  }
+
+ private:
+  void StartOnStrand() {
     ArmTimeout();
     auto self = shared_from_this();
     http::async_read_header(
         socket_, buffer_, *parser_,
-        [self](const boost::system::error_code& error,
-               std::size_t /*bytes_transferred*/) { self->OnHeader(error); });
+        boost::asio::bind_executor(
+            executor_, [self](const boost::system::error_code& error,
+                              std::size_t /*bytes_transferred*/) {
+              self->OnHeader(error);
+            }));
   }
 
- private:
   void ArmTimeout() {
     timer_.expires_after(options_.request_timeout);
     auto self = shared_from_this();
-    timer_.async_wait([self](const boost::system::error_code& error) {
-      if (!error) {
-        self->Respond(
-            ErrorResponse(408, "request_timeout", "request timed out"));
-      }
-    });
+    timer_.async_wait(boost::asio::bind_executor(
+        executor_, [self](const boost::system::error_code& error) {
+          if (!error) {
+            self->Respond(
+                ErrorResponse(408, "request_timeout", "request timed out"));
+          }
+        }));
   }
 
   void OnHeader(const boost::system::error_code& error) {
@@ -1137,10 +1149,12 @@ class ManagementHttpSession
     parser_->get().body().size = body_buffer_.size();
     auto self = shared_from_this();
     http::async_read_some(socket_, buffer_, *parser_,
-                          [self](const boost::system::error_code& error,
-                                 std::size_t /*bytes_transferred*/) {
-                            self->OnBodyChunk(error);
-                          });
+                          boost::asio::bind_executor(
+                              executor_,
+                              [self](const boost::system::error_code& error,
+                                     std::size_t /*bytes_transferred*/) {
+                                self->OnBodyChunk(error);
+                              }));
   }
 
   void OnBodyChunk(const boost::system::error_code& error) {
@@ -1222,8 +1236,11 @@ class ManagementHttpSession
     auto self = shared_from_this();
     http::async_write(
         socket_, output_,
-        [self](const boost::system::error_code& /*error*/,
-               std::size_t /*bytes_transferred*/) { self->Close(); });
+        boost::asio::bind_executor(
+            executor_, [self](const boost::system::error_code& /*error*/,
+                              std::size_t /*bytes_transferred*/) {
+              self->Close();
+            }));
   }
 
   void Close() {
@@ -1240,6 +1257,7 @@ class ManagementHttpSession
     socket_.close(ignored);
   }
 
+  boost::asio::strand<boost::asio::any_io_executor> executor_;
   tcp::socket socket_;
   boost::asio::steady_timer timer_;
   ServerDatabase* database_;
@@ -1269,6 +1287,7 @@ AdminHttpServer::AdminHttpServer(std::string listen_address,
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(),
       acceptor_(io_context_),
+      accept_strand_(io_context_.get_executor()),
       database_(database),
       package_repository_(std::move(package_repository)),
       static_files_(std::move(web_static_dir)),
@@ -1296,6 +1315,7 @@ void AdminHttpServer::Start() {
   acceptor_.set_option(boost::asio::socket_base::reuse_address(true));
   acceptor_.bind(endpoint_);
   acceptor_.listen();
+  stopping_.store(false);
   StartAccept();
 
   const auto thread_count = std::max<std::size_t>(1, options_.io_threads);
@@ -1308,8 +1328,17 @@ void AdminHttpServer::Stop() {
   if (stopping_.exchange(true)) {
     return;
   }
-  boost::system::error_code ignored;
-  acceptor_.close(ignored);
+  if (acceptor_.is_open()) {
+    auto close_done = std::make_shared<std::promise<void>>();
+    auto close_future = close_done->get_future();
+    boost::asio::post(accept_strand_, [this, close_done]() {
+      boost::system::error_code ignored;
+      acceptor_.cancel(ignored);
+      acceptor_.close(ignored);
+      close_done->set_value();
+    });
+    close_future.wait_for(std::chrono::seconds(2));
+  }
   io_context_.stop();
   for (auto& thread : io_threads_) {
     if (thread.joinable()) {
@@ -1327,18 +1356,27 @@ std::uint16_t AdminHttpServer::port() const noexcept {
 }
 
 void AdminHttpServer::StartAccept() {
-  acceptor_.async_accept(
-      [this](boost::system::error_code ec, tcp::socket socket) {
+  boost::asio::dispatch(accept_strand_,
+                        [this]() { StartAcceptOnStrand(); });
+}
+
+void AdminHttpServer::StartAcceptOnStrand() {
+  if (stopping_.load() || !acceptor_.is_open()) {
+    return;
+  }
+
+  acceptor_.async_accept(boost::asio::bind_executor(
+      accept_strand_, [this](boost::system::error_code ec, tcp::socket socket) {
         if (!ec) {
           std::make_shared<ManagementHttpSession>(std::move(socket), database_,
                                                   package_repository_,
                                                   static_files_, options_)
               ->Start();
         }
-        if (!stopping_) {
-          StartAccept();
+        if (!stopping_.load() && acceptor_.is_open()) {
+          StartAcceptOnStrand();
         }
-      });
+      }));
 }
 
 }  // namespace zfleet::server

@@ -516,6 +516,33 @@ TEST_CASE("admin http server serves requests while an idle connection waits") {
   server.Stop();
 }
 
+TEST_CASE("admin http server stops cleanly with multithreaded io") {
+  const zfleet::test::ScopedTestDir test_root("server");
+  zfleet::server::ServerDatabase database(test_root / "zfleet.db");
+  database.Initialize();
+  const auto web_root = test_root / "share" / "web";
+  WriteWebStaticFiles(web_root);
+
+  for (int attempt = 0; attempt < 25; ++attempt) {
+    zfleet::server::AdminHttpServer server(
+        "127.0.0.1:0", &database, test_root / "packages", web_root,
+        zfleet::server::AdminHttpServerOptions{.io_threads = 2});
+    server.Start();
+
+    boost::asio::io_context io_context;
+    boost::asio::ip::tcp::socket idle_socket(io_context);
+    idle_socket.connect(
+        {boost::asio::ip::make_address("127.0.0.1"), server.port()});
+
+    const auto page = SendHttpRequest(
+        server.port(), "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    REQUIRE(page.status == 200);
+
+    idle_socket.close();
+    server.Stop();
+  }
+}
+
 TEST_CASE("admin http server uploads publishes and resolves package channel") {
   const zfleet::test::ScopedTestDir test_root("server");
 

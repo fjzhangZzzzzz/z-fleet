@@ -3,6 +3,7 @@
 #include <atomic>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/strand.hpp>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -44,10 +45,12 @@ class AdminHttpServer {
 
  private:
   void StartAccept();
+  void StartAcceptOnStrand();
 
   boost::asio::ip::tcp::endpoint endpoint_;
   boost::asio::io_context io_context_;
   boost::asio::ip::tcp::acceptor acceptor_;
+  boost::asio::strand<boost::asio::io_context::executor_type> accept_strand_;
   ServerDatabase* database_;
   std::filesystem::path package_repository_;
   StaticFileService static_files_;

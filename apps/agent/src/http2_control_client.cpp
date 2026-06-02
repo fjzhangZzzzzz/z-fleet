@@ -218,6 +218,16 @@ std::string Http2ControlClient::StartCommandStream(
 
   Flush();
   PumpUntilHeaders(stream_id);
+  if (context_.responses.at(stream_id).status != "200") {
+    PumpUntilResponseDone(stream_id);
+    auto response = context_.responses.find(stream_id);
+    Check(response != context_.responses.end(),
+          "command stream response state missing");
+    auto status = std::move(response->second.status);
+    context_.responses.erase(response);
+    context_.command_stream_id.reset();
+    return status;
+  }
   return context_.responses.at(stream_id).status;
 }
 

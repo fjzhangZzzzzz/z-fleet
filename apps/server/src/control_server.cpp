@@ -570,6 +570,11 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
 
  private:
   void DoRead() {
+    if (closed_) {
+      MaybeMarkDone();
+      return;
+    }
+    read_in_flight_ = true;
     auto self = shared_from_this();
     socket_->async_read_some(boost::asio::buffer(read_buffer_),
                              boost::asio::bind_executor(
@@ -580,7 +585,17 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
   }
 
   void OnRead(boost::system::error_code ec, std::size_t bytes_read) {
+    read_in_flight_ = false;
+    if (closed_) {
+      MaybeMarkDone();
+      return;
+    }
     if (ec == boost::asio::error::operation_aborted) {
+      MaybeMarkDone();
+      return;
+    }
+    if (ec == boost::asio::error::bad_descriptor) {
+      Close();
       return;
     }
     if (ec == boost::asio::error::eof) {
@@ -647,7 +662,19 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
 
   void OnWrite(boost::system::error_code ec) {
     context_->write_in_progress = false;
+    if (closed_) {
+      if (!context_->pending_writes.empty()) {
+        context_->pending_writes.pop_front();
+      }
+      MaybeMarkDone();
+      return;
+    }
     if (ec == boost::asio::error::operation_aborted) {
+      MaybeMarkDone();
+      return;
+    }
+    if (ec == boost::asio::error::bad_descriptor) {
+      Close();
       return;
     }
     if (ec) {
@@ -660,6 +687,16 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     FinalizeSentCommandData(context_.get());
     FlushOutput();
     TryStartQueuedCommands();
+  }
+
+  void MaybeMarkDone() {
+    if (!closed_ || read_in_flight_ || context_->write_in_progress ||
+        offline_mark_in_flight_) {
+      return;
+    }
+    if (done_ != nullptr) {
+      done_->store(true);
+    }
   }
 
   void TryStartQueuedCommands() {
@@ -737,6 +774,8 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     }
     closed_ = true;
     boost::system::error_code ignored;
+    socket_->cancel(ignored);
+    socket_->shutdown(tcp::socket::shutdown_both, ignored);
     socket_->close(ignored);
     context_->flush_output = nullptr;
     context_->request_command_drain = nullptr;
@@ -751,12 +790,16 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
     if (closed.has_value() && closed->agent_id.has_value() &&
         closed->was_current_agent_connection) {
       if (async_store_ != nullptr) {
-        auto done = done_;
+        offline_mark_in_flight_ = true;
         async_store_->AsyncMarkAgentOffline(*closed->agent_id, disconnected_at,
                                             executor_,
-                                            [done](std::exception_ptr) {
-                                              if (done != nullptr) {
-                                                done->store(true);
+                                            [weak = weak_from_this()](
+                                                std::exception_ptr) {
+                                              if (const auto session =
+                                                      weak.lock()) {
+                                                session->offline_mark_in_flight_ =
+                                                    false;
+                                                session->MaybeMarkDone();
                                               }
                                             });
         return;
@@ -764,9 +807,7 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
         context_->store->MarkAgentOffline(*closed->agent_id, disconnected_at);
       }
     }
-    if (done_ != nullptr) {
-      done_->store(true);
-    }
+    MaybeMarkDone();
   }
 
   std::shared_ptr<tcp::socket> socket_;
@@ -779,6 +820,8 @@ class Http2Session : public std::enable_shared_from_this<Http2Session> {
   ServerDatabase* database_;
   std::optional<ServerDatabase::TaskQueueSubscription> task_queue_subscription_;
   std::shared_ptr<std::atomic_bool> done_;
+  bool read_in_flight_ = false;
+  bool offline_mark_in_flight_ = false;
   bool closed_ = false;
 };
 
@@ -897,6 +940,7 @@ ControlServer::ControlServer(std::string listen_address, ServerStore* store,
     : endpoint_(ParseListenAddress(listen_address)),
       io_context_(1),
       acceptor_(io_context_),
+      accept_strand_(io_context_.get_executor()),
       store_(store),
       service_(service),
       registry_(registry),
@@ -921,6 +965,7 @@ void ControlServer::Run() {
   acceptor_.bind(endpoint_);
   acceptor_.listen();
   endpoint_ = acceptor_.local_endpoint();
+  stopping_.store(false);
 
   ZFLOG_INFO(zfleet::core::log::Component("server").With(
                  {{"control_listen_port", std::to_string(endpoint_.port())}}),
@@ -941,9 +986,17 @@ void ControlServer::Run() {
 }
 
 void ControlServer::Stop() {
-  boost::system::error_code ec;
-  acceptor_.cancel(ec);
-  acceptor_.close(ec);
+  stopping_.store(true);
+
+  auto close_done = std::make_shared<std::promise<void>>();
+  auto close_future = close_done->get_future();
+  boost::asio::post(accept_strand_, [this, close_done]() {
+    boost::system::error_code ec;
+    acceptor_.cancel(ec);
+    acceptor_.close(ec);
+    close_done->set_value();
+  });
+  close_future.wait_for(std::chrono::seconds(2));
 
   std::vector<ActiveSession> sessions;
   {
@@ -989,11 +1042,20 @@ void ControlServer::Stop() {
 std::uint16_t ControlServer::port() const noexcept { return endpoint_.port(); }
 
 void ControlServer::StartAccept() {
-  acceptor_.async_accept([this](boost::system::error_code ec,
-                                tcp::socket socket) {
+  boost::asio::dispatch(accept_strand_,
+                        [this]() { StartAcceptOnStrand(); });
+}
+
+void ControlServer::StartAcceptOnStrand() {
+  if (stopping_.load() || !acceptor_.is_open()) {
+    return;
+  }
+
+  acceptor_.async_accept(boost::asio::bind_executor(
+      accept_strand_, [this](boost::system::error_code ec, tcp::socket socket) {
     if (ec) {
-      if (acceptor_.is_open()) {
-        StartAccept();
+      if (!stopping_.load() && acceptor_.is_open()) {
+        StartAcceptOnStrand();
       }
       return;
     }
@@ -1019,10 +1081,10 @@ void ControlServer::StartAccept() {
         session->Start();
       }
     }
-    if (acceptor_.is_open()) {
-      StartAccept();
+    if (!stopping_.load() && acceptor_.is_open()) {
+      StartAcceptOnStrand();
     }
-  });
+  }));
 }
 
 void ControlServer::ReapFinishedSessions() {
