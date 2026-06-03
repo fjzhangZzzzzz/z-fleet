@@ -416,4 +416,28 @@ bool TaskInputMatchesType(TaskType task_type, const TaskInput& input) noexcept {
   return false;
 }
 
+std::string_view AgentEventProtocolVersion(const AgentEvent& event) noexcept {
+  return std::visit([](const auto& payload) -> std::string_view {
+    return payload.protocol_version;
+  }, event.payload);
+}
+
+std::string_view AgentEventRequestId(const AgentEvent& event) noexcept {
+  return std::visit([](const auto& payload) -> std::string_view {
+    return payload.request_id;
+  }, event.payload);
+}
+
+std::string_view AgentEventAgentId(const AgentEvent& event) noexcept {
+  return std::visit([](const auto& payload) -> std::string_view {
+    return payload.agent_id;
+  }, event.payload);
+}
+
+std::string_view AgentEventOccurredAt(const AgentEvent& event) noexcept {
+  return std::visit([](const auto& payload) -> std::string_view {
+    return payload.occurred_at;
+  }, event.payload);
+}
+
 } // namespace zfleet::protocol

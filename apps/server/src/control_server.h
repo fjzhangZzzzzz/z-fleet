@@ -71,6 +71,10 @@ class ControlServer {
 
  private:
   struct ActiveSession {
+    ActiveSession(std::shared_ptr<void> session,
+                  std::function<void()> stop,
+                  std::shared_ptr<std::atomic_bool> done);
+
     std::shared_ptr<void> session;
     std::function<void()> stop;
     std::shared_ptr<std::atomic_bool> done;

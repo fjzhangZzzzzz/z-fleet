@@ -2,9 +2,14 @@
 
 #include "database.h"
 
+#include "zfleet/protocol/control_codec.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
+
+#include <cstdint>
+#include <span>
+#include <stdexcept>
 
 namespace zfleet::test {
 
@@ -177,6 +182,16 @@ proto::AgentEvent TaskFailedEvent(std::string message_id, std::string agent_id,
   error->set_message("inventory failed");
   error->set_retryable(true);
   return event;
+}
+
+zfleet::protocol::AgentEvent DomainAgentEvent(const proto::AgentEvent& event) {
+  std::string bytes;
+  if (!event.SerializeToString(&bytes)) {
+    throw std::runtime_error("failed to serialize test agent event");
+  }
+  return zfleet::protocol::DecodeAgentEventPayload(
+      std::span<const std::uint8_t>{
+          reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
 }
 
 void SeedAgent(zfleet::server::ServerDatabase* database,

@@ -19,13 +19,12 @@
 #include <vector>
 
 #include "zfleet/protocol/json_codec.h"
+#include "zfleet/protocol/control_codec.h"
 
 namespace zfleet::server {
 namespace {
 
 constexpr int kSchemaVersion = 10;
-
-namespace proto = zfleet::protocol::v1;
 
 std::optional<std::string> NullableOptionalColumn(SQLite::Statement& query,
                                                   int index) {
@@ -50,85 +49,6 @@ void BindBlob(SQLite::Statement& statement, int index,
   statement.bind(index, bytes.data(), static_cast<int>(bytes.size()));
 }
 
-template <typename Message>
-std::string SerializeProto(const Message& message) {
-  std::string bytes;
-  if (!message.SerializeToString(&bytes)) {
-    throw std::runtime_error("failed to serialize protobuf message");
-  }
-  return bytes;
-}
-
-std::string SerializeTaskInputBlob(zfleet::protocol::TaskType task_type,
-                                   const zfleet::protocol::TaskInput& input) {
-  if (!zfleet::protocol::TaskInputMatchesType(task_type, input)) {
-    throw std::runtime_error("task input type mismatch");
-  }
-
-  switch (task_type) {
-    case zfleet::protocol::TaskType::collect_basic_inventory: {
-      proto::CollectBasicInventoryInput message;
-      return SerializeProto(message);
-    }
-    case zfleet::protocol::TaskType::package_update: {
-      const auto& value = std::get<zfleet::protocol::PackageUpdateInput>(input);
-      proto::PackageUpdateInput message;
-      message.set_action(value.action);
-      message.set_component(value.component);
-      message.set_package_id(value.package_id);
-      message.set_version(value.version);
-      message.set_platform(value.platform);
-      message.set_arch(value.arch);
-      message.set_build_type(value.build_type);
-      message.set_package_url(value.package_url);
-      message.set_package_sha256(value.package_sha256);
-      message.set_manifest_sha256(value.manifest_sha256);
-      message.set_min_installer_version(value.min_installer_version);
-      message.set_allow_downgrade(value.allow_downgrade);
-      message.set_force(value.force);
-      return SerializeProto(message);
-    }
-  }
-
-  throw std::runtime_error("unsupported task type for stored task input");
-}
-
-zfleet::protocol::TaskInput ParseTaskInputBlob(
-    zfleet::protocol::TaskType task_type, const std::string& input_blob) {
-  switch (task_type) {
-    case zfleet::protocol::TaskType::collect_basic_inventory: {
-      proto::CollectBasicInventoryInput message;
-      if (!message.ParseFromString(input_blob)) {
-        throw std::runtime_error("failed to parse stored task input");
-      }
-      return zfleet::protocol::CollectBasicInventoryInput{};
-    }
-    case zfleet::protocol::TaskType::package_update: {
-      proto::PackageUpdateInput message;
-      if (!message.ParseFromString(input_blob)) {
-        throw std::runtime_error("failed to parse stored package update input");
-      }
-      return zfleet::protocol::PackageUpdateInput{
-          .action = message.action().empty() ? "apply" : message.action(),
-          .component = message.component(),
-          .package_id = message.package_id(),
-          .version = message.version(),
-          .platform = message.platform(),
-          .arch = message.arch(),
-          .build_type = message.build_type(),
-          .package_url = message.package_url(),
-          .package_sha256 = message.package_sha256(),
-          .manifest_sha256 = message.manifest_sha256(),
-          .min_installer_version = message.min_installer_version(),
-          .allow_downgrade = message.allow_downgrade(),
-          .force = message.force(),
-      };
-    }
-  }
-
-  throw std::runtime_error("unsupported stored task input type");
-}
-
 zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
   const auto task_type =
       *zfleet::protocol::TaskTypeFromString(query.getColumn(3).getString());
@@ -141,7 +61,8 @@ zfleet::protocol::Task ParseStoredTask(SQLite::Statement& query) {
           query.getColumn(4).getString()),
       .created_at = query.getColumn(5).getString(),
       .expires_at = query.getColumn(6).getString(),
-      .input = ParseTaskInputBlob(task_type, BlobColumn(query, 7)),
+      .input = zfleet::protocol::ParseTaskInputBlob(task_type,
+                                                    BlobColumn(query, 7)),
   };
 }
 
@@ -874,8 +795,8 @@ void ServerDatabase::MarkAgentOffline(const std::string& agent_id,
 
 void ServerDatabase::RecordAssetSnapshot(
     const zfleet::protocol::AssetSnapshot& request,
-    const proto::AgentEvent& event) {
-  const auto event_blob = SerializeProto(event);
+    const zfleet::protocol::AgentEvent& event) {
+  const auto event_blob = zfleet::protocol::SerializeAgentEventBlob(event);
   SubmitWrite([&](SQLite::Database& db) {
     SQLite::Statement statement(db,
                                 R"sql(
@@ -967,7 +888,9 @@ void ServerDatabase::EnqueueTask(const zfleet::protocol::Task& task) {
         5, std::string(zfleet::protocol::ToString(task.capability_level)));
     statement.bind(6, task.created_at);
     statement.bind(7, task.expires_at);
-    BindBlob(statement, 8, SerializeTaskInputBlob(task.task_type, task.input));
+    BindBlob(statement, 8,
+             zfleet::protocol::SerializeTaskInputBlob(task.task_type,
+                                                      task.input));
     statement.bind(9, std::string(zfleet::protocol::ToString(
                           zfleet::protocol::TaskState::queued)));
     statement.bind(10);
@@ -1239,10 +1162,10 @@ void ServerDatabase::AsyncMarkAgentOffline(
 }
 
 void ServerDatabase::AsyncRecordAssetSnapshot(
-    zfleet::protocol::AssetSnapshot request, proto::AgentEvent event,
+    zfleet::protocol::AssetSnapshot request, zfleet::protocol::AgentEvent event,
     boost::asio::any_io_executor completion_executor,
     std::function<void(std::exception_ptr)> completion) {
-  auto event_blob = SerializeProto(event);
+  auto event_blob = zfleet::protocol::SerializeAgentEventBlob(event);
   if (!SubmitWriteAsync(
           [request = std::move(request),
            event_blob = std::move(event_blob)](SQLite::Database& db) {
@@ -1359,8 +1282,9 @@ void ServerDatabase::AsyncEnqueueTask(
                 std::string(zfleet::protocol::ToString(task.capability_level)));
             statement.bind(6, task.created_at);
             statement.bind(7, task.expires_at);
-            BindBlob(statement, 8,
-                     SerializeTaskInputBlob(task.task_type, task.input));
+    BindBlob(statement, 8,
+             zfleet::protocol::SerializeTaskInputBlob(task.task_type,
+                                                      task.input));
             statement.bind(9, std::string(zfleet::protocol::ToString(
                                   zfleet::protocol::TaskState::queued)));
             statement.bind(10);
@@ -1742,8 +1666,9 @@ void ServerDatabase::ScheduleAgentUpgrade(
               std::string(zfleet::protocol::ToString(value.capability_level)));
           insert.bind(6, value.created_at);
           insert.bind(7, value.expires_at);
-          BindBlob(insert, 8,
-                   SerializeTaskInputBlob(value.task_type, value.input));
+            BindBlob(insert, 8,
+                     zfleet::protocol::SerializeTaskInputBlob(value.task_type,
+                                                              value.input));
           insert.bind(9, "queued");
           if (prerequisite_task_id.has_value()) {
             insert.bind(10, *prerequisite_task_id);

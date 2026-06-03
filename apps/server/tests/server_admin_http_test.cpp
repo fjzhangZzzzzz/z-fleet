@@ -9,10 +9,11 @@
 
 #include "test_util.h"
 
-#include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/archive.h"
 #include "zfleet/package/manifest.h"
+#include "zfleet/protocol/control_codec.h"
+#include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
@@ -40,6 +41,16 @@
 namespace {
 
 namespace proto = zfleet::protocol::v1;
+
+zfleet::protocol::AgentEvent ToDomainAgentEvent(const proto::AgentEvent& event) {
+  std::string bytes;
+  if (!event.SerializeToString(&bytes)) {
+    throw std::runtime_error("failed to serialize test agent event");
+  }
+  return zfleet::protocol::DecodeAgentEventPayload(
+      std::span<const std::uint8_t>{
+          reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+}
 
 std::string ReadAgentField(const std::filesystem::path& database_path,
                            const std::string& agent_id,
@@ -287,8 +298,8 @@ TEST_CASE("admin http server serves static UI and agent api") {
           .applications = {"cmake"},
           .services = {"zfleet-agent"},
       },
-      AssetSnapshotEvent("asset-http-1", "agent-http-1",
-                         "2026-05-24T10:00:00Z"));
+      ToDomainAgentEvent(AssetSnapshotEvent("asset-http-1", "agent-http-1",
+                                            "2026-05-24T10:00:00Z")));
   const auto web_root = test_root / "share" / "web";
   WriteWebStaticFiles(web_root);
 
@@ -572,8 +583,9 @@ TEST_CASE("admin http server uploads publishes and resolves package channel") {
           .arch = "x86_64",
           .agent_version = "0.1.0",
       },
-      AssetSnapshotEvent("asset-agent-upgrade-1", "agent-upgrade-1",
-                         "2026-05-24T10:00:00Z"));
+      ToDomainAgentEvent(AssetSnapshotEvent("asset-agent-upgrade-1",
+                                            "agent-upgrade-1",
+                                            "2026-05-24T10:00:00Z")));
 
   const auto archive_path =
       CreatePackageArchive(test_root.path(), "agent", "0.2.0", "release");

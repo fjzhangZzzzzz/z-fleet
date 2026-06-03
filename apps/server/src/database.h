@@ -1,7 +1,6 @@
 #pragma once
 
 #include "zfleet/protocol/message.h"
-#include "zfleet/protocol/v1/agent_control.pb.h"
 
 #include <boost/asio/any_io_executor.hpp>
 
@@ -119,7 +118,7 @@ class ServerStore {
                                 const std::string& disconnected_at) = 0;
   virtual void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
-      const zfleet::protocol::v1::AgentEvent& event) = 0;
+      const zfleet::protocol::AgentEvent& event) = 0;
   virtual void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) = 0;
   virtual void EnqueueTask(const zfleet::protocol::Task& task) = 0;
   virtual std::uint64_t TaskQueueVersion() const = 0;
@@ -158,7 +157,7 @@ class AsyncServerStore {
       std::function<void(std::exception_ptr)> completion) = 0;
   virtual void AsyncRecordAssetSnapshot(
       zfleet::protocol::AssetSnapshot request,
-      zfleet::protocol::v1::AgentEvent event,
+      zfleet::protocol::AgentEvent event,
       boost::asio::any_io_executor completion_executor,
       std::function<void(std::exception_ptr)> completion) = 0;
   virtual void AsyncRecordAuditEvent(
@@ -220,7 +219,7 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
                         const std::string& disconnected_at) override;
   void RecordAssetSnapshot(
       const zfleet::protocol::AssetSnapshot& request,
-      const zfleet::protocol::v1::AgentEvent& event) override;
+      const zfleet::protocol::AgentEvent& event) override;
   void RecordAuditEvent(const zfleet::protocol::AuditEvent& event) override;
   void EnqueueTask(const zfleet::protocol::Task& task) override;
   std::uint64_t TaskQueueVersion() const override;
@@ -296,7 +295,7 @@ class ServerDatabase final : public ServerStore, public AsyncServerStore {
       std::function<void(std::exception_ptr)> completion) override;
   void AsyncRecordAssetSnapshot(
       zfleet::protocol::AssetSnapshot request,
-      zfleet::protocol::v1::AgentEvent event,
+      zfleet::protocol::AgentEvent event,
       boost::asio::any_io_executor completion_executor,
       std::function<void(std::exception_ptr)> completion) override;
   void AsyncRecordAuditEvent(

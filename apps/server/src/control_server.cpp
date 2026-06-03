@@ -10,6 +10,7 @@
 #include <boost/asio/write.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <future>
 #include <map>
@@ -28,8 +29,8 @@
 #include "zfleet/core/log.h"
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
+#include "zfleet/protocol/control_codec.h"
 #include "zfleet/protocol/message.h"
-#include "zfleet/protocol/v1/agent_control.pb.h"
 #include "zfleet/transport/frame_codec.h"
 #include "zfleet/transport/nghttp2_compat.h"
 
@@ -37,7 +38,6 @@ namespace zfleet::server {
 namespace {
 
 using tcp = boost::asio::ip::tcp;
-namespace proto = zfleet::protocol::v1;
 
 constexpr std::size_t kReadBufferBytes = 16 * 1024;
 #define ZFLEET_NGHTTP2_NV(NAME, VALUE)                             \
@@ -125,74 +125,20 @@ StreamState* FindStream(ConnectionContext* context, std::int32_t stream_id) {
   return &stream->second;
 }
 
-proto::TaskType ToProtoTaskType(zfleet::protocol::TaskType type) {
-  switch (type) {
-    case zfleet::protocol::TaskType::collect_basic_inventory:
-      return proto::TASK_TYPE_COLLECT_BASIC_INVENTORY;
-    case zfleet::protocol::TaskType::package_update:
-      return proto::TASK_TYPE_PACKAGE_UPDATE;
-  }
-  return proto::TASK_TYPE_UNSPECIFIED;
-}
-
-proto::CapabilityLevel ToProtoCapabilityLevel(
-    zfleet::protocol::CapabilityLevel level) {
-  switch (level) {
-    case zfleet::protocol::CapabilityLevel::readonly:
-      return proto::CAPABILITY_LEVEL_READONLY;
-    case zfleet::protocol::CapabilityLevel::low_risk_write:
-      return proto::CAPABILITY_LEVEL_LOW_RISK_WRITE;
-    case zfleet::protocol::CapabilityLevel::high_risk_write:
-      return proto::CAPABILITY_LEVEL_HIGH_RISK_WRITE;
-    case zfleet::protocol::CapabilityLevel::shell:
-      return proto::CAPABILITY_LEVEL_SHELL;
-  }
-  return proto::CAPABILITY_LEVEL_UNSPECIFIED;
-}
-
 std::vector<std::uint8_t> EncodeCommandFrame(const zfleet::protocol::Task& task,
                                              std::string_view correlation_id) {
-  proto::ServerCommand command;
-  command.set_protocol_version(
-      std::string(zfleet::protocol::protocol_version()));
-  command.set_message_id(zfleet::core::GenerateUuid());
-  command.set_correlation_id(std::string(correlation_id));
-  command.set_agent_id(task.agent_id);
-  command.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  auto* assigned = command.mutable_task_assigned();
-  assigned->set_task_id(task.task_id);
-  assigned->set_task_type(ToProtoTaskType(task.task_type));
-  assigned->set_capability_level(ToProtoCapabilityLevel(task.capability_level));
-  assigned->set_created_at(task.created_at);
-  assigned->set_expires_at(task.expires_at);
-  if (std::holds_alternative<zfleet::protocol::CollectBasicInventoryInput>(
-          task.input)) {
-    assigned->mutable_collect_basic_inventory();
-  } else if (const auto* input =
-                 std::get_if<zfleet::protocol::PackageUpdateInput>(&task.input);
-             input != nullptr) {
-    auto* output = assigned->mutable_package_update();
-    output->set_action(input->action);
-    output->set_component(input->component);
-    output->set_package_id(input->package_id);
-    output->set_version(input->version);
-    output->set_platform(input->platform);
-    output->set_arch(input->arch);
-    output->set_build_type(input->build_type);
-    output->set_package_url(input->package_url);
-    output->set_package_sha256(input->package_sha256);
-    output->set_manifest_sha256(input->manifest_sha256);
-    output->set_min_installer_version(input->min_installer_version);
-    output->set_allow_downgrade(input->allow_downgrade);
-    output->set_force(input->force);
-  }
-
-  std::string bytes;
-  if (!command.SerializeToString(&bytes)) {
-    throw std::runtime_error("serialize server command failed");
-  }
-  return zfleet::transport::EncodeFrame(std::span<const std::uint8_t>{
-      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+  const auto payload = zfleet::protocol::EncodeServerCommandPayload(
+      zfleet::protocol::ServerCommand{
+          .protocol_version =
+              std::string(zfleet::protocol::protocol_version()),
+          .message_id = zfleet::core::GenerateUuid(),
+          .correlation_id = std::string(correlation_id),
+          .agent_id = task.agent_id,
+          .occurred_at = zfleet::core::NowUtcRfc3339(),
+          .payload = task,
+      });
+  return zfleet::transport::EncodeFrame(
+      std::span<const std::uint8_t>{payload.data(), payload.size()});
 }
 
 void SubmitSimpleResponse(nghttp2_session* session, std::int32_t stream_id,
@@ -945,11 +891,36 @@ ControlServer::ControlServer(std::string listen_address, ServerStore* store,
       service_(service),
       registry_(registry),
       options_(options),
-      worker_pool_(options_.worker_threads) {}
+      worker_pool_(options_.worker_threads) {
+  std::fprintf(stderr,
+               "[diag] ControlServer ctor this=%p sessions_addr=%p "
+               "sessions_data=%p size=%zu capacity=%zu stopping_addr=%p\n",
+               static_cast<void*>(this), static_cast<void*>(&sessions_),
+               static_cast<void*>(sessions_.data()), sessions_.size(),
+               sessions_.capacity(), static_cast<void*>(&stopping_));
+}
 
 ControlServer::~ControlServer() { Stop(); }
 
+ControlServer::ActiveSession::ActiveSession(
+    std::shared_ptr<void> session_value,
+    std::function<void()> stop_value,
+    std::shared_ptr<std::atomic_bool> done_value)
+    : session(std::move(session_value)),
+      stop(std::move(stop_value)),
+      done(std::move(done_value)) {
+  std::fprintf(stderr,
+               "[diag] ActiveSession ctor this=%p session=%p done=%p\n",
+               static_cast<void*>(this), session.get(), done.get());
+}
+
 void ControlServer::Run() {
+  std::fprintf(stderr,
+               "[diag] Run begin this=%p sessions_addr=%p sessions_data=%p "
+               "size=%zu capacity=%zu stopping_addr=%p\n",
+               static_cast<void*>(this), static_cast<void*>(&sessions_),
+               static_cast<void*>(sessions_.data()), sessions_.size(),
+               sessions_.capacity(), static_cast<void*>(&stopping_));
   if (store_ == nullptr) {
     throw std::invalid_argument("server store must not be null");
   }
@@ -1047,6 +1018,12 @@ void ControlServer::StartAccept() {
 }
 
 void ControlServer::StartAcceptOnStrand() {
+  std::fprintf(stderr,
+               "[diag] StartAcceptOnStrand this=%p sessions_addr=%p "
+               "sessions_data=%p size=%zu capacity=%zu stopping=%d\n",
+               static_cast<void*>(this), static_cast<void*>(&sessions_),
+               static_cast<void*>(sessions_.data()), sessions_.size(),
+               sessions_.capacity(), stopping_.load() ? 1 : 0);
   if (stopping_.load() || !acceptor_.is_open()) {
     return;
   }
@@ -1073,11 +1050,21 @@ void ControlServer::StartAcceptOnStrand() {
       } else {
         auto session = std::make_shared<Http2Session>(
             socket_ptr, store_, service_, registry_, &worker_pool_, done);
-        sessions_.push_back(ActiveSession{
-            .session = session,
-            .stop = [session]() { session->Stop(); },
-            .done = done,
-        });
+        std::fprintf(stderr,
+                     "[diag] before push this=%p sessions_data=%p size=%zu "
+                     "capacity=%zu session=%p done=%p\n",
+                     static_cast<void*>(this),
+                     static_cast<void*>(sessions_.data()), sessions_.size(),
+                     sessions_.capacity(), session.get(), done.get());
+        sessions_.push_back(ActiveSession(
+            session, [session]() { session->Stop(); }, done));
+        std::fprintf(stderr,
+                     "[diag] after push this=%p sessions_data=%p size=%zu "
+                     "capacity=%zu back_session=%p back_done=%p\n",
+                     static_cast<void*>(this),
+                     static_cast<void*>(sessions_.data()), sessions_.size(),
+                     sessions_.capacity(), sessions_.back().session.get(),
+                     sessions_.back().done.get());
         session->Start();
       }
     }

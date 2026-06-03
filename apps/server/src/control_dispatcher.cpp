@@ -2,8 +2,9 @@
 
 #include <exception>
 #include <utility>
+#include <variant>
 
-#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/protocol/control_codec.h"
 
 namespace zfleet::server {
 namespace {
@@ -36,14 +37,21 @@ std::vector<ControlEventResult> ControlDispatcher::PushEventBytes(
     return {InvalidArgument(ex.what())};
   }
 
-  std::vector<ControlEventResult> results;
-  results.reserve(frames.size());
+  std::vector<zfleet::protocol::AgentEvent> events;
+  events.reserve(frames.size());
   for (const auto& frame : frames) {
-    zfleet::protocol::v1::AgentEvent event;
-    if (!event.ParseFromArray(frame.data(), static_cast<int>(frame.size()))) {
-      results.push_back(InvalidArgument("invalid protobuf agent event"));
-      continue;
+    try {
+      events.push_back(zfleet::protocol::DecodeAgentEventPayload(
+          std::span<const std::uint8_t>{frame.data(), frame.size()}));
+    } catch (const std::exception& ex) {
+      events.clear();
+      return {InvalidArgument(ex.what())};
     }
+  }
+
+  std::vector<ControlEventResult> results;
+  results.reserve(events.size());
+  for (const auto& event : events) {
     auto result = service_->HandleAgentEvent(event);
     if (result.status == ControlEventStatus::kAccepted) {
       RecordAcceptedEvent(event);
@@ -54,22 +62,23 @@ std::vector<ControlEventResult> ControlDispatcher::PushEventBytes(
 }
 
 void ControlDispatcher::RecordAcceptedEvent(
-    const zfleet::protocol::v1::AgentEvent& event) const {
+    const zfleet::protocol::AgentEvent& event) const {
   if (registry_ == nullptr || connection_id_.empty()) {
     return;
   }
 
-  switch (event.payload_case()) {
-    case zfleet::protocol::v1::AgentEvent::kRegister:
-      registry_->BindAgent(connection_id_, event.agent_id(),
-                           event.occurred_at());
-      return;
-    case zfleet::protocol::v1::AgentEvent::kHeartbeat:
-      registry_->RecordHeartbeat(connection_id_, event.agent_id(),
-                                 event.occurred_at());
-      return;
-    default:
-      return;
+  if (std::holds_alternative<zfleet::protocol::AgentRegistration>(
+          event.payload)) {
+    registry_->BindAgent(
+        connection_id_,
+        std::string(zfleet::protocol::AgentEventAgentId(event)),
+        std::string(zfleet::protocol::AgentEventOccurredAt(event)));
+  } else if (std::holds_alternative<zfleet::protocol::AgentHeartbeat>(
+                 event.payload)) {
+    registry_->RecordHeartbeat(
+        connection_id_,
+        std::string(zfleet::protocol::AgentEventAgentId(event)),
+        std::string(zfleet::protocol::AgentEventOccurredAt(event)));
   }
 }
 

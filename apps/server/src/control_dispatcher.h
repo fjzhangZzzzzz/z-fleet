@@ -22,7 +22,7 @@ class ControlDispatcher {
       std::span<const std::uint8_t> bytes);
 
  private:
-  void RecordAcceptedEvent(const zfleet::protocol::v1::AgentEvent& event) const;
+  void RecordAcceptedEvent(const zfleet::protocol::AgentEvent& event) const;
 
   const ControlService* service_;
   ControlConnectionRegistry* registry_;

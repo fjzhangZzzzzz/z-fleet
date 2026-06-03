@@ -11,19 +11,19 @@
 #include "zfleet/core/time.h"
 #include "zfleet/core/uuid.h"
 #include "zfleet/crypto/sha256.h"
+#include "zfleet/protocol/control_codec.h"
 #include "zfleet/protocol/json_codec.h"
 
 namespace zfleet::server {
 namespace {
 
-namespace proto = zfleet::protocol::v1;
-
 zfleet::core::log::Context EventLogger(std::string_view route,
-                                       const proto::AgentEvent& event) {
+                                       const zfleet::protocol::AgentEvent& event) {
   return zfleet::core::log::Component("server").With(
       {{"route", route},
-       {"request_id", event.message_id()},
-       {"agent_id", event.agent_id()}});
+       {"request_id",
+        std::string(zfleet::protocol::AgentEventRequestId(event))},
+       {"agent_id", std::string(zfleet::protocol::AgentEventAgentId(event))}});
 }
 
 ControlEventResult Accepted(std::string message) {
@@ -54,81 +54,6 @@ ControlEventResult InternalError() {
   };
 }
 
-std::optional<zfleet::protocol::TaskType> ToDomainTaskType(
-    proto::TaskType type) {
-  switch (type) {
-    case proto::TASK_TYPE_COLLECT_BASIC_INVENTORY:
-      return zfleet::protocol::TaskType::collect_basic_inventory;
-    case proto::TASK_TYPE_PACKAGE_UPDATE:
-      return zfleet::protocol::TaskType::package_update;
-    case proto::TASK_TYPE_UNSPECIFIED:
-      return std::nullopt;
-  }
-  return std::nullopt;
-}
-
-std::optional<zfleet::protocol::TaskExecutionStatus> ToDomainStatus(
-    proto::TaskExecutionStatus status) {
-  switch (status) {
-    case proto::TASK_EXECUTION_STATUS_SUCCEEDED:
-      return zfleet::protocol::TaskExecutionStatus::succeeded;
-    case proto::TASK_EXECUTION_STATUS_FAILED:
-      return zfleet::protocol::TaskExecutionStatus::failed;
-    case proto::TASK_EXECUTION_STATUS_EXPIRED:
-      return zfleet::protocol::TaskExecutionStatus::expired;
-    case proto::TASK_EXECUTION_STATUS_UNSPECIFIED:
-      return std::nullopt;
-  }
-  return std::nullopt;
-}
-
-std::optional<zfleet::protocol::ErrorCode> ToDomainErrorCode(
-    proto::ErrorCode code) {
-  switch (code) {
-    case proto::ERROR_CODE_AGENT_NOT_REGISTERED:
-      return zfleet::protocol::ErrorCode::agent_not_registered;
-    case proto::ERROR_CODE_INTERNAL_ERROR:
-      return zfleet::protocol::ErrorCode::internal_error;
-    case proto::ERROR_CODE_TASK_NOT_FOUND:
-      return zfleet::protocol::ErrorCode::task_not_found;
-    case proto::ERROR_CODE_TASK_ALREADY_FINISHED:
-      return zfleet::protocol::ErrorCode::task_already_finished;
-    case proto::ERROR_CODE_TASK_EXPIRED:
-      return zfleet::protocol::ErrorCode::task_expired;
-    case proto::ERROR_CODE_UNSUPPORTED_TASK_TYPE:
-      return zfleet::protocol::ErrorCode::unsupported_task_type;
-    case proto::ERROR_CODE_CAPABILITY_NOT_ALLOWED:
-      return zfleet::protocol::ErrorCode::capability_not_allowed;
-    case proto::ERROR_CODE_PACKAGE_NOT_FOUND:
-      return zfleet::protocol::ErrorCode::package_not_found;
-    case proto::ERROR_CODE_PACKAGE_RETIRED:
-      return zfleet::protocol::ErrorCode::package_retired;
-    case proto::ERROR_CODE_PLATFORM_ARCH_MISMATCH:
-      return zfleet::protocol::ErrorCode::platform_arch_mismatch;
-    case proto::ERROR_CODE_BUILD_TYPE_NOT_ALLOWED:
-      return zfleet::protocol::ErrorCode::build_type_not_allowed;
-    case proto::ERROR_CODE_INSTALLER_TOO_OLD:
-      return zfleet::protocol::ErrorCode::installer_too_old;
-    case proto::ERROR_CODE_DOWNLOAD_FAILED:
-      return zfleet::protocol::ErrorCode::download_failed;
-    case proto::ERROR_CODE_CHECKSUM_MISMATCH:
-      return zfleet::protocol::ErrorCode::checksum_mismatch;
-    case proto::ERROR_CODE_APPLY_FAILED:
-      return zfleet::protocol::ErrorCode::apply_failed;
-    case proto::ERROR_CODE_START_NEW_AGENT_FAILED:
-      return zfleet::protocol::ErrorCode::start_new_agent_failed;
-    case proto::ERROR_CODE_WAITING_RECONNECT_TIMEOUT:
-      return zfleet::protocol::ErrorCode::waiting_reconnect_timeout;
-    case proto::ERROR_CODE_AGENT_REPORTED_UNEXPECTED_VERSION:
-      return zfleet::protocol::ErrorCode::agent_reported_unexpected_version;
-    case proto::ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION:
-      return zfleet::protocol::ErrorCode::unsupported_protocol_version;
-    case proto::ERROR_CODE_UNSPECIFIED:
-      return std::nullopt;
-  }
-  return std::nullopt;
-}
-
 zfleet::protocol::AuditEventType AuditEventForTaskResult(
     zfleet::protocol::TaskExecutionStatus status) {
   switch (status) {
@@ -142,63 +67,45 @@ zfleet::protocol::AuditEventType AuditEventForTaskResult(
   return zfleet::protocol::AuditEventType::task_failed;
 }
 
-template <typename Message>
-std::string SerializeProto(const Message& message) {
-  std::string bytes;
-  if (!message.SerializeToString(&bytes)) {
-    throw std::runtime_error("failed to serialize protobuf message");
-  }
-  return bytes;
-}
-
 }  // namespace
 
 ControlService::ControlService(ServerStore* store) : store_(store) {}
 
 ControlEventResult ControlService::HandleAgentEvent(
-    const proto::AgentEvent& event) const {
+    const zfleet::protocol::AgentEvent& event) const {
   const auto validation = ValidateEnvelope(event);
   if (validation.status != ControlEventStatus::kAccepted) {
     return validation;
   }
 
-  switch (event.payload_case()) {
-    case proto::AgentEvent::kRegister:
-      return HandleRegister(event);
-    case proto::AgentEvent::kHeartbeat:
-      return HandleHeartbeat(event);
-    case proto::AgentEvent::kAssetSnapshot:
-      return HandleAssetSnapshot(event);
-    case proto::AgentEvent::kTaskRunning:
-      return HandleTaskRunning(event);
-    case proto::AgentEvent::kTaskResult:
-      return HandleTaskResult(event);
-    case proto::AgentEvent::PAYLOAD_NOT_SET:
-      return InvalidArgument("event payload must be set");
-    default:
-      return InvalidArgument("unsupported agent event payload");
-  }
+  return std::visit(
+      [&](const auto& payload) {
+        using Payload = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<Payload,
+                                     zfleet::protocol::AgentRegistration>) {
+          return HandleRegister(payload, event);
+        } else if constexpr (std::is_same_v<
+                                 Payload, zfleet::protocol::AgentHeartbeat>) {
+          return HandleHeartbeat(payload, event);
+        } else if constexpr (std::is_same_v<
+                                 Payload, zfleet::protocol::AssetSnapshot>) {
+          return HandleAssetSnapshot(payload, event);
+        } else if constexpr (std::is_same_v<Payload,
+                                            zfleet::protocol::TaskRunning>) {
+          return HandleTaskRunning(payload, event);
+        } else {
+          return HandleTaskResult(payload, event);
+        }
+      },
+      event.payload);
 }
 
 ControlEventResult ControlService::HandleTaskRunning(
-    const proto::AgentEvent& event) const {
-  const auto& running = event.task_running();
-  const auto task_type = ToDomainTaskType(running.task_type());
-  if (!task_type.has_value()) {
-    return InvalidArgument("unsupported task type");
-  }
-  if (running.task_id().empty()) {
+    const zfleet::protocol::TaskRunning& request,
+    const zfleet::protocol::AgentEvent& event) const {
+  if (request.task_id.empty()) {
     return InvalidArgument("task_id must not be empty");
   }
-
-  const zfleet::protocol::TaskRunning request{
-      .protocol_version = event.protocol_version(),
-      .request_id = event.message_id(),
-      .task_id = running.task_id(),
-      .agent_id = event.agent_id(),
-      .task_type = *task_type,
-      .occurred_at = event.occurred_at(),
-  };
 
   try {
     const auto stored_task = store_->FindTaskById(request.task_id);
@@ -239,68 +146,25 @@ ControlEventResult ControlService::HandleTaskRunning(
 }
 
 ControlEventResult ControlService::HandleTaskResult(
-    const proto::AgentEvent& event) const {
-  const auto& result = event.task_result();
-  const auto task_type = ToDomainTaskType(result.task_type());
-  const auto status = ToDomainStatus(result.status());
-  if (!task_type.has_value()) {
-    return InvalidArgument("unsupported task type");
-  }
-  if (!status.has_value()) {
-    return InvalidArgument("unsupported task result status");
-  }
-  if (result.task_id().empty()) {
+    const zfleet::protocol::TaskResult& request,
+    const zfleet::protocol::AgentEvent& event) const {
+  if (request.task_id.empty()) {
     return InvalidArgument("task_id must not be empty");
   }
 
-  zfleet::protocol::TaskResult request{
-      .protocol_version = event.protocol_version(),
-      .request_id = event.message_id(),
-      .task_id = result.task_id(),
-      .agent_id = event.agent_id(),
-      .task_type = *task_type,
-      .occurred_at = event.occurred_at(),
-      .status = *status,
-      .result = std::nullopt,
-      .error = std::nullopt,
-  };
-
   std::optional<std::string> result_blob;
   std::optional<std::string> error_blob;
-  if (*status == zfleet::protocol::TaskExecutionStatus::succeeded) {
-    if (*task_type == zfleet::protocol::TaskType::collect_basic_inventory) {
-      const zfleet::protocol::CollectBasicInventoryResult inventory{
-          .hostname = result.collect_basic_inventory().hostname(),
-          .os = result.collect_basic_inventory().os(),
-          .arch = result.collect_basic_inventory().arch(),
-          .agent_version = result.collect_basic_inventory().agent_version(),
-      };
-      request.result = inventory;
-      result_blob = SerializeProto(result.collect_basic_inventory());
-    } else {
-      const zfleet::protocol::PackageUpdateResult update{
-          .component = result.package_update().component(),
-          .package_id = result.package_update().package_id(),
-          .version = result.package_update().version(),
-          .state = result.package_update().state(),
-          .error_code = result.package_update().error_code(),
-          .error_message = result.package_update().error_message(),
-      };
-      request.result = update;
-      result_blob = SerializeProto(result.package_update());
+  if (request.status == zfleet::protocol::TaskExecutionStatus::succeeded) {
+    if (!request.result.has_value()) {
+      return InvalidArgument("task result payload must be set");
     }
+    result_blob = zfleet::protocol::SerializeTaskResultDataBlob(
+        *request.result);
   } else {
-    const auto error_code = ToDomainErrorCode(result.error().code());
-    if (!error_code.has_value()) {
+    if (!request.error.has_value()) {
       return InvalidArgument("task error code must be set");
     }
-    const zfleet::protocol::TaskError error{
-        .error_code = *error_code,
-        .message = result.error().message(),
-        .retryable = result.error().retryable(),
-    };
-    request.error = error;
-    error_blob = SerializeProto(result.error());
+    error_blob = zfleet::protocol::SerializeTaskErrorBlob(*request.error);
   }
 
   try {
@@ -341,40 +205,26 @@ ControlEventResult ControlService::HandleTaskResult(
 }
 
 ControlEventResult ControlService::ValidateEnvelope(
-    const proto::AgentEvent& event) const {
-  if (event.protocol_version() != zfleet::protocol::protocol_version()) {
+    const zfleet::protocol::AgentEvent& event) const {
+  if (zfleet::protocol::AgentEventProtocolVersion(event) !=
+      zfleet::protocol::protocol_version()) {
     return InvalidArgument("unsupported protocol version");
   }
-  if (event.message_id().empty()) {
+  if (zfleet::protocol::AgentEventRequestId(event).empty()) {
     return InvalidArgument("message_id must not be empty");
   }
-  if (event.agent_id().empty()) {
+  if (zfleet::protocol::AgentEventAgentId(event).empty()) {
     return InvalidArgument("agent_id must not be empty");
   }
-  if (event.occurred_at().empty()) {
+  if (zfleet::protocol::AgentEventOccurredAt(event).empty()) {
     return InvalidArgument("occurred_at must not be empty");
   }
   return Accepted("accepted");
 }
 
 ControlEventResult ControlService::HandleRegister(
-    const proto::AgentEvent& event) const {
-  const auto& registration = event.register_();
-  const zfleet::protocol::AgentRegistration request{
-      .protocol_version = event.protocol_version(),
-      .request_id = event.message_id(),
-      .agent_id = event.agent_id(),
-      .occurred_at = event.occurred_at(),
-      .agent_version = registration.agent_version(),
-      .hostname = registration.hostname(),
-      .os = registration.os(),
-      .arch = registration.arch(),
-      .registration_token =
-          registration.registration_token().empty()
-              ? std::optional<std::string>{}
-              : std::optional<std::string>{registration.registration_token()},
-  };
-
+    const zfleet::protocol::AgentRegistration& request,
+    const zfleet::protocol::AgentEvent& event) const {
   try {
     bool token_used = false;
     if (!store_->AgentExists(request.agent_id) &&
@@ -451,16 +301,8 @@ ControlEventResult ControlService::HandleRegister(
 }
 
 ControlEventResult ControlService::HandleHeartbeat(
-    const proto::AgentEvent& event) const {
-  const auto& heartbeat = event.heartbeat();
-  const zfleet::protocol::AgentHeartbeat request{
-      .protocol_version = event.protocol_version(),
-      .request_id = event.message_id(),
-      .agent_id = event.agent_id(),
-      .occurred_at = event.occurred_at(),
-      .agent_version = heartbeat.agent_version(),
-  };
-
+    const zfleet::protocol::AgentHeartbeat& request,
+    const zfleet::protocol::AgentEvent& event) const {
   try {
     if (!store_->AgentExists(request.agent_id)) {
       return NotFound("agent not registered");
@@ -477,25 +319,8 @@ ControlEventResult ControlService::HandleHeartbeat(
 }
 
 ControlEventResult ControlService::HandleAssetSnapshot(
-    const proto::AgentEvent& event) const {
-  const auto& snapshot = event.asset_snapshot();
-  const zfleet::protocol::AssetSnapshot request{
-      .protocol_version = event.protocol_version(),
-      .request_id = event.message_id(),
-      .agent_id = event.agent_id(),
-      .occurred_at = event.occurred_at(),
-      .hostname = snapshot.hostname(),
-      .os = snapshot.os(),
-      .os_version = snapshot.os_version().empty()
-                        ? std::optional<std::string>{}
-                        : std::optional<std::string>{snapshot.os_version()},
-      .arch = snapshot.arch(),
-      .agent_version = snapshot.agent_version(),
-      .applications = {snapshot.applications().begin(),
-                       snapshot.applications().end()},
-      .services = {snapshot.services().begin(), snapshot.services().end()},
-  };
-
+    const zfleet::protocol::AssetSnapshot& request,
+    const zfleet::protocol::AgentEvent& event) const {
   try {
     if (!store_->AgentExists(request.agent_id)) {
       RecordAuditEvent(

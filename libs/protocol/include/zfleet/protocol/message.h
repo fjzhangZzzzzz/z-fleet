@@ -204,6 +204,31 @@ struct TaskResult {
   std::optional<TaskError> error;
 };
 
+using AgentEventPayload =
+    std::variant<AgentRegistration, AgentHeartbeat, AssetSnapshot, TaskRunning,
+                 TaskResult>;
+
+struct AgentEvent {
+  AgentEventPayload payload;
+};
+
+struct ServerError {
+  ErrorCode error_code;
+  std::string message;
+  bool retryable;
+};
+
+using ServerCommandPayload = std::variant<Task, ServerError>;
+
+struct ServerCommand {
+  std::string protocol_version;
+  std::string message_id;
+  std::string correlation_id;
+  std::string agent_id;
+  std::string occurred_at;
+  ServerCommandPayload payload;
+};
+
 std::string_view protocol_version() noexcept;
 std::string_view ToString(ErrorCode code) noexcept;
 std::string_view ToString(AuditEventType type) noexcept;
@@ -226,5 +251,10 @@ bool IsTerminalTaskState(TaskState state) noexcept;
 bool CanTransitionTaskState(TaskState from, TaskState to) noexcept;
 CapabilityLevel RequiredCapabilityForTaskType(TaskType task_type) noexcept;
 bool TaskInputMatchesType(TaskType task_type, const TaskInput& input) noexcept;
+
+std::string_view AgentEventProtocolVersion(const AgentEvent& event) noexcept;
+std::string_view AgentEventRequestId(const AgentEvent& event) noexcept;
+std::string_view AgentEventAgentId(const AgentEvent& event) noexcept;
+std::string_view AgentEventOccurredAt(const AgentEvent& event) noexcept;
 
 } // namespace zfleet::protocol

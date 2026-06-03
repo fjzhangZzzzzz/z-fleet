@@ -19,6 +19,7 @@ namespace proto = zfleet::protocol::v1;
 
 using zfleet::test::AssetSnapshotEvent;
 using zfleet::test::CountRows;
+using zfleet::test::DomainAgentEvent;
 using zfleet::test::HeartbeatEvent;
 using zfleet::test::ReadAgentField;
 using zfleet::test::ReadAuditField;
@@ -43,10 +44,12 @@ TEST_CASE("control service stores task running and result events") {
               .has_value());
   const zfleet::server::ControlService service(&database);
 
-  const auto running_result = service.HandleAgentEvent(TaskRunningEvent(
-      "task-running-1", "agent-1", "task-1", "2026-05-21T10:00:02Z"));
-  const auto result_result = service.HandleAgentEvent(TaskSucceededEvent(
-      "task-result-1", "agent-1", "task-1", "2026-05-21T10:00:03Z"));
+  const auto running_result = service.HandleAgentEvent(DomainAgentEvent(
+      TaskRunningEvent("task-running-1", "agent-1", "task-1",
+                       "2026-05-21T10:00:02Z")));
+  const auto result_result = service.HandleAgentEvent(DomainAgentEvent(
+      TaskSucceededEvent("task-result-1", "agent-1", "task-1",
+                         "2026-05-21T10:00:03Z")));
 
   REQUIRE(running_result.status ==
           zfleet::server::ControlEventStatus::kAccepted);
@@ -75,8 +78,9 @@ TEST_CASE("control service stores task running and result events") {
   REQUIRE(stored_result.hostname() == "devbox-01");
   REQUIRE(ReadTaskResultBlob(database_path, "task-1", "error_blob").empty());
 
-  const auto repeated_result = service.HandleAgentEvent(TaskSucceededEvent(
-      "task-result-1-repeat", "agent-1", "task-1", "2026-05-21T10:00:04Z"));
+  const auto repeated_result = service.HandleAgentEvent(DomainAgentEvent(
+      TaskSucceededEvent("task-result-1-repeat", "agent-1", "task-1",
+                         "2026-05-21T10:00:04Z")));
   REQUIRE(repeated_result.status ==
           zfleet::server::ControlEventStatus::kInvalidArgument);
   REQUIRE(repeated_result.message == "task already finished");
@@ -96,13 +100,13 @@ TEST_CASE("control service stores failed task error columns and blob") {
   const zfleet::server::ControlService service(&database);
 
   REQUIRE(service
-              .HandleAgentEvent(TaskRunningEvent("task-running-failed-1",
-                                                 "agent-1", "task-failed-1",
-                                                 "2026-05-21T10:00:02Z"))
+              .HandleAgentEvent(DomainAgentEvent(TaskRunningEvent(
+                  "task-running-failed-1", "agent-1", "task-failed-1",
+                  "2026-05-21T10:00:02Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
-  const auto result = service.HandleAgentEvent(
+  const auto result = service.HandleAgentEvent(DomainAgentEvent(
       TaskFailedEvent("task-result-failed-1", "agent-1", "task-failed-1",
-                      "2026-05-21T10:00:03Z"));
+                      "2026-05-21T10:00:03Z")));
 
   REQUIRE(result.status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(ReadTaskField(database_path, "task-failed-1", "state") == "failed");
@@ -133,12 +137,12 @@ TEST_CASE("control service registers agent and accepts heartbeat") {
   const zfleet::server::ControlService service(&database);
 
   REQUIRE(service
-              .HandleAgentEvent(RegisterEvent("register-1", "agent-1",
-                                              "2026-05-21T10:00:00Z"))
+              .HandleAgentEvent(DomainAgentEvent(RegisterEvent(
+                  "register-1", "agent-1", "2026-05-21T10:00:00Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(service
-              .HandleAgentEvent(HeartbeatEvent("heartbeat-1", "agent-1",
-                                               "2026-05-21T10:05:00Z"))
+              .HandleAgentEvent(DomainAgentEvent(HeartbeatEvent(
+                  "heartbeat-1", "agent-1", "2026-05-21T10:05:00Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(database.AgentExists("agent-1"));
   REQUIRE(CountRows(database_path, "audit_events") == 1);
@@ -153,8 +157,8 @@ TEST_CASE("control service stores asset snapshot display columns and blob") {
   const zfleet::server::ControlService service(&database);
 
   REQUIRE(service
-              .HandleAgentEvent(AssetSnapshotEvent("asset-1", "agent-1",
-                                                   "2026-05-21T10:10:00Z"))
+              .HandleAgentEvent(DomainAgentEvent(AssetSnapshotEvent(
+                  "asset-1", "agent-1", "2026-05-21T10:10:00Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   const auto latest = database.FindLatestAssetSnapshot("agent-1");
   REQUIRE(latest.has_value());
@@ -185,13 +189,15 @@ TEST_CASE("control service consumes scoped registration tokens") {
 
   REQUIRE(service
               .HandleAgentEvent(
+                  DomainAgentEvent(
                   RegisterEvent("token-register-1", "agent-token-1",
-                                "2026-05-21T10:00:00Z", "register-once"))
+                                "2026-05-21T10:00:00Z", "register-once")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(service
               .HandleAgentEvent(
+                  DomainAgentEvent(
                   RegisterEvent("token-register-2", "agent-token-2",
-                                "2026-05-21T10:00:01Z", "register-once"))
+                                "2026-05-21T10:00:01Z", "register-once")))
               .status == zfleet::server::ControlEventStatus::kInvalidArgument);
   REQUIRE(database.AgentExists("agent-token-1"));
   REQUIRE_FALSE(database.AgentExists("agent-token-2"));
@@ -213,13 +219,11 @@ TEST_CASE("control service rejects invalid and unregistered events") {
   missing_payload.set_agent_id("agent-1");
   missing_payload.set_occurred_at("2026-05-21T10:00:00Z");
 
-  const auto missing_payload_result = service.HandleAgentEvent(missing_payload);
-  const auto heartbeat_result = service.HandleAgentEvent(HeartbeatEvent(
-      "http2-unregistered-heartbeat", "agent-1", "2026-05-21T10:00:05Z"));
+  const auto heartbeat_result = service.HandleAgentEvent(DomainAgentEvent(
+      HeartbeatEvent("http2-unregistered-heartbeat", "agent-1",
+                     "2026-05-21T10:00:05Z")));
 
-  REQUIRE(missing_payload_result.status ==
-          zfleet::server::ControlEventStatus::kInvalidArgument);
-  REQUIRE(missing_payload_result.message == "event payload must be set");
+  REQUIRE_THROWS(DomainAgentEvent(missing_payload));
   REQUIRE(heartbeat_result.status ==
           zfleet::server::ControlEventStatus::kNotFound);
   REQUIRE(heartbeat_result.message == "agent not registered");

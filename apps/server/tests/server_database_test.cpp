@@ -7,13 +7,16 @@
 #include "zfleet/crypto/sha256.h"
 #include "zfleet/package/archive.h"
 #include "zfleet/package/manifest.h"
+#include "zfleet/protocol/control_codec.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -48,6 +51,14 @@ proto::AgentEvent AssetSnapshotEvent(std::string message_id,
   payload->add_applications("ninja");
   payload->add_services("zfleet-agent");
   return event;
+}
+
+zfleet::protocol::AgentEvent DomainAgentEvent(const proto::AgentEvent& event) {
+  std::string bytes;
+  REQUIRE(event.SerializeToString(&bytes));
+  return zfleet::protocol::DecodeAgentEventPayload(
+      std::span<const std::uint8_t>{
+          reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
 }
 
 void SeedAgent(zfleet::server::ServerDatabase* database,
@@ -109,7 +120,8 @@ TEST_CASE("server database exposes web admin read models") {
           .applications = {"cmake", "ninja"},
           .services = {"zfleet-agent"},
       },
-      AssetSnapshotEvent("asset-web-1", "agent-web-1", "2026-05-24T10:00:00Z"));
+      DomainAgentEvent(AssetSnapshotEvent("asset-web-1", "agent-web-1",
+                                          "2026-05-24T10:00:00Z")));
 
   const auto agents = database.ListAgents();
   REQUIRE(agents.size() == 1);

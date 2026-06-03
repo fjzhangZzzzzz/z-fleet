@@ -6,9 +6,35 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 usage() {
   cat >&2 <<'EOF'
 Usage:
+  ./scripts/check.sh boundaries
   ./scripts/check.sh binaries --preset <triplet-build_type>
   ./scripts/check.sh packages --platform <linux|windows> --arch <arch> --build-type <debug|release> [--allow-partial] <package.zip> [<package.zip>...]
 EOF
+}
+
+normalize_path() {
+  local path="$1"
+  path="${path#./}"
+  printf '%s\n' "${path//\\//}"
+}
+
+report_violation() {
+  local title="$1"
+  shift
+  zf_log "$title"
+  for item in "$@"; do
+    zf_log "  - $(normalize_path "$item")"
+  done
+}
+
+collect_rg_files() {
+  local pattern="$1"
+  shift
+  local files=()
+  if ! mapfile -t files < <(cd "$ZF_REPO_ROOT" && rg -l "$pattern" "$@" 2>/dev/null); then
+    return 0
+  fi
+  printf '%s\n' "${files[@]}"
 }
 
 zf_file_arch_matches() {
@@ -36,6 +62,55 @@ zf_file_arch_matches() {
       return 1
       ;;
   esac
+}
+
+check_boundaries() {
+  local failed=0
+  local files=()
+  local violations=()
+
+  mapfile -t files < <(
+    collect_rg_files \
+      'agent_control\.pb\.h|zfleet::protocol::v1|namespace proto = zfleet::protocol::v1' \
+      apps libs \
+      --glob '!**/tests/**' \
+      --glob '!libs/protocol/**'
+  )
+  violations=()
+  for file in "${files[@]}"; do
+    [[ -z "$file" ]] && continue
+    violations+=("$file")
+  done
+  if [[ ${#violations[@]} -gt 0 ]]; then
+    report_violation \
+      "protobuf generated types leaked outside libs/protocol wire boundary:" \
+      "${violations[@]}"
+    failed=1
+  fi
+
+  mapfile -t files < <(
+    collect_rg_files \
+      'agent_control\.pb\.h|nlohmann/json\.hpp|nlohmann::json|toml\+\+|toml.hpp|SQLite::|sqlite3' \
+      libs \
+      --glob 'include/**'
+  )
+  violations=()
+  for file in "${files[@]}"; do
+    [[ -z "$file" ]] && continue
+    violations+=("$file")
+  done
+  if [[ ${#violations[@]} -gt 0 ]]; then
+    report_violation \
+      "external representation types leaked into public library headers:" \
+      "${violations[@]}"
+    failed=1
+  fi
+
+  if [[ "$failed" -ne 0 ]]; then
+    zf_fail_exec "boundary check failed; follow ADR 0018"
+  fi
+
+  zf_log "boundary check passed"
 }
 
 check_binaries() {
@@ -340,6 +415,9 @@ main() {
   shift
 
   case "$command" in
+    boundaries)
+      check_boundaries "$@"
+      ;;
     binaries)
       check_binaries "$@"
       ;;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/protocol/message.h"
 #include "zfleet/transport/frame_codec.h"
 
 #include <cstdint>
@@ -9,7 +9,7 @@
 
 namespace zfleet::agent {
 
-std::vector<zfleet::protocol::v1::ServerCommand> DecodeServerCommands(
+std::vector<zfleet::protocol::ServerCommand> DecodeServerCommands(
     zfleet::transport::FrameDecoder* decoder,
     std::span<const std::uint8_t> bytes);
 

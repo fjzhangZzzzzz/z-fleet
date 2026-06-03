@@ -1,10 +1,12 @@
 #include "command_decoder.h"
 
+#include "zfleet/protocol/control_codec.h"
+
 #include <stdexcept>
 
 namespace zfleet::agent {
 
-std::vector<zfleet::protocol::v1::ServerCommand> DecodeServerCommands(
+std::vector<zfleet::protocol::ServerCommand> DecodeServerCommands(
     zfleet::transport::FrameDecoder* decoder,
     std::span<const std::uint8_t> bytes) {
   if (decoder == nullptr) {
@@ -12,14 +14,11 @@ std::vector<zfleet::protocol::v1::ServerCommand> DecodeServerCommands(
   }
 
   const auto frames = decoder->Push(bytes);
-  std::vector<zfleet::protocol::v1::ServerCommand> commands;
+  std::vector<zfleet::protocol::ServerCommand> commands;
   commands.reserve(frames.size());
   for (const auto& frame : frames) {
-    zfleet::protocol::v1::ServerCommand command;
-    if (!command.ParseFromArray(frame.data(), static_cast<int>(frame.size()))) {
-      throw std::runtime_error("failed to parse server command");
-    }
-    commands.push_back(std::move(command));
+    commands.push_back(zfleet::protocol::DecodeServerCommandPayload(
+        std::span<const std::uint8_t>{frame.data(), frame.size()}));
   }
   return commands;
 }

@@ -12,6 +12,7 @@
 namespace {
 
 using zfleet::test::ReadAgentField;
+using zfleet::test::DomainAgentEvent;
 using zfleet::test::RegisterEvent;
 using zfleet::test::SeedAgent;
 
@@ -44,9 +45,9 @@ TEST_CASE("agent reconnect confirms desired package version") {
       });
   const zfleet::server::ControlService service(&database);
   REQUIRE(service
-              .HandleAgentEvent(RegisterEvent("reconnect-before-apply",
-                                              "agent-upgrade-confirm",
-                                              "2026-05-24T10:00:00Z"))
+              .HandleAgentEvent(DomainAgentEvent(RegisterEvent(
+                  "reconnect-before-apply", "agent-upgrade-confirm",
+                  "2026-05-24T10:00:00Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(ReadAgentField(database_path, "agent-upgrade-confirm",
                          "upgrade_state") == "queued");
@@ -75,8 +76,9 @@ TEST_CASE("agent reconnect confirms desired package version") {
 
   REQUIRE(service
               .HandleAgentEvent(
+                  DomainAgentEvent(
                   RegisterEvent("reconnect-confirm", "agent-upgrade-confirm",
-                                "2026-05-24T10:01:00Z", {}, "0.2.0"))
+                                "2026-05-24T10:01:00Z", {}, "0.2.0")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(ReadAgentField(database_path, "agent-upgrade-confirm",
                          "upgrade_state") == "succeeded");
@@ -136,9 +138,9 @@ TEST_CASE("agent rollback clears desired target and completes on reconnect") {
 
   const zfleet::server::ControlService service(&database);
   REQUIRE(service
-              .HandleAgentEvent(RegisterEvent("reconnect-rollback",
-                                              "agent-rollback-confirm",
-                                              "2026-05-24T10:01:00Z"))
+              .HandleAgentEvent(DomainAgentEvent(RegisterEvent(
+                  "reconnect-rollback", "agent-rollback-confirm",
+                  "2026-05-24T10:01:00Z")))
               .status == zfleet::server::ControlEventStatus::kAccepted);
   REQUIRE(ReadAgentField(database_path, "agent-rollback-confirm",
                          "upgrade_state") == "succeeded");

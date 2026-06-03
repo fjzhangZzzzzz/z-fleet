@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -220,8 +221,8 @@ TEST_CASE("agent command decoder waits for truncated frames") {
       &decoder,
       std::span<const std::uint8_t>{frame.data() + frame.size() - 1, 1});
   REQUIRE(complete.size() == 1);
-  REQUIRE(complete.front().payload_case() ==
-          zfleet::protocol::v1::ServerCommand::kError);
+  REQUIRE(std::holds_alternative<zfleet::protocol::ServerError>(
+      complete.front().payload));
 }
 
 #ifndef _WIN32

@@ -10,8 +10,7 @@
 #include "zfleet/core/uuid.h"
 #include "zfleet/core/version.h"
 #include "zfleet/platform/system.h"
-#include "zfleet/protocol/message.h"
-#include "zfleet/protocol/v1/agent_control.pb.h"
+#include "zfleet/protocol/control_codec.h"
 #include "zfleet/transport/frame_codec.h"
 #include "zfleet/transport/http2_session.h"
 
@@ -34,148 +33,118 @@ namespace {
 constexpr std::chrono::milliseconds kStopPollInterval{50};
 constexpr std::chrono::milliseconds kCommandPumpInterval{50};
 
-namespace proto = zfleet::protocol::v1;
-
-std::vector<std::uint8_t> EncodeEventFrame(const proto::AgentEvent& event) {
-  std::string bytes;
-  if (!event.SerializeToString(&bytes)) {
-    throw std::runtime_error("failed to serialize agent event");
-  }
-  return zfleet::transport::EncodeFrame(std::span<const std::uint8_t>{
-      reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+zfleet::protocol::AgentEvent BuildRegisterEvent(
+    const std::string& agent_id, const std::string& registration_token) {
+  const auto protocol_version =
+      std::string(zfleet::protocol::protocol_version());
+  const auto request_id = zfleet::core::GenerateUuid();
+  const auto occurred_at = zfleet::core::NowUtcRfc3339();
+  const auto hostname = zfleet::platform::hostname();
+  const auto os = std::string(zfleet::platform::os_name());
+  const auto arch = zfleet::platform::architecture_name();
+  return zfleet::protocol::AgentEvent{zfleet::protocol::AgentRegistration{
+      .protocol_version = protocol_version,
+      .request_id = request_id,
+      .agent_id = agent_id,
+      .occurred_at = occurred_at,
+      .agent_version = std::string(zfleet::core::version()),
+      .hostname = hostname,
+      .os = os,
+      .arch = arch,
+      .registration_token = registration_token.empty()
+                                 ? std::optional<std::string>{}
+                                 : std::optional<std::string>{
+                                       registration_token},
+  }};
 }
 
-proto::AgentEvent BuildRegisterEvent(const std::string& agent_id,
-                                     const std::string& registration_token) {
-  proto::AgentEvent event;
-  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
-  event.set_message_id(zfleet::core::GenerateUuid());
-  event.set_agent_id(agent_id);
-  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  auto* register_event = event.mutable_register_();
-  register_event->set_agent_version(std::string(zfleet::core::version()));
-  register_event->set_hostname(zfleet::platform::hostname());
-  register_event->set_os(std::string(zfleet::platform::os_name()));
-  register_event->set_arch(zfleet::platform::architecture_name());
-  register_event->set_registration_token(registration_token);
-  return event;
+zfleet::protocol::AgentEvent BuildHeartbeatEvent(const std::string& agent_id) {
+  return zfleet::protocol::AgentEvent{zfleet::protocol::AgentHeartbeat{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .agent_id = agent_id,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .agent_version = std::string(zfleet::core::version()),
+  }};
 }
 
-proto::AgentEvent BuildHeartbeatEvent(const std::string& agent_id) {
-  proto::AgentEvent event;
-  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
-  event.set_message_id(zfleet::core::GenerateUuid());
-  event.set_agent_id(agent_id);
-  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  event.mutable_heartbeat()->set_agent_version(
-      std::string(zfleet::core::version()));
-  return event;
+zfleet::protocol::AgentEvent BuildTaskRunningEvent(
+    const std::string& agent_id, const zfleet::protocol::Task& task) {
+  return zfleet::protocol::AgentEvent{zfleet::protocol::TaskRunning{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .task_id = task.task_id,
+      .agent_id = agent_id,
+      .task_type = task.task_type,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+  }};
 }
 
-proto::AgentEvent BuildTaskRunningEvent(const std::string& agent_id,
-                                        const proto::TaskAssignedCommand& task) {
-  proto::AgentEvent event;
-  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
-  event.set_message_id(zfleet::core::GenerateUuid());
-  event.set_agent_id(agent_id);
-  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  auto* running = event.mutable_task_running();
-  running->set_task_id(task.task_id());
-  running->set_task_type(task.task_type());
-  return event;
+zfleet::protocol::AgentEvent BuildTaskSucceededEvent(
+    const std::string& agent_id, const zfleet::protocol::Task& task) {
+  return zfleet::protocol::AgentEvent{zfleet::protocol::TaskResult{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .task_id = task.task_id,
+      .agent_id = agent_id,
+      .task_type = task.task_type,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .status = zfleet::protocol::TaskExecutionStatus::succeeded,
+      .result = zfleet::protocol::CollectBasicInventoryResult{
+          .hostname = zfleet::platform::hostname(),
+          .os = std::string(zfleet::platform::os_name()),
+          .arch = zfleet::platform::architecture_name(),
+          .agent_version = std::string(zfleet::core::version()),
+      },
+      .error = std::nullopt,
+  }};
 }
 
-proto::AgentEvent BuildTaskSucceededEvent(
+zfleet::protocol::AgentEvent BuildPackageUpdateResultEvent(
     const std::string& agent_id,
-    const proto::TaskAssignedCommand& task) {
-  proto::AgentEvent event;
-  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
-  event.set_message_id(zfleet::core::GenerateUuid());
-  event.set_agent_id(agent_id);
-  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  auto* result = event.mutable_task_result();
-  result->set_task_id(task.task_id());
-  result->set_task_type(task.task_type());
-  result->set_status(proto::TASK_EXECUTION_STATUS_SUCCEEDED);
-  auto* inventory = result->mutable_collect_basic_inventory();
-  inventory->set_hostname(zfleet::platform::hostname());
-  inventory->set_os(std::string(zfleet::platform::os_name()));
-  inventory->set_arch(zfleet::platform::architecture_name());
-  inventory->set_agent_version(std::string(zfleet::core::version()));
-  return event;
-}
-
-proto::ErrorCode ToProtoErrorCode(zfleet::protocol::ErrorCode code) {
-  switch (code) {
-    case zfleet::protocol::ErrorCode::checksum_mismatch:
-      return proto::ERROR_CODE_CHECKSUM_MISMATCH;
-    case zfleet::protocol::ErrorCode::apply_failed:
-      return proto::ERROR_CODE_APPLY_FAILED;
-    case zfleet::protocol::ErrorCode::start_new_agent_failed:
-      return proto::ERROR_CODE_START_NEW_AGENT_FAILED;
-    case zfleet::protocol::ErrorCode::download_failed:
-      return proto::ERROR_CODE_DOWNLOAD_FAILED;
-    default:
-      return proto::ERROR_CODE_INTERNAL_ERROR;
-  }
-}
-
-proto::AgentEvent BuildPackageUpdateResultEvent(
-    const std::string& agent_id,
-    const proto::TaskAssignedCommand& task,
+    const zfleet::protocol::Task& task,
     const PackageUpdateExecutionResult& execution) {
-  proto::AgentEvent event;
-  event.set_protocol_version(std::string(zfleet::protocol::protocol_version()));
-  event.set_message_id(zfleet::core::GenerateUuid());
-  event.set_agent_id(agent_id);
-  event.set_occurred_at(zfleet::core::NowUtcRfc3339());
-  auto* result = event.mutable_task_result();
-  result->set_task_id(task.task_id());
-  result->set_task_type(task.task_type());
-  result->set_status(execution.ok ? proto::TASK_EXECUTION_STATUS_SUCCEEDED
-                                  : proto::TASK_EXECUTION_STATUS_FAILED);
-  const auto& input = task.package_update();
-  auto* update = result->mutable_package_update();
-  update->set_component(input.component());
-  update->set_package_id(input.package_id());
-  update->set_version(input.version());
-  update->set_state(execution.ok ? "applied" : "failed");
-  if (!execution.ok) {
-    update->set_error_code(
-        std::string(zfleet::protocol::ToString(execution.error_code)));
-    update->set_error_message(execution.message);
-    auto* error = result->mutable_error();
-    error->set_code(ToProtoErrorCode(execution.error_code));
-    error->set_message(execution.message);
-    error->set_retryable(false);
-  }
-  return event;
-}
-
-zfleet::protocol::PackageUpdateInput ToPackageUpdateInput(
-    const proto::PackageUpdateInput& input) {
-  return {
-      .action = input.action().empty() ? "apply" : input.action(),
-      .component = input.component(),
-      .package_id = input.package_id(),
-      .version = input.version(),
-      .platform = input.platform(),
-      .arch = input.arch(),
-      .build_type = input.build_type(),
-      .package_url = input.package_url(),
-      .package_sha256 = input.package_sha256(),
-      .manifest_sha256 = input.manifest_sha256(),
-      .min_installer_version = input.min_installer_version(),
-      .allow_downgrade = input.allow_downgrade(),
-      .force = input.force(),
+  const auto& input = std::get<zfleet::protocol::PackageUpdateInput>(task.input);
+  zfleet::protocol::TaskResult result{
+      .protocol_version = std::string(zfleet::protocol::protocol_version()),
+      .request_id = zfleet::core::GenerateUuid(),
+      .task_id = task.task_id,
+      .agent_id = agent_id,
+      .task_type = task.task_type,
+      .occurred_at = zfleet::core::NowUtcRfc3339(),
+      .status = execution.ok ? zfleet::protocol::TaskExecutionStatus::succeeded
+                             : zfleet::protocol::TaskExecutionStatus::failed,
+      .result = zfleet::protocol::PackageUpdateResult{
+          .component = input.component,
+          .package_id = input.package_id,
+          .version = input.version,
+          .state = execution.ok ? "applied" : "failed",
+          .error_code = execution.ok
+                            ? std::string{}
+                            : std::string(
+                                  zfleet::protocol::ToString(
+                                      execution.error_code)),
+          .error_message = execution.ok ? std::string{} : execution.message,
+      },
+      .error = std::nullopt,
   };
+  if (!execution.ok) {
+    result.error = zfleet::protocol::TaskError{
+        .error_code = execution.error_code,
+        .message = execution.message,
+        .retryable = false,
+    };
+  }
+  return zfleet::protocol::AgentEvent{std::move(result)};
 }
 
 std::vector<std::uint8_t> BuildEnvelopeBody(
-    std::initializer_list<proto::AgentEvent> events) {
+    std::initializer_list<zfleet::protocol::AgentEvent> events) {
   std::vector<std::uint8_t> body;
   for (const auto& event : events) {
-    const auto frame = EncodeEventFrame(event);
+    const auto payload = zfleet::protocol::EncodeAgentEventPayload(event);
+    const auto frame = zfleet::transport::EncodeFrame(
+        std::span<const std::uint8_t>{payload.data(), payload.size()});
     body.insert(body.end(), frame.begin(), frame.end());
   }
   return body;
@@ -206,10 +175,13 @@ RuntimeResult AgentRuntime::Run() {
       std::max<std::uint32_t>(initial_backoff, config_.reconnect_max_delay_seconds);
 
   auto send_connection_bootstrap = [&]() {
-    const auto bootstrap_body = BuildEnvelopeBody(
-        {BuildRegisterEvent(state.agent_id, config_.registration_token),
-         BuildHeartbeatEvent(state.agent_id)});
-    const auto response = client.PostEvents(bootstrap_body);
+    const auto register_event =
+        BuildRegisterEvent(state.agent_id, config_.registration_token);
+    const auto heartbeat_event = BuildHeartbeatEvent(state.agent_id);
+    const auto bootstrap_body =
+        BuildEnvelopeBody({register_event, heartbeat_event});
+    const auto response =
+        client.PostEvents(std::span<const std::uint8_t>{bootstrap_body});
     if (response.status != "200") {
       throw std::runtime_error("agent bootstrap events were rejected");
     }
@@ -219,53 +191,54 @@ RuntimeResult AgentRuntime::Run() {
   auto send_heartbeat = [&]() {
     const auto heartbeat_body =
         BuildEnvelopeBody({BuildHeartbeatEvent(state.agent_id)});
-    const auto response = client.PostEvents(heartbeat_body);
+    const auto response =
+        client.PostEvents(std::span<const std::uint8_t>{heartbeat_body});
     if (response.status != "200") {
       throw std::runtime_error("heartbeat was rejected");
     }
     ++result.heartbeat_count;
   };
 
-  auto handle_command = [&](const proto::ServerCommand& command) {
-    if (command.payload_case() == proto::ServerCommand::kError) {
-      throw std::runtime_error("server control error " +
-                               proto::ErrorCode_Name(command.error().code()) +
-                               ": " + command.error().message());
+  auto handle_command = [&](const zfleet::protocol::ServerCommand& command) {
+    if (const auto* error =
+            std::get_if<zfleet::protocol::ServerError>(&command.payload)) {
+      throw std::runtime_error(
+          "server control error " +
+          std::string(zfleet::protocol::ToString(error->error_code)) + ": " +
+          error->message);
     }
-    if (command.payload_case() != proto::ServerCommand::kTaskAssigned) {
+    const auto* task = std::get_if<zfleet::protocol::Task>(&command.payload);
+    if (task == nullptr) {
       ZFLOG_WARN(logger, "unsupported server command payload");
       return;
     }
 
-    const auto& task = command.task_assigned();
-    if (task.task_type() != proto::TASK_TYPE_COLLECT_BASIC_INVENTORY &&
-        task.task_type() != proto::TASK_TYPE_PACKAGE_UPDATE) {
-      ZFLOG_WARN(logger, "unsupported task type received from server");
-      return;
-    }
-
-    ZFLOG_INFO(logger, "task assigned task_id={}", task.task_id());
+    ZFLOG_INFO(logger, "task assigned task_id={}", task->task_id);
     const auto running_body = BuildEnvelopeBody(
-        {BuildTaskRunningEvent(state.agent_id, task)});
-    const auto running_response = client.PostEvents(running_body);
+        {BuildTaskRunningEvent(state.agent_id, *task)});
+    const auto running_response =
+        client.PostEvents(std::span<const std::uint8_t>{running_body});
     if (running_response.status != "200") {
       throw std::runtime_error("task running event was rejected with status " +
                                running_response.status);
     }
 
-    proto::AgentEvent task_result;
+    zfleet::protocol::AgentEvent task_result;
     bool stop_after_result = false;
-    if (task.task_type() == proto::TASK_TYPE_COLLECT_BASIC_INVENTORY) {
-      task_result = BuildTaskSucceededEvent(state.agent_id, task);
+    if (task->task_type == zfleet::protocol::TaskType::collect_basic_inventory) {
+      task_result = BuildTaskSucceededEvent(state.agent_id, *task);
     } else {
       const auto execution =
-          ExecutePackageUpdate(config_, ToPackageUpdateInput(task.package_update()));
+          ExecutePackageUpdate(
+              config_,
+              std::get<zfleet::protocol::PackageUpdateInput>(task->input));
       task_result =
-          BuildPackageUpdateResultEvent(state.agent_id, task, execution);
+          BuildPackageUpdateResultEvent(state.agent_id, *task, execution);
       stop_after_result = execution.ok && execution.stop_agent;
     }
     const auto result_body = BuildEnvelopeBody({task_result});
-    const auto task_response = client.PostEvents(result_body);
+    const auto task_response =
+        client.PostEvents(std::span<const std::uint8_t>{result_body});
     if (task_response.status != "200") {
       throw std::runtime_error("task result event was rejected with status " +
                                task_response.status);

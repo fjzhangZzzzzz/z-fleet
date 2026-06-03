@@ -29,6 +29,7 @@ add_custom_command(
 )
 
 add_library(zfleet_protocol
+  src/control_codec.cpp
   src/json_codec.cpp
   src/message.cpp
   ${ZFLEET_PROTOCOL_GENERATED_SOURCES}

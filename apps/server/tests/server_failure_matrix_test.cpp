@@ -79,8 +79,9 @@ TEST_CASE("failure matrix rejects invalid and unregistered control events") {
   database.Initialize();
   const zfleet::server::ControlService service(&database);
 
-  const auto invalid = service.HandleAgentEvent(zfleet::test::HeartbeatEvent(
-      "heartbeat-unregistered", "agent-missing", "2026-05-21T10:00:05Z"));
+  const auto invalid = service.HandleAgentEvent(zfleet::test::DomainAgentEvent(
+      zfleet::test::HeartbeatEvent("heartbeat-unregistered", "agent-missing",
+                                   "2026-05-21T10:00:05Z")));
   REQUIRE(invalid.status == zfleet::server::ControlEventStatus::kNotFound);
   REQUIRE(invalid.message == "agent not registered");
   REQUIRE_FALSE(database.AgentExists("agent-missing"));
@@ -96,9 +97,10 @@ TEST_CASE("failure matrix rejects running event before assignment") {
   const zfleet::server::ControlService service(&database);
 
   const auto running_result = service.HandleAgentEvent(
+      zfleet::test::DomainAgentEvent(
       zfleet::test::TaskRunningEvent("task-running-queued-1", "agent-1",
                                      "task-queued-1",
-                                     "2026-05-21T10:00:02Z"));
+                                     "2026-05-21T10:00:02Z")));
 
   REQUIRE(running_result.status ==
           zfleet::server::ControlEventStatus::kInvalidArgument);

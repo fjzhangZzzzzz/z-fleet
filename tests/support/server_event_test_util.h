@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "zfleet/protocol/message.h"
 #include "zfleet/protocol/v1/agent_control.pb.h"
 
 namespace zfleet::server {
@@ -49,6 +50,7 @@ proto::AgentEvent TaskSucceededEvent(std::string message_id,
 proto::AgentEvent TaskFailedEvent(std::string message_id, std::string agent_id,
                                   std::string task_id,
                                   std::string occurred_at);
+zfleet::protocol::AgentEvent DomainAgentEvent(const proto::AgentEvent& event);
 
 void SeedAgent(zfleet::server::ServerDatabase* database,
                const std::string& agent_id);
